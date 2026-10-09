@@ -105,9 +105,36 @@ def quote_pdf(ref: str, request: Request, token: str = "", db: Session = Depends
     if request.headers.get("x-forwarded-proto") == "https" and base.startswith("http://"):
         base = "https://" + base[len("http://"):]
     link = f"{base}/quote/status/{req.ref}?t={req.token}"
-    pdf = portal_pdf.render(portal.public_view(req), portal.public_info(db), link, portal.DRAFT_DAYS)
+    sheets = {}
+    for it in (req.public_result or {}).get("items") or []:
+        key = (it.get("view") or {}).get("key")
+        if key and key not in sheets:
+            sh = portal.view_sheet(req, key)
+            if sh:
+                sheets[key] = sh
+    pdf = portal_pdf.render(portal.public_view(req), portal.public_info(db), link, portal.DRAFT_DAYS, sheets)
     return Response(pdf, media_type="application/pdf", headers={"Content-Disposition": f'inline; filename="{req.ref}.pdf"',
                                                                  "Cache-Control": "no-store"})
+
+
+SVG_HEADERS = {"Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'", "Cache-Control": "private, max-age=86400",
+               "X-Content-Type-Options": "nosniff"}
+
+
+def _svg(req: PortalRequest, key: str) -> Response:
+    from . import portal_views
+
+    sheet = portal.view_sheet(req, key)
+    if not sheet:
+        raise HTTPException(404, "No drawing for this item.")
+    return Response(portal_views.to_svg(sheet), media_type="image/svg+xml", headers=SVG_HEADERS)
+
+
+@public.get("/quote/{ref}/views/{key}.svg")
+def quote_views(ref: str, key: str, request: Request, token: str = "", db: Session = Depends(get_db)):
+    """Front, top, right and isometric views of one item, drawn from the customer's files."""
+    _limit(portal.REPRICE_LIMIT, request)
+    return _svg(_customer(db, ref, token), key)
 
 
 class OptionsIn(BaseModel):
@@ -220,6 +247,11 @@ def download_file(rid: int, index: int, db: Session = Depends(get_db)):
     if not p.exists():
         raise HTTPException(404, "File not found")
     return FileResponse(p, filename=files[index]["name"])
+
+
+@internal.get("/requests/{rid}/views/{key}.svg")
+def request_views(rid: int, key: str, db: Session = Depends(get_db)):
+    return _svg(_req(db, rid), key)
 
 
 @internal.post("/requests/{rid}/to-quotes")

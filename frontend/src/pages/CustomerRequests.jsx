@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { api } from '../api'
+import { ItemReads } from '../public/PublicQuote'
 
 const usd = (n) => (n == null ? '' : `$${Number(n).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`)
 const STATUSES = ['submitted', 'reviewing', 'confirmed', 'declined', 'closed', 'draft']
@@ -123,6 +124,7 @@ function RequestDetail({ id, onChange, onClose }) {
       <h3>Shown to the customer</h3>
       <p className="small" style={{ margin: 0 }}><b>{KIND_LABEL[p.kind] || p.kind}</b>: {shown(r)}{p.kind === 'instant' ? `, ${usd(p.total)} total` : p.kind === 'estimate' ? `, ${usd(p.total_low)} to ${usd(p.total_high)} total` : ''}{p.lead_days ? `, about ${p.lead_days} days` : ''}</p>
       {r.internal?.shown_to_customer && <p className="small muted">Repriced since; the customer saw the earlier price.</p>}
+      <div className="pq pq-embed"><ItemReads req={{ ...r, result: p }} viewUrl={(key) => `/api/portal/requests/${id}/views/${key}.svg`} /></div>
       <h3>Your numbers</h3>
       <table className="small">
         <thead><tr><th>Item</th><th>Route</th><th>Unit cost</th><th>Unit price</th><th>Margin</th></tr></thead>

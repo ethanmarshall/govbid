@@ -30,7 +30,7 @@ from pathlib import Path
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from . import pricing, quotes
+from . import portal_read, pricing, quotes
 from .config import UPLOAD_DIR
 from .models_portal import PORTAL_STATUSES, PortalRequest, PortalSettings
 
@@ -297,13 +297,57 @@ def _at(breaks: list[dict], n: int) -> dict:
 
 
 def _item(name: str, route: str, desc: str, breaks: list[dict] | None, n: int, *, kind: str, spec: dict | None = None,
-          public_reason: str = "", internal_reasons: list[str] | None = None, incomplete: bool = False) -> dict:
+          public_reason: str = "", internal_reasons: list[str] | None = None, incomplete: bool = False,
+          facts: list[dict] | None = None, view: dict | None = None) -> dict:
     b = _at(breaks, n) if breaks else None
     return {"name": name, "route": route, "desc": desc, "kind": kind, "spec": spec, "public_reason": public_reason,
+            "facts": facts or [], "view": view,
             "internal_reasons": internal_reasons or [], "incomplete": incomplete,
             "unit_price": b["unit_price"] if b else None, "unit_cost": b.get("unit_cost") if b else None,
             "margin_pct": b.get("margin_pct") if b else None, "lead_days": b.get("lead_time_days") if b else None,
             "one_unit_price": breaks[0]["unit_price"] if breaks else None}
+
+
+def _mat_source(req: PortalRequest, cfg: dict, mat: str, drawing_mat: str | None) -> str:
+    if (req.material or "").strip() == mat:
+        return "chosen"
+    if drawing_mat and drawing_mat == mat:
+        return "drawing"
+    return "default"
+
+
+def _fin_source(req: PortalRequest, finishes: list[str]) -> str:
+    return "chosen" if req.finish else ("drawing" if finishes else "")
+
+
+VIEW_NOTES = {"model": "Drawn from your 3D model.",
+              "flat": "Your flat pattern, shown at the sheet thickness. Bends are not formed in this view.",
+              "envelope": "A block at the overall size we read, to check the size only. The real part has more detail."}
+
+
+def _view(req: PortalRequest, key_parts: tuple, make_shape, kind: str) -> dict | None:
+    """Three-view drawing for an item, cached in the request folder. Never fails the quote."""
+    from . import portal_views as pv
+
+    try:
+        key = pv.cache_key(*key_parts, kind, 2)
+        folder = req_dir(req) / "views"
+        if pv.load(folder, key) is None:
+            pv.save(folder, key, pv.build_sheet(make_shape(), kind=kind))
+        return {"key": key, "kind": kind, "note": VIEW_NOTES[kind]}
+    except Exception as exc:  # noqa: BLE001
+        import logging
+
+        logging.getLogger(__name__).info("No views for %s: %s", req.ref, exc)
+        return None
+
+
+def view_sheet(req: PortalRequest, key: str) -> dict | None:
+    from . import portal_views as pv
+
+    if not re.fullmatch(r"[0-9a-f]{20}", key or ""):
+        return None
+    return pv.load(req_dir(req) / "views", key)
 
 
 def _material(req: PortalRequest, cfg: dict, drawing_mat: str | None) -> tuple[str, bool]:
@@ -352,6 +396,7 @@ def _read_pdfs(req: PortalRequest) -> tuple[list[dict], bool]:
 def price_request(db: Session, req: PortalRequest) -> None:
     """Price the request from its stored files and options; fills req.kind, req.public_result and req.internal."""
     from . import box_build, cad, cad_quote, drawing_assembly, drawing_quote, flat, pcb_files
+    from . import portal_views as pv
 
     s = get_settings(db)
     cfg = quotes.get_config(db)
@@ -389,6 +434,9 @@ def price_request(db: Session, req: PortalRequest) -> None:
             continue
         solids = (stored.get("geometry") or {}).get("solids", 1) or 1
         mat, is_print = _material(req, cfg, drawing_mat)
+        msrc = _mat_source(req, cfg, mat, drawing_mat)
+        step_path = file_path(req, f)
+        view = _view(req, (stored["file_id"],), lambda p=step_path: cad.load_step(p), "model")
         if solids > 1:
             try:
                 from .assembly import quote_assembly, split
@@ -404,10 +452,11 @@ def price_request(db: Session, req: PortalRequest) -> None:
                         "cad": {"file_id": stored["file_id"], "filename": f["name"], "notes": [], "options": {"assembly": True}}}
                 items.append(_item(name, "estimate", f"Assembly of {len(bodies)} part types, {mat}", r["price_breaks"], n, kind="assembly", spec=spec,
                                    public_reason=f"Your model has {solids} separate parts, so an engineer will confirm how it goes together.",
-                                   internal_reasons=r.get("warnings", [])[:6], incomplete=bool(r.get("incomplete"))))
+                                   internal_reasons=r.get("warnings", [])[:6], incomplete=bool(r.get("incomplete")),
+                                   facts=portal_read.step_assembly(stored.get("geometry") or {}, sp["groups"], mat, msrc), view=view))
             except Exception as exc:  # noqa: BLE001
                 items.append(_item(name, "manual", f"Assembly ({solids} parts)", None, n, kind="assembly",
-                                   public_reason=f"Your model has {solids} separate parts; we will price it by hand.", internal_reasons=[str(exc)]))
+                                   public_reason=f"Your model has {solids} separate parts; we will price it by hand.", internal_reasons=[str(exc)], view=view))
             continue
         opts = {"material": mat, "finishes": _finishes(req, cfg, is_print, drawing_fin), "quantities": q, "filename": f["name"], "name": name}
         if is_print:
@@ -416,12 +465,15 @@ def price_request(db: Session, req: PortalRequest) -> None:
             r = cad_quote.quote(stored["file_id"], opts, over)
         except (pricing.SpecError, cad.CadError, KeyError, ValueError) as exc:
             items.append(_item(name, "manual", "3D model", None, n, kind="step", public_reason="This part needs a quick look before we can price it.",
-                               internal_reasons=[str(exc)]))
+                               internal_reasons=[str(exc)], view=view))
             continue
         est = r["estimate"]
-        items.append(_item(name, "instant", f"{PROCESS_LABEL.get(r['process'], r['process'])}, {mat}"
+        plabel = PROCESS_LABEL.get(r["process"], r["process"])
+        facts = portal_read.step_part(stored.get("geometry") or {}, mat, msrc, opts["finishes"], _fin_source(req, opts["finishes"]), plabel,
+                                      (cfg["materials"].get(mat) or cfg["additive"]["materials"].get(mat) or {}).get("density"))
+        items.append(_item(name, "instant", f"{plabel}, {mat}"
                            + (f", {', '.join(opts['finishes'])}" if opts["finishes"] else ""), est["price_breaks"], n, kind="part",
-                           spec=r["spec"], internal_reasons=est.get("warnings", [])[:6]))
+                           spec=r["spec"], internal_reasons=est.get("warnings", [])[:6], facts=facts, view=view))
 
     # ---- drawings with no model: price the drawing itself
     if not steps:
@@ -441,10 +493,15 @@ def price_request(db: Session, req: PortalRequest) -> None:
                 spec = {**{k: v for k, v in bb.items() if k not in ("evidence", "assumptions", "fabricated")}, "kind": "box_build", "quantities": q}
                 try:
                     r = box_build.price(spec, over)
+                    enc = bb.get("enclosure") or {}
+                    view = None
+                    if enc.get("length_in") and enc.get("width_in"):
+                        dimsv = (enc["length_in"], enc["width_in"], enc.get("height_in") or 1)
+                        view = _view(req, ("env",) + tuple(dimsv), lambda d=dimsv: pv.box_shape(*d), "envelope")
                     items.append(_item(bb.get("name") or name, "estimate", "Assembly from your drawing", r["price_breaks"], n, kind="box_build", spec=spec,
                                        public_reason="Your drawing is an assembly with custom parts, so an engineer will confirm the build.",
                                        internal_reasons=[i["item"] + ": " + i["reason"] for i in r.get("incomplete", [])][:8],
-                                       incomplete=bool(r.get("incomplete"))))
+                                       incomplete=bool(r.get("incomplete")), facts=portal_read.box_build(bb), view=view))
                 except Exception as exc:  # noqa: BLE001
                     items.append(_item(name, "manual", "Assembly drawing", None, n, kind="box_build",
                                        public_reason="Your drawing is an assembly; we will price it by hand.", internal_reasons=[str(exc)]))
@@ -466,10 +523,26 @@ def price_request(db: Session, req: PortalRequest) -> None:
                 continue
             rv = r["review"]
             route = "estimate" if rv["manual_required"] else "instant"
-            items.append(_item(name, route, f"{PROCESS_LABEL.get(r['spec']['process'], r['spec']['process'])}, {r['inputs']['material']} (from your drawing)",
+            plabel = PROCESS_LABEL.get(r["spec"]["process"], r["spec"]["process"])
+            dmat = r["inputs"]["material"]
+            dsrc = "chosen" if o.get("material") else ("drawing" if (read.get("material") or {}).get("mapped") == dmat else "default")
+            dfin = r["spec"].get("finishes") or []
+            env = geom.get("envelope_in") or {}
+            view = None
+            tg = geom.get("turned") or {}
+            if tg.get("max_diameter") and (tg.get("length") or env.get("length")):
+                dimsv = (tg["max_diameter"], tg.get("length") or env["length"])
+                view = _view(req, ("cyl",) + tuple(dimsv), lambda d=dimsv: pv.cylinder_shape(*d), "envelope")
+            elif env.get("length") and env.get("width"):
+                h = env.get("height") or geom.get("sheet_thickness") or 0.1
+                dimsv = (env["length"], env["width"], h)
+                view = _view(req, ("env",) + tuple(dimsv), lambda d=dimsv: pv.box_shape(*d), "envelope")
+            facts = portal_read.drawing_part(read, geom, dmat, dsrc, dfin, "chosen" if o.get("finishes") else ("drawing" if dfin else ""), plabel,
+                                             [("The size we read looks too large for one part." if "cost" in x else x) for x in rv.get("reasons") or []])
+            items.append(_item(name, route, f"{plabel}, {dmat} (from your drawing)",
                                r["estimate"]["price_breaks"], n, kind="part", spec=r["spec"],
                                public_reason="Some sizes on your drawing need to be confirmed by an engineer." if route == "estimate" else "",
-                               internal_reasons=rv["reasons"] + r["estimate"].get("warnings", [])[:4]))
+                               internal_reasons=rv["reasons"] + r["estimate"].get("warnings", [])[:4], facts=facts, view=view))
 
     # ---- DXF flat parts
     if dxfs:
@@ -478,7 +551,8 @@ def price_request(db: Session, req: PortalRequest) -> None:
                                public_reason="Choose the sheet thickness to price your DXF parts."))
         else:
             try:
-                parsed = flat.parse_files([(f["name"], file_path(req, f).read_bytes()) for f in dxfs])
+                parsed = flat.parse_files([(f["name"], file_path(req, f).read_bytes()) for f in dxfs], keep_shapes=True)
+                shapes = {p["id"]: p.pop("shape", None) for p in parsed["parts"]}
                 mats = flat.materials(cfg)
                 mat = req.material if req.material in mats else (drawing_mat if drawing_mat in mats else "A36 / 1018 steel")
                 cls = flat.material_class(mat)
@@ -489,8 +563,19 @@ def price_request(db: Session, req: PortalRequest) -> None:
                 r = flat.estimate(parsed["parts"], options, q, over)
                 spec = {"kind": "flat_dxf", "name": "Flat parts", "quantities": q, "parts": [flat.clean_part(p) for p in parsed["parts"]],
                         "options": options, "material": mat, "source": {"files": []}}
-                items.append(_item(f"{len(parsed['parts'])} flat part(s)", "instant", f"{PROCESS_LABEL.get(process, process)}, {mat}, {req.thickness:g} in",
-                                   r["price_breaks"], n, kind="flat", spec=spec, internal_reasons=r.get("warnings", [])[:6]))
+                big = max(parsed["parts"], key=lambda p: p.get("outer_area") or 0, default=None)
+                view = None
+                if big and shapes.get(big["id"]):
+                    sh, t = shapes[big["id"]], float(req.thickness)
+                    view = _view(req, ("dxf", [f["stored"] for f in dxfs], big["id"], t),
+                                 lambda sh=sh, t=t: pv.flat_shape(sh["outer"], sh["holes"], t), "flat")
+                    if view and len(parsed["parts"]) > 1:
+                        view["note"] = f"{big.get('name')}, the largest of your {len(parsed['parts'])} parts. " + view["note"]
+                msrc = "chosen" if req.material == mat else ("drawing" if drawing_mat == mat else "default")
+                plabel = PROCESS_LABEL.get(process, process)
+                items.append(_item(f"{len(parsed['parts'])} flat part(s)", "instant", f"{plabel}, {mat}, {req.thickness:g} in",
+                                   r["price_breaks"], n, kind="flat", spec=spec, internal_reasons=r.get("warnings", [])[:6],
+                                   facts=portal_read.flat_parts(parsed["parts"], float(req.thickness), mat, msrc, plabel), view=view))
             except Exception as exc:  # noqa: BLE001
                 items.append(_item("Flat parts (DXF)", "manual", "Flat parts", None, n, kind="flat",
                                    public_reason="We could not read these DXF files automatically.", internal_reasons=[str(exc)]))
@@ -503,9 +588,14 @@ def price_request(db: Session, req: PortalRequest) -> None:
             board["bom_lines"] = got["bom_lines"]
             spec = {"kind": "box_build", "name": "Circuit board assembly", "quantities": q, "enclosure": {"source": "none"}, "pcbs": [board]}
             r = box_build.price(spec, over)
+            view = None
+            if board.get("width_in") and board.get("height_in"):
+                dimsv = (board["width_in"], board["height_in"], board.get("thickness_in") or 0.062)
+                view = _view(req, ("pcb",) + tuple(dimsv), lambda d=dimsv: pv.box_shape(*d), "envelope")
             items.append(_item("Circuit board assembly", "estimate", f"{board['layers']} layer board" + (f", {board['width_in']:g} x {board['height_in']:g} in" if board.get("width_in") else ""),
                                r["price_breaks"], n, kind="box_build", spec=spec, public_reason="Circuit boards are always reviewed by an engineer before we confirm.",
-                               internal_reasons=got["warnings"] + r.get("warnings", [])[:4]))
+                               internal_reasons=got["warnings"] + r.get("warnings", [])[:4],
+                               facts=portal_read.pcb(got["board"], got.get("found") or {}, len(got.get("bom_lines") or [])), view=view))
         except Exception as exc:  # noqa: BLE001
             items.append(_item("Circuit board files", "manual", "Circuit board", None, n, kind="pcb",
                                public_reason="We will review your board files by hand.", internal_reasons=[str(exc)]))
@@ -543,7 +633,8 @@ def _finish(req: PortalRequest, s: PortalSettings, items: list[dict], manual_rea
     pub_items = []
     low = high = 0.0
     for i in items:
-        row = {"name": i["name"], "desc": i["desc"], "route": i["route"], "note": i["public_reason"]}
+        row = {"name": i["name"], "desc": i["desc"], "route": i["route"], "note": i["public_reason"], "facts": i.get("facts") or [],
+               "view": i.get("view")}
         if i["unit_price"] is not None:
             if i["route"] == "estimate":
                 hi_pct = s.incomplete_high_pct if i["incomplete"] else s.estimate_high_pct

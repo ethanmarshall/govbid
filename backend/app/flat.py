@@ -308,7 +308,7 @@ def read_doc(path: Path):
 
 
 def parse_dxf(path: str | Path, units: str = "auto", ignore_layers: list[str] | None = None, tol_in: float | None = None,
-              filename: str = "") -> dict:
+              filename: str = "", keep_shapes: bool = False) -> dict:
     """Read one DXF file into parts. units: auto (from $INSUNITS, inches when unitless) or in/mm/cm/m/ft."""
     path = Path(path)
     filename = filename or path.name
@@ -380,6 +380,7 @@ def parse_dxf(path: str | Path, units: str = "auto", ignore_layers: list[str] | 
             continue
         holes = [h for h in loops if h["depth"] == lp["depth"] + 1 and h["parent"] == i]
         parts.append(_part_metrics(lp, holes, bend_lines))
+        parts[-1]["_holes"] = holes
     if opens:
         total = sum(o["len"] for o in opens)
         warnings.append(f"{len(opens)} open contour(s), {total:.2f} in long, are not closed loops and were left out of the parts. "
@@ -411,6 +412,9 @@ def parse_dxf(path: str | Path, units: str = "auto", ignore_layers: list[str] | 
 
     svg = render_svg(parts, [h for h in loops if h["depth"] % 2], opens, bend_lines)
     out_parts = [{k: v for k, v in p.items() if k not in ("outline", "instances", "_loop", "_holes")} for p in grouped]
+    if keep_shapes:  # outline and cutout points (inches), for 3D previews
+        for op, p in zip(out_parts, grouped):
+            op["shape"] = {"outer": p["outline"]["pts"], "holes": [h["pts"] for h in p.get("_holes") or []]}
     return {"filename": filename, "units": unit, "units_source": units_source, "insunits": header_code, "scale_to_in": scale,
             "parts": out_parts, "open_contours": len(opens), "duplicates_removed": dups, "ignored": ignored,
             "ignored_layers": ignored_layers, "bend_lines": len(bend_lines), "warnings": warnings, "svg": svg,
@@ -504,7 +508,8 @@ def render_svg(parts: list[dict], hole_loops: list[dict], opens: list[dict], ben
     return "".join(out)
 
 
-def parse_files(files: list[tuple[str, bytes]], units: str = "auto", ignore_layers: list[str] | None = None, tol_in: float | None = None) -> dict:
+def parse_files(files: list[tuple[str, bytes]], units: str = "auto", ignore_layers: list[str] | None = None, tol_in: float | None = None,
+                keep_shapes: bool = False) -> dict:
     """Parse several DXF uploads. Parts get ids f{file}p{n} and keep their file name."""
     out_files, parts, warnings = [], [], []
     for fi, (name, data) in enumerate(files, 1):
@@ -515,7 +520,7 @@ def parse_files(files: list[tuple[str, bytes]], units: str = "auto", ignore_laye
         with tempfile.TemporaryDirectory() as tmp:
             p = Path(tmp) / "upload.dxf"
             p.write_bytes(data)
-            r = parse_dxf(p, units, ignore_layers, tol_in, filename=name)
+            r = parse_dxf(p, units, ignore_layers, tol_in, filename=name, keep_shapes=keep_shapes)
         # the SVG labels use the per-file index; keep that numbering for the part names
         for prt in r["parts"]:
             prt["id"] = f"f{fi}p{prt['index']}"

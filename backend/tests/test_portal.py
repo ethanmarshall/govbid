@@ -212,3 +212,38 @@ def test_owner_can_preview_a_closed_page(monkeypatch):
         c.cookies.clear()
         r = _quote(c, [FIX / "cad" / "machined_block.step"], preview="true")  # a visitor cannot use the preview flag
         assert r.status_code == 400
+
+
+def test_quote_shows_what_we_read_and_three_views(client):
+    q = _quote(client, [FIX / "cad" / "machined_block.step"]).json()
+    it = q["result"]["items"][0]
+    facts = {f["label"]: f for f in it["facts"]}
+    assert facts["Overall size"]["value"].startswith("4.000 x 3.000 x 0.500")
+    assert facts["Material"]["flag"] == "assumed"  # nothing in the files said 6061, so the customer is asked to check
+    assert "Ø" in facts["Holes"]["value"]
+    assert it["view"]["kind"] == "model"
+    svg = client.get(f"/api/public/quote/{q['ref']}/views/{it['view']['key']}.svg?token={q['token']}")
+    assert svg.status_code == 200 and svg.headers["content-type"].startswith("image/svg+xml") and "<path" in svg.text and "4.000" in svg.text
+    assert "script" not in svg.text.lower() and "default-src 'none'" in svg.headers["content-security-policy"]
+    assert client.get(f"/api/public/quote/{q['ref']}/views/{it['view']['key']}.svg?token=nope").status_code == 400
+    assert client.get(f"/api/public/quote/{q['ref']}/views/notakey.svg?token={q['token']}").status_code == 404
+    # repricing reuses the drawing
+    r = client.post(f"/api/public/quote/{q['ref']}/options", json={"token": q["token"], "quantity": 10}).json()
+    assert r["result"]["items"][0]["view"]["key"] == it["view"]["key"]
+    pdf = client.get(f"/api/public/quote/{q['ref']}/pdf?token={q['token']}")
+    from pypdf import PdfReader
+    import io
+
+    text = " ".join(" ".join(p.extract_text() for p in PdfReader(io.BytesIO(pdf.content)).pages).split())
+    assert "What we read" in text and "Isometric" in text and "assumed, please check" in text, text[-600:]
+
+
+def test_drawing_dxf_and_board_reads(client):
+    d = _quote(client, [FIX / "drawings" / "sheet_cover.pdf"]).json()["result"]["items"][0]
+    labels = {f["label"]: f["value"] for f in d["facts"]}
+    assert "55120-1" in labels["Part"] and labels["Sheet thickness"] == "0.063 in" and "5052" in labels["Material"]
+    assert d["view"]["kind"] == "envelope"
+    f = _quote(client, [FIX / "flat" / "plate_holes_slot.dxf"], thickness="0.125").json()["result"]["items"][0]
+    assert f["view"]["kind"] == "flat" and any("6.000 x 4.000" in x["value"] for x in f["facts"])
+    b = _quote(client, [FIX / "pcb" / "kicad_fab.zip"]).json()["result"]["items"][0]
+    assert any(x["label"] == "Board" and "4 layers" in x["value"] for x in b["facts"])

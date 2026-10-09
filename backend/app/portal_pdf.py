@@ -16,7 +16,7 @@ def _range(lo, hi) -> str:
     return f"{_money(lo, lo < 100)} to {_money(hi, hi < 100)}"
 
 
-def render(view: dict, info: dict, link: str, keep_days: int = 30) -> bytes:
+def render(view: dict, info: dict, link: str, keep_days: int = 30, sheets: dict | None = None) -> bytes:
     from reportlab.lib import colors
     from reportlab.lib.pagesizes import letter
     from reportlab.lib.styles import ParagraphStyle
@@ -105,6 +105,36 @@ def render(view: dict, info: dict, link: str, keep_days: int = 30) -> bytes:
         t.setStyle(TableStyle([("LINEBELOW", (0, 0), (-1, 0), 1, ink), ("LINEBELOW", (0, 1), (-1, -1), 0.4, rule), ("VALIGN", (0, 0), (-1, -1), "TOP"),
                                ("LEFTPADDING", (0, 0), (-1, -1), 2)]))
         story += [P("What we priced", "h"), t]
+
+        # per item: what we read from the files and the three-view drawing, so a misread is easy to spot
+        from reportlab.platypus import KeepTogether
+
+        from . import portal_views
+
+        flag_txt = {"assumed": "  (assumed, please check)", "check": "  (please check)"}
+        for it in items:
+            facts = it.get("facts") or []
+            sheet = (sheets or {}).get((it.get("view") or {}).get("key"))
+            if not facts and not sheet:
+                continue
+            block = [P(f"What we read: {it.get('name') or ''}", "h")]
+            if facts:
+                fr = [[P(f["label"], "lab"), Paragraph(escape(f["value"]) + (f'<font color="#9a6410">{flag_txt[f["flag"]]}</font>' if f.get("flag") in flag_txt else ""), st["cell"])]
+                      for f in facts]
+                ft = Table(fr, colWidths=[width * 0.26, width * 0.74])
+                ft.setStyle(TableStyle([("LINEBELOW", (0, 0), (-1, -1), 0.3, rule), ("VALIGN", (0, 0), (-1, -1), "TOP"), ("LEFTPADDING", (0, 0), (-1, -1), 2),
+                                        ("TOPPADDING", (0, 0), (-1, -1), 3), ("BOTTOMPADDING", (0, 0), (-1, -1), 3)]))
+                block.append(ft)
+            if sheet:
+                try:
+                    dr = portal_views.to_drawing(sheet, width, 3.6 * inch)
+                    box = Table([[dr]], colWidths=[width])
+                    box.setStyle(TableStyle([("BOX", (0, 0), (-1, -1), 0.8, ink), ("ALIGN", (0, 0), (-1, -1), "CENTER"), ("TOPPADDING", (0, 0), (-1, -1), 8),
+                                             ("BOTTOMPADDING", (0, 0), (-1, -1), 6)]))
+                    block += [Spacer(1, 6), box, P((it.get("view") or {}).get("note") or "", "small")]
+                except Exception:  # noqa: BLE001  (a drawing problem never stops the PDF)
+                    pass
+            story.append(KeepTogether(block))
 
     files = [f for f in view.get("files") or []]
     if files:

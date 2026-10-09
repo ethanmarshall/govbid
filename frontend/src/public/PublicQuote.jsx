@@ -326,6 +326,7 @@ function QuoteForm({ info }) {
 
   const res = req?.result
   return (
+    <>
     <div className="pq-body">
       <section className="pq-form" aria-label="Your project">
         <h1>Upload your files, get a price</h1>
@@ -396,6 +397,8 @@ function QuoteForm({ info }) {
         {req && !stale && res?.kind !== 'needs_input' && <SubmitForm req={req} setReq={setReq} info={info} />}
       </aside>
     </div>
+    {req && !stale && <ItemReads req={req} token={req.token} />}
+    </>
   )
 }
 
@@ -504,6 +507,46 @@ function SubmitForm({ req, setReq, info }) {
   )
 }
 
+// What we read from each file, plus a three-view drawing, so the customer can catch a misread before ordering.
+const FLAG = { assumed: 'Assumed. Check this', check: 'Please check' }
+export function ItemReads({ req, token, viewUrl }) {
+  const items = (req?.result?.items || []).filter((it) => it.facts?.length || it.view)
+  if (!items.length) return null
+  const src = (key) => (viewUrl ? viewUrl(key) : `/api/public/quote/${req.ref}/views/${key}.svg?token=${encodeURIComponent(token)}`)
+  const flagged = items.some((it) => (it.facts || []).some((f) => f.flag))
+  return (
+    <section className="pq-reads" aria-labelledby="reads-h">
+      <h2 id="reads-h">What we read from your files</h2>
+      <p className="pq-secnote pq-muted">{flagged
+        ? 'Lines marked for checking are guesses or things we could not find. If anything here is wrong, change the options above or tell us in the notes, and we will price it from the right information.'
+        : 'Check these against your files. If anything is wrong, change the options above or tell us in the notes.'}</p>
+      {items.map((it, i) => (
+        <article key={i} className={`pq-read ${it.view ? '' : 'no-view'}`}>
+          {it.view && (
+            <figure className="pq-views">
+              <a href={src(it.view.key)} target="_blank" rel="noopener" title="Open full size">
+                <img src={src(it.view.key)} alt={`Front, top, right and isometric views of ${it.name}`} loading="lazy" />
+              </a>
+              <figcaption className="pq-muted">{it.view.note} Tap the drawing to open it full size.</figcaption>
+            </figure>
+          )}
+          <div className="pq-facts">
+            <h3>{it.name}</h3>
+            <dl>
+              {(it.facts || []).map((f, j) => (
+                <div key={j} className={f.flag ? `flag-${f.flag}` : ''}>
+                  <dt>{f.label}</dt>
+                  <dd>{f.value}{f.flag && <span className="pq-flag">{FLAG[f.flag]}</span>}</dd>
+                </div>
+              ))}
+            </dl>
+          </div>
+        </article>
+      ))}
+    </section>
+  )
+}
+
 function SaveBar({ req, token, info }) {
   const [copied, setCopied] = useState(false)
   const link = statusLink(req.ref, token)
@@ -552,6 +595,7 @@ function Status({ refId, token, info }) {
   const draft = !r.submitted
   const res = r.result || {}
   return (
+    <>
     <div className="pq-body">
       <section className="pq-form">
         <h1>{draft ? `Saved quote ${r.ref}` : `Request ${r.ref}`}</h1>
@@ -576,5 +620,7 @@ function Status({ refId, token, info }) {
           : <p><a href={pdfLink(r.ref, token)} target="_blank" rel="noopener">Save a PDF copy</a></p>}
       </aside>
     </div>
+    <ItemReads req={r} token={token} />
+    </>
   )
 }
