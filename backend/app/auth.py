@@ -71,17 +71,29 @@ def valid_session(token: str | None) -> bool:
 _fails: dict[str, deque] = defaultdict(deque)
 
 
+# Across all addresses: caps guessing from many IPs at once (a short password must not be brute-forceable)
+GLOBAL_MAX_FAILS, GLOBAL_WINDOW_S = 30, 60 * 60
+_all_fails: deque = deque()
+
+
 def _client(request: Request) -> str:
-    fwd = request.headers.get("x-forwarded-for", "")
-    return fwd.split(",")[0].strip() or (request.client.host if request.client else "?")
+    """The address the hosting proxy saw. The proxy appends it as the LAST X-Forwarded-For entry; earlier
+    entries come from the client and can be forged, so they must not be used for lockouts."""
+    fwd = [x.strip() for x in request.headers.get("x-forwarded-for", "").split(",") if x.strip()]
+    return fwd[-1] if fwd else (request.client.host if request.client else "?")
+
+
+def _prune(q: deque, window: float) -> None:
+    now = time.time()
+    while q and now - q[0] > window:
+        q.popleft()
 
 
 def _too_many(ip: str) -> bool:
     q = _fails[ip]
-    now = time.time()
-    while q and now - q[0] > WINDOW_S:
-        q.popleft()
-    return len(q) >= MAX_FAILS
+    _prune(q, WINDOW_S)
+    _prune(_all_fails, GLOBAL_WINDOW_S)
+    return len(q) >= MAX_FAILS or len(_all_fails) >= GLOBAL_MAX_FAILS
 
 
 def is_open_path(path: str, query: dict) -> bool:
@@ -124,11 +136,12 @@ def login(body: LoginIn, request: Request, response: Response):
         return {"ok": True, "login_required": False}
     ip = _client(request)
     if _too_many(ip):
-        raise HTTPException(429, "Too many wrong passwords. Wait 15 minutes and try again.")
+        raise HTTPException(429, "Too many wrong passwords. Wait a while (up to an hour) and try again.")
     s = settings()
     ok = hmac.compare_digest(body.username.strip().encode(), s["username"].encode()) & hmac.compare_digest(body.password.encode(), s["password"].encode())
     if not ok:
         _fails[ip].append(time.time())
+        _all_fails.append(time.time())
         time.sleep(0.5)
         raise HTTPException(401, "Wrong username or password.")
     _fails.pop(ip, None)

@@ -20,6 +20,7 @@ def test_login_required_flow(monkeypatch):
     monkeypatch.setenv("SESSION_SECRET", "s3cret")
     monkeypatch.setenv("CALENDAR_TOKEN", "caltok")
     auth._fails.clear()
+    auth._all_fails.clear()
     with TestClient(app) as c:
         assert c.get("/api/health").status_code == 200
         assert c.get("/api/dashboard").status_code == 401
@@ -53,11 +54,13 @@ def test_lockout_after_repeated_failures(monkeypatch):
     monkeypatch.setenv("APP_PASSWORD", "pw")
     monkeypatch.setattr(auth.time, "sleep", lambda s: None)
     auth._fails.clear()
+    auth._all_fails.clear()
     with TestClient(app) as c:
         for _ in range(auth.MAX_FAILS):
             assert c.post("/api/auth/login", json={"username": "admin", "password": "x"}).status_code == 401
         assert c.post("/api/auth/login", json={"username": "admin", "password": "pw"}).status_code == 429
     auth._fails.clear()
+    auth._all_fails.clear()
 
 
 def test_backup_zip(monkeypatch, tmp_path):
@@ -69,3 +72,21 @@ def test_backup_zip(monkeypatch, tmp_path):
         assert r.status_code == 200 and r.headers["content-type"] == "application/zip"
     z = zipfile.ZipFile(make_backup(tmp_path))
     assert "govbid.db" in z.namelist()
+
+
+def test_forged_forwarded_for_does_not_reset_the_lockout(monkeypatch):
+    monkeypatch.setenv("APP_PASSWORD", "pw")
+    monkeypatch.setenv("APP_USERNAME", "admin")
+    auth._fails.clear()
+    auth._all_fails.clear()
+    monkeypatch.setattr(auth.time, "sleep", lambda s: None)
+    with TestClient(app) as c:
+        codes = [c.post("/api/auth/login", json={"username": "admin", "password": "x"},
+                        headers={"x-forwarded-for": f"10.0.0.{i}, 203.0.113.9"}).status_code for i in range(7)]
+        assert codes[:5] == [401] * 5 and codes[5] == 429  # same real address (last entry), forged first entries ignored
+        auth._fails.clear()
+        for i in range(40):  # many real addresses: the site-wide cap still stops the guessing
+            r = c.post("/api/auth/login", json={"username": "admin", "password": "x"}, headers={"x-forwarded-for": f"198.51.100.{i}"})
+        assert r.status_code == 429
+    auth._fails.clear()
+    auth._all_fails.clear()
