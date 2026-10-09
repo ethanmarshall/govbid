@@ -190,7 +190,7 @@ export default function InstantQuote({ meta, quoteId, oppId, onSaved, onOpenManu
           onDragLeave={() => setDrag(false)}
           onDrop={(e) => { e.preventDefault(); setDrag(false); upload(e.dataTransfer.files[0]) }}
         >
-          <input ref={input} type="file" accept=".step,.stp" hidden onChange={(e) => upload(e.target.files[0])} />
+          <input ref={input} type="file" hidden onChange={(e) => upload(e.target.files[0])} />
           {busy ? <><div className="big">Reading your model…</div><p className="muted">Measuring volume, holes, bends and stock size.</p></>
             : <><div className="big">Drop a STEP file here</div><p className="muted">or click to choose one (.step or .stp, up to 60 MB). One part per file works best.</p></>}
         </div>

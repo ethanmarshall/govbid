@@ -138,7 +138,7 @@ export default function FlatQuote({ meta, quoteId, oppId, onSaved }) {
     <div className={`dropzone ${parts.length || files.length ? 'dz-sm' : ''} ${drag ? 'over' : ''}`} onClick={() => input.current.click()}
       onDragOver={(e) => { e.preventDefault(); setDrag(true) }} onDragLeave={() => setDrag(false)}
       onDrop={(e) => { e.preventDefault(); setDrag(false); parse(e.dataTransfer.files) }}>
-      <input ref={input} type="file" accept=".dxf" multiple hidden onChange={(e) => { parse(e.target.files); e.target.value = '' }} />
+      <input ref={input} type="file" multiple hidden onChange={(e) => { parse(e.target.files); e.target.value = '' }} />
       {busy ? <div className="big">Reading…</div>
         : parts.length || files.length ? <span className="small">Drop DXF files to replace the parts</span>
           : <><div className="big">Drop DXF flat patterns here</div><p className="muted">One or more .dxf files. A file can hold several parts as separate closed profiles. Text, dimensions and title-block layers are ignored.</p></>}

@@ -270,12 +270,21 @@ function QuoteForm({ info }) {
   const hasDxf = files.some((f) => /\.dxf$/i.test(f.name))
   const extraSheet = useMemo(() => (info.sheet_materials || []).filter((x) => !info.materials.includes(x)), [info])
 
+  // The file picker shows every file: iPhone, iPad and Mac grey out .step, .stp, .dxf and Gerber files
+  // when a type filter is set, because they have no registered type there. So names are checked here.
+  const okExt = useMemo(() => (info.accept || '').toLowerCase().split(',').filter(Boolean), [info.accept])
   const addFiles = (list) => {
     const next = [...files]
-    for (const f of list) if (!next.some((x) => x.name === f.name && x.size === f.size)) next.push(f)
+    const bad = []
+    for (const f of list) {
+      const ext = (f.name.match(/\.[^.]+$/) || [''])[0].toLowerCase()
+      if (okExt.length && !okExt.includes(ext)) { bad.push(f.name); continue }
+      if (!next.some((x) => x.name === f.name && x.size === f.size)) next.push(f)
+    }
     setFiles(next.slice(0, info.max_files))
     setStale(!!req)
-    setErr(next.length > info.max_files ? `Up to ${info.max_files} files. Zip PCB files together.` : '')
+    setErr(bad.length ? `We can't use ${bad.join(', ')}. Send STEP (.step or .stp), PDF, DXF, or circuit board files (a .zip of Gerbers is best).`
+      : next.length > info.max_files ? `Up to ${info.max_files} files. Zip PCB files together.` : '')
   }
   const removeFile = (i) => { setFiles(files.filter((_, j) => j !== i)); setStale(!!req) }
 
@@ -337,7 +346,7 @@ function QuoteForm({ info }) {
             onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); input.current.click() } }}
             onDragOver={(e) => { e.preventDefault(); setDrag(true) }} onDragLeave={() => setDrag(false)}
             onDrop={(e) => { e.preventDefault(); setDrag(false); addFiles(e.dataTransfer.files) }}>
-            <input ref={input} type="file" multiple hidden accept={info.accept} onChange={(e) => { addFiles(e.target.files); e.target.value = '' }} />
+            <input ref={input} type="file" multiple hidden onChange={(e) => { addFiles(e.target.files); e.target.value = '' }} />
             <div className="pq-drop-main">Drop your files here, or choose files</div>
             <div className="pq-drop-sub">3D model (STEP), drawing (PDF), flat pattern (DXF), or circuit board files (zip of Gerbers, BOM and pick-and-place). Up to {info.max_files} files, {info.max_file_mb} MB each.</div>
           </div>

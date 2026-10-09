@@ -373,7 +373,7 @@ function BoardCard({ b, set, remove, cat, quantities, build, onError, compare, p
         <>
           <div className="dropzone dz-sm" style={{ marginTop: 8 }} onClick={() => input.current.click()}
             onDragOver={(e) => e.preventDefault()} onDrop={(e) => { e.preventDefault(); files(e.dataTransfer.files) }}>
-            <input ref={input} type="file" multiple hidden accept=".zip,.gbr,.ger,.gtl,.gbl,.gko,.gm1,.drl,.xln,.txt,.csv,.pos,.xlsx,.tsv" onChange={(e) => { files(e.target.files); e.target.value = '' }} />
+            <input ref={input} type="file" multiple hidden onChange={(e) => { files(e.target.files); e.target.value = '' }} />
             <span className="small">{busy ? 'Reading…' : 'Drop Gerbers or the fab zip, drill, pick-and-place and BOM files (any or all at once)'}</span>
           </div>
           {info && <ul className="clean small muted" style={{ marginTop: 6 }}>{info.evidence.map((x, i) => <li key={i}>{x}</li>)}{info.warnings.map((x, i) => <li key={`w${i}`} className="due-soon">{x}</li>)}</ul>}
