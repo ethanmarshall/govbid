@@ -1,0 +1,52 @@
+{
+  "totalRecords": 3,
+  "limit": 1000,
+  "offset": 0,
+  "opportunitiesData": [
+    {
+      "noticeId": "abc123",
+      "title": "IT Help Desk Support Services",
+      "solicitationNumber": "36C10X26Q0001",
+      "fullParentPathName": "VETERANS AFFAIRS, DEPARTMENT OF.VETERANS AFFAIRS, DEPARTMENT OF.NETWORK CONTRACT OFFICE 10",
+      "postedDate": "2026-10-01",
+      "type": "Combined Synopsis/Solicitation",
+      "baseType": "Combined Synopsis/Solicitation",
+      "typeOfSetAsideDescription": "Service-Disabled Veteran-Owned Small Business (SDVOSB) Set-Aside (FAR 19.14)",
+      "typeOfSetAside": "SDVOSBC",
+      "responseDeadLine": "2099-11-15T14:00:00-05:00",
+      "naicsCode": "541519",
+      "classificationCode": "DA01",
+      "active": "Yes",
+      "pointOfContact": [{"fullName": "Jane Smith", "email": "jane.smith@va.gov", "phone": "5555551212", "type": "primary", "title": "Contract Specialist"}],
+      "description": "https://api.sam.gov/prod/opportunities/v1/noticedesc?noticeid=abc123",
+      "placeOfPerformance": {"city": {"name": "Albany"}, "state": {"code": "NY"}, "zip": "12208"},
+      "resourceLinks": ["https://sam.gov/api/prod/opps/v3/opportunities/resources/files/f1/download"]
+    },
+    {
+      "noticeId": "def456",
+      "title": "Training Equipment Spare Parts",
+      "solicitationNumber": "W912XX26Q0042",
+      "fullParentPathName": "DEPT OF DEFENSE.DEPT OF THE ARMY.ACC",
+      "postedDate": "2026-10-03",
+      "type": "Solicitation",
+      "typeOfSetAsideDescription": "Total Small Business Set-Aside (FAR 19.5)",
+      "typeOfSetAside": "SBA",
+      "responseDeadLine": "2099-10-30",
+      "naicsCode": "423490",
+      "active": "Yes",
+      "placeOfPerformance": {"state": {"code": "VA"}}
+    },
+    {
+      "noticeId": "ghi789",
+      "title": "Janitorial Services",
+      "solicitationNumber": "SP4701-26-Q-0099",
+      "fullParentPathName": "DEPT OF DEFENSE.DEFENSE LOGISTICS AGENCY",
+      "postedDate": "2026-10-04",
+      "type": "Solicitation",
+      "typeOfSetAside": "8A",
+      "responseDeadLine": "2099-10-25",
+      "naicsCode": "561720",
+      "active": "Yes"
+    }
+  ]
+}

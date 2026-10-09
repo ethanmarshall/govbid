@@ -1,0 +1,18 @@
+# Secrets and local data (never commit)
+.env
+*.db
+backend/uploads/
+backend/digest.log
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+
+# Node
+frontend/node_modules/
+frontend/dist/
+
+# OS
+.DS_Store
