@@ -256,3 +256,16 @@ def test_win_loss_insights():
             for pq in db.query(PartQuote).filter(PartQuote.status.in_(("won", "lost", "submitted"))).all():
                 pq.status = "draft"
             db.commit()
+
+
+def test_deleted_quote_does_not_pass_its_number_to_a_new_quote():
+    from fastapi.testclient import TestClient
+    from app.main import app
+    from app import pricing
+    with TestClient(app) as c:
+        a = c.post("/api/pricing/quotes", json={"spec": pricing.EXAMPLE_SPEC}).json()
+        na = c.get(f"/api/quote-tools/{a['id']}/customer-quote").json()["number"]
+        assert c.delete(f"/api/pricing/quotes/{a['id']}").status_code in (200, 204)
+        b = c.post("/api/pricing/quotes", json={"spec": pricing.EXAMPLE_SPEC}).json()
+        nb = c.get(f"/api/quote-tools/{b['id']}/customer-quote").json()["number"]
+        assert int(nb[-4:]) == int(na[-4:]) + 1  # never reissued, even when SQLite reuses the quote id

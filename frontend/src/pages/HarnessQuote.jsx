@@ -207,7 +207,8 @@ export function RatesPanel({ cfgKey, config, title, labels = {}, onSaved }) {
 }
 
 // Common quote page state: catalog, reopen, opportunity prefill, debounced re-price, save, sheet
-export function useQuotePage({ kind, quoteId, oppId, onSaved, payload, restore, defaultName }) {
+export function useQuotePage({ kind, quoteId, oppId, onSaved, payload, restore, defaultName, apiBase, catalogUrl = '/api/electrical/catalog', ready }) {
+  const base = apiBase || `/api/electrical/${kind}`
   const [cat, setCat] = useState(null)
   const [qtyText, setQtyText] = useState('1, 5, 10')
   const [head, setHead] = useState({ name: '', part_number: '', nsn: '' })
@@ -219,11 +220,11 @@ export function useQuotePage({ kind, quoteId, oppId, onSaved, payload, restore, 
   const [msg, setMsg] = useState('')
   const opps = useOpps()
   const timer = useRef()
-  const loadCatalog = () => api.get('/api/electrical/catalog').then(setCat).catch((e) => setErr(e.message))
+  const loadCatalog = () => api.get(catalogUrl).then(setCat).catch((e) => setErr(e.message))
   useEffect(() => { loadCatalog() }, [])
   useEffect(() => {
     if (!quoteId) return
-    api.get(`/api/electrical/${kind}/quotes/${quoteId}`).then((q) => {
+    api.get(`${base}/quotes/${quoteId}`).then((q) => {
       const s = q.spec
       restore(s)
       setQtyText((s.quantities || [1]).join(', '))
@@ -239,12 +240,12 @@ export function useQuotePage({ kind, quoteId, oppId, onSaved, payload, restore, 
   }, [oppId])
   const quantities = useMemo(() => parseQtys(qtyText), [qtyText])
   const body = { ...payload, quantities, name: head.name, part_number: head.part_number, nsn: head.nsn }
-  const hasLines = (payload.lines?.length || 0) + (payload.wires?.length || 0) + (payload.bom?.length || 0) > 0
+  const hasLines = ready ?? ((payload.lines?.length || 0) + (payload.wires?.length || 0) + (payload.bom?.length || 0) > 0)
   useEffect(() => {
     clearTimeout(timer.current)
     if (!hasLines || !quantities.length) { setEst(null); return }
     timer.current = setTimeout(() => {
-      api.post(`/api/electrical/${kind}/quote`, body).then((r) => { setEst(r); setErr('') }).catch((e) => setErr(e.message))
+      api.post(`${base}/quote`, body).then((r) => { setEst(r); setErr('') }).catch((e) => setErr(e.message))
     }, 300)
     return () => clearTimeout(timer.current)
   }, [JSON.stringify(body), cat])
@@ -252,7 +253,7 @@ export function useQuotePage({ kind, quoteId, oppId, onSaved, payload, restore, 
   const doSave = async () => {
     setMsg(''); setErr('')
     try {
-      const q = await api.post(`/api/electrical/${kind}/save`, { ...body, source, opportunity_id: save.opportunity_id || null, status: save.status, notes: save.notes,
+      const q = await api.post(`${base}/save`, { ...body, source, opportunity_id: save.opportunity_id || null, status: save.status, notes: save.notes,
         quoted_quantity: row?.quantity ?? null, quoted_unit_price: row?.unit_price ?? null, quote_id: quoteId ? Number(quoteId) : null })
       setMsg(`Saved quote #${q.id}.`)
       if (!quoteId) onSaved(q.id)
@@ -260,7 +261,7 @@ export function useQuotePage({ kind, quoteId, oppId, onSaved, payload, restore, 
   }
   const sheet = () => {
     const slug = (head.name || defaultName).replace(/[^A-Za-z0-9_-]+/g, '-').slice(0, 60)
-    download(`/api/electrical/${kind}/sheet.xlsx`, { ...body, builds: row?.quantity || quantities[0] || 1, title: head.name }, `${slug}.xlsx`).catch((e) => setErr(e.message))
+    download(`${base}/sheet.xlsx`, { ...body, builds: row?.quantity || quantities[0] || 1, title: head.name }, `${slug}.xlsx`).catch((e) => setErr(e.message))
   }
   return { cat, loadCatalog, qtyText, setQtyText, quantities, head, setHead, source, setSource, est, row, pick, setPick, save, setSave, err, setErr, msg, setMsg, opps, doSave, sheet }
 }

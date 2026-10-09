@@ -1,0 +1,10 @@
+Reference,Value,Footprint,Qty,MPN,Manufacturer,DNP
+"C1,C2","100n","Capacitor_SMD:C_0603_1608Metric",2,GRM188R71H104KA93D,Murata,
+"C10","10u","Capacitor_SMD:C_0805_2012Metric",1,GRM21BR61E106KA73L,Murata,
+"R1","10k","Resistor_SMD:R_0603_1608Metric",1,RC0603FR-0710KL,Yageo,
+"R2","DNP","Resistor_SMD:R_0603_1608Metric",1,,,DNP
+"U1","STM32F405RGT6","Package_QFP:LQFP-64_10x10mm_P0.5mm",1,STM32F405RGT6,STMicroelectronics,
+"U2","TPS62130","Package_DFN_QFN:VQFN-16-1EP_3x3mm_P0.5mm",1,TPS62130RGTR,Texas Instruments,
+"U3","FPGA","Package_BGA:BGA-256_17x17mm",1,XC7A35T-1FTG256C,AMD,
+"J1","Conn","Connector_PinHeader_2.54mm:PinHeader_1x06_P2.54mm_Vertical",1,61300611121,Wurth,
+"FID1","FIDUCIAL","Fiducial:Fiducial_1mm",1,,,

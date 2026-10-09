@@ -35,6 +35,9 @@ class QuoteToolSettings(Base):
     inspection_acceptance: Mapped[str] = mapped_column(String(200), default="Per the solicitation")
     address: Mapped[str] = mapped_column(Text, default="")  # letterhead mailing address, one line per row
     footer_text: Mapped[str] = mapped_column(Text, default="Thank you for the opportunity to quote.")
+    # Highest quote number issued (year and sequence), so a number is never reissued after its quote is deleted
+    last_number_year: Mapped[int] = mapped_column(Integer, default=0)
+    last_number_seq: Mapped[int] = mapped_column(Integer, default=0)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 

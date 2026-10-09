@@ -90,11 +90,21 @@ def update_settings(db: Session, changes: dict) -> dict:
 # ---------------------------------------------------------------- quote numbers
 def ensure_number(db: Session, pq: PartQuote) -> CustomerQuoteDoc:
     doc = db.scalars(select(CustomerQuoteDoc).where(CustomerQuoteDoc.part_quote_id == pq.id)).first()
+    if doc and pq.created_at and doc.created_at and doc.created_at < pq.created_at:
+        st = get_settings(db)  # left over from a deleted quote whose id SQLite reused; retire its number
+        if (doc.year, doc.seq) > (st.last_number_year or 0, st.last_number_seq or 0):
+            st.last_number_year, st.last_number_seq = doc.year, doc.seq
+        db.delete(doc)
+        db.flush()
+        doc = None
     if doc:
         return doc
     year = date.today().year
-    seq = (db.scalar(select(func.max(CustomerQuoteDoc.seq)).where(CustomerQuoteDoc.year == year)) or 0) + 1
+    s = get_settings(db)
+    issued = (s.last_number_seq or 0) if s.last_number_year == year else 0
+    seq = max(db.scalar(select(func.max(CustomerQuoteDoc.seq)).where(CustomerQuoteDoc.year == year)) or 0, issued) + 1
     doc = CustomerQuoteDoc(part_quote_id=pq.id, number=f"Q-{year}-{seq:04d}", year=year, seq=seq, options={})
+    s.last_number_year, s.last_number_seq = year, seq
     db.add(doc)
     db.commit()
     return doc
@@ -146,11 +156,38 @@ def part_lines(pq: PartQuote) -> list[str]:
         ident.append(f"NSN {pq.nsn}")
     if ident:
         lines.append(", ".join(ident))
+    if spec.get("kind") == "box_build":
+        lines.append(box_summary(spec))
     mat = spec.get("material")
     fin = _finishes(spec)
     if mat or fin:
         lines.append(", ".join(x for x in [f"Material: {mat}" if mat else "", f"Finish: {', '.join(fin)}" if fin else ""] if x))
     return lines
+
+
+def box_summary(spec: dict) -> str:
+    """One customer-safe line saying what a box build includes (no costs)."""
+    parts = []
+    enc = spec.get("enclosure") or {}
+    if enc.get("source") in ("catalog", "custom"):
+        parts.append("enclosure")
+    elif enc.get("source") == "customer":
+        parts.append("customer-furnished enclosure")
+    boards = sum(float(b.get("qty_per") or 1) for b in spec.get("pcbs") or [])
+    if boards:
+        parts.append(f"{boards:g} circuit card assembl{'y' if boards == 1 else 'ies'}")
+    n = sum(float(x.get("qty") or 0) for x in spec.get("lines") or [] if x.get("type") != "hardware")
+    if n:
+        parts.append(f"{n:g} panel and internal components")
+    if any((c.get("spec") or {}).get("kind") == "harness" for c in spec.get("children") or []) or (spec.get("wiring") or {}).get("wires"):
+        parts.append("internal wiring")
+    if spec.get("peripherals"):
+        parts.append(f"{len(spec['peripherals'])} peripheral item(s)")
+    lab = spec.get("labor") or {}
+    tests = [t for k, t in (("functional_test_minutes", "functional test"), ("burn_in_hours", "burn-in"), ("hipot", "safety test")) if lab.get(k)]
+    if tests:
+        parts.append(", ".join(tests))
+    return ("Assembled unit: " + ", ".join(parts)) if parts else "Assembled unit"
 
 
 # ---------------------------------------------------------------- customer quote
@@ -733,7 +770,7 @@ def record_response(db: Session, rfq_id: int, data: dict) -> dict:
     return rfq_dict(db, r)
 
 
-TAB_BY_KIND = {"extrusion_build": "extrusion", "harness": "harness", "panel": "panel", "labels": "labels", "flat_dxf": "flat"}
+TAB_BY_KIND = {"extrusion_build": "extrusion", "harness": "harness", "panel": "panel", "labels": "labels", "flat_dxf": "flat", "box_build": "box"}
 
 
 def quote_url(pq: PartQuote | None) -> str:

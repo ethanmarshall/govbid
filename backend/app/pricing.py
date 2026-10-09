@@ -18,6 +18,7 @@ from typing import Any
 
 from .electrical_catalog import harness_default as _harness_default, labels_default as _labels_default, panel_default as _panel_default
 from .extrusion_catalog import default_config as _extrusion_default
+from .box_build_catalog import default_config as _box_build_default
 from .inserts import DEFAULT_CONFIG as _INSERTS_DEFAULT
 
 DEFAULT_CONFIG: dict[str, Any] = {
@@ -153,6 +154,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "harness": _harness_default(),
     "panel": _panel_default(),
     "labels": _labels_default(),
+    # Box builds (app/box_build.py): enclosures, PCB fab and assembly, panel parts, integration and test. Placeholders.
+    "box_build": _box_build_default(),
     # DXF flat parts (app/flat.py). Laser and waterjet use the rates, speeds and setups above; everything here is a placeholder.
     "flat": {
         "note": "Plasma and router rates and speeds, deburr minutes, PEM prices and the sheet-goods prices are placeholders. Replace them with your own.",

@@ -8,6 +8,7 @@ import HarnessQuote from './HarnessQuote'
 import PanelQuote from './PanelQuote'
 import LabelQuote from './LabelQuote'
 import FlatQuote from './FlatQuote'
+import BoxBuildQuote from './BoxBuildQuote'
 import QuoteInsights from './QuoteInsights'
 import QuoteActions from '../QuoteActions'
 
@@ -73,6 +74,7 @@ export default function PartQuotes() {
         <button className={tab === 'harness' ? 'on' : ''} onClick={() => go('harness')}>Cable harness</button>
         <button className={tab === 'panel' ? 'on' : ''} onClick={() => go('panel')}>Control panel</button>
         <button className={tab === 'labels' ? 'on' : ''} onClick={() => go('labels')}>Labels and plates</button>
+        <button className={tab === 'box' ? 'on' : ''} onClick={() => go('box')}>Box builds</button>
         <button className={tab === 'quote' ? 'on' : ''} onClick={() => go('quote')}>Manual estimate</button>
         <button className={tab === 'saved' ? 'on' : ''} onClick={() => go('saved')}>Saved quotes</button>
         <button className={tab === 'insights' ? 'on' : ''} onClick={() => go('insights')}>Win/loss</button>
@@ -84,9 +86,10 @@ export default function PartQuotes() {
       {tab === 'harness' && <HarnessQuote meta={meta} quoteId={params.get('id')} oppId={params.get('opportunity')} onSaved={(id) => go('harness', { id })} />}
       {tab === 'panel' && <PanelQuote meta={meta} quoteId={params.get('id')} oppId={params.get('opportunity')} onSaved={(id) => go('panel', { id })} />}
       {tab === 'labels' && <LabelQuote meta={meta} quoteId={params.get('id')} oppId={params.get('opportunity')} onSaved={(id) => go('labels', { id })} />}
+      {tab === 'box' && <BoxBuildQuote meta={meta} quoteId={params.get('id')} oppId={params.get('opportunity')} onSaved={(id) => go('box', { id })} />}
       {tab === 'insights' && <QuoteInsights />}
       {tab === 'extrusion' && <ExtrusionQuote meta={meta} quoteId={params.get('id')} oppId={params.get('opportunity')} onSaved={(id) => go('extrusion', { id })} />}
-      {tab === 'saved' && <SavedQuotes onOpen={(r) => go({ extrusion_build: 'extrusion', harness: 'harness', panel: 'panel', labels: 'labels', flat_dxf: 'flat' }[r.kind] || (r.cad_file ? 'instant' : 'quote'), { id: r.id })} />}
+      {tab === 'saved' && <SavedQuotes onOpen={(r) => go({ extrusion_build: 'extrusion', harness: 'harness', panel: 'panel', labels: 'labels', flat_dxf: 'flat', box_build: 'box' }[r.kind] || (r.cad_file ? 'instant' : 'quote'), { id: r.id })} />}
       {tab === 'rates' && <ShopRates onChanged={() => api.get('/api/pricing/meta').then(setMeta)} />}
     </>
   )

@@ -30,6 +30,8 @@ finishes and quantities, then save_part_quote with the returned spec.
 For a 3D printed part with threaded holes: analyze_step_file, convert_holes_for_inserts (rebuilds the
 holes for brass heat-set inserts as a new file), then quote_step_file(process="3d_print") on the new file_id.
 With only a PDF drawing: quote_from_drawing, check its assumptions and envelope, then save_part_quote.
+For an electromechanical assembly (enclosure with boards, switches, wiring and peripherals): read_pcb_files for each
+board, then quote_box_build, then save_part_quote with the spec plus "kind": "box_build".
 
 Workflow without a model:
 1. pricing_reference: learn the spec format, materials, finishes and operation types.
@@ -390,6 +392,50 @@ def split_assembly(file_id: str) -> dict[str, Any]:
     try:
         return assembly.split(file_id)
     except cad.CadError as exc:
+        return _err(exc)
+
+
+@mcp.tool(annotations=READ)
+def read_pcb_files(file_paths: list[str]) -> dict[str, Any]:
+    """Read PCB fab and assembly files for one board: Gerbers (or a zip of fab outputs), Excellon drill, pick-and-place
+    (KiCad .pos, Altium/Eagle CSV) and a BOM (CSV/XLSX). Returns board {layers, width_in, height_in, smt_placements,
+    sides, smt_unique, fine_pitch, bga, tht_parts, tht_joints}, bom_lines [{ref, mpn, manufacturer, description, qty, tht}],
+    evidence (where each value came from) and warnings. Use the board fields and bom_lines as a pcbs[] entry in
+    quote_box_build. Through-hole joints and pins are estimates from footprint names and hole sizes."""
+    from . import pcb_files
+    try:
+        files = [(Path(p).name, Path(p).read_bytes()) for p in file_paths]
+        return pcb_files.parse_files(files)
+    except (OSError, pcb_files.PcbFileError) as exc:
+        return _err(exc)
+
+
+@mcp.tool(annotations=READ)
+def quote_box_build(spec: dict[str, Any]) -> dict[str, Any]:
+    """Price a custom electromechanical assembly (box build) without saving it. spec keys:
+    quantities [int]; enclosure {source: catalog|custom|customer|none, type (diecast_aluminum, extruded_aluminum, sheet_steel,
+    stainless_nema4x, polycarbonate, abs_plastic, rack_chassis, rugged_case), length_in, width_in, height_in, unit_price,
+    finish (none|powder_coat|paint|anodize|chem_film), silkscreen_colors, mods {round_holes, rect_cutouts, connector_cutouts,
+    display_windows, vent_patterns, pem_inserts, gasket, emi_gasket}, child (a linked quote, see children) when source=custom};
+    pcbs [{name, qty_per, mode: estimate|buy|customer, layers, width_in, height_in, finish, ipc_class, smt_placements, smt_unique,
+    fine_pitch, bga, tht_parts, tht_joints, sides, conformal, flying_probe, program_minutes, test_minutes, bom_lines or bom_cost_each,
+    buy_prices [{quantity, unit_price}] and buy_nre for mode buy}];
+    lines [{type, part_number, manufacturer, description, qty, unit_price, terminations, method, mount: panel|internal}] for switches,
+    connectors, indicators, displays, power supplies, fans and other parts (type is guessed from the description when blank);
+    peripherals [{description, qty, unit_price, installed}]; wiring {wires, avg_length_in, mates};
+    children [{name, qty_per, mode: make|buy, buy_unit_price, spec}] where spec is any saved quote spec (get_part_quote) such as a
+    harness, panel, machined part, DXF part or another box build, rolled in at cost;
+    labor {ipc_class, fasteners, ground_points, firmware_minutes, functional_test_minutes, hipot, ground_bond, burn_in_hours,
+    ess_thermal, ess_vibration, lab_tests [mil_std_461|mil_std_810|mil_std_167|mil_s_901], work_instructions, test_procedure,
+    drawing_package, test_fixture_nre, other_nre, nre_in_price}; options {first_article, packaging_level, crate, freight_per_lot}.
+    Returns price_breaks, a breakdown and section totals per quantity, counts, warnings and assumptions. Every rate is a
+    placeholder from the shop rates (config box_build): say so when reporting. Save it with save_part_quote and kind "box_build"."""
+    from . import box_build
+    with session() as db:
+        overrides = quotes.get_overrides(db)
+    try:
+        return box_build.price(spec, overrides)
+    except (box_build.BoxBuildError, pricing.SpecError) as exc:
         return _err(exc)
 
 

@@ -175,7 +175,11 @@ button.chip.on { background: var(--ink); color: #fff; border-color: var(--ink); 
 .price-big span { font-size: 16px; font-weight: 400; color: var(--ink-3); }
 tr.clickable { cursor: pointer; }
 tr.clickable.sel td { background: rgba(181, 70, 44, .09); }
-@media (min-width: 901px) { .builder.iq { grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); } .iq .price-panel { position: sticky; top: 16px; } }
+@media (min-width: 901px) {
+  .builder.iq { grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); }
+  /* The whole right column sticks and scrolls on its own, so the price card never slides over the save panel. */
+  .builder.iq > div:last-child { position: sticky; top: 16px; max-height: calc(100vh - 32px); overflow-y: auto; overscroll-behavior: contain; }
+}
 
 /* Nav groups */
 .nav { overflow-y: auto; display: flex; flex-direction: column; }

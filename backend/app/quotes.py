@@ -100,6 +100,28 @@ def run_estimate(db: Session, spec: dict) -> dict:
     return pricing.estimate(spec, get_overrides(db))
 
 
+def price_spec(spec: dict, overrides: dict | None = None) -> dict:
+    """Price any saved quote spec with the model for its kind. `overrides` are the saved shop-rate overrides
+    (every model merges them onto the defaults). Used by save_quote and by box builds for linked quotes."""
+    kind = spec.get("kind")
+    if kind == "extrusion_build":  # T-slot builds price with their own model
+        from .extrusion import estimate_spec
+        return estimate_spec(spec, overrides)
+    if kind in ("harness", "panel", "labels"):  # electrical quoters price with their own models
+        from .electrical import estimate_spec as electrical_estimate
+        return electrical_estimate(spec, overrides)
+    if kind == "flat_dxf":  # DXF flat parts price with their own nesting and cut model
+        from .flat import estimate_spec as flat_estimate
+        return flat_estimate(spec, overrides)
+    if kind == "assembly":  # STEP assemblies: each body priced from the model, plus joining
+        from .assembly import estimate_spec as assembly_estimate
+        return assembly_estimate(spec, overrides)
+    if kind == "box_build":  # electromechanical assemblies: enclosure, PCBs, wiring, components, linked quotes
+        from .box_build import estimate_spec as box_estimate
+        return box_estimate(spec, overrides)
+    return pricing.estimate(spec, overrides)
+
+
 def quote_dict(q: PartQuote, full: bool = True) -> dict:
     d = {
         "id": q.id, "name": q.name, "nsn": q.nsn, "part_number": q.part_number, "status": q.status,
@@ -127,20 +149,7 @@ def save_quote(db: Session, spec: dict, *, opportunity_id: int | None = None, st
         raise pricing.SpecError(f"status must be one of {QUOTE_STATUSES}")
     if opportunity_id is not None and not db.get(Opportunity, opportunity_id):
         raise pricing.SpecError(f"Opportunity {opportunity_id} not found")
-    if spec.get("kind") == "extrusion_build":  # T-slot builds price with their own model
-        from .extrusion import estimate_spec
-        result = estimate_spec(spec, get_config(db))
-    elif spec.get("kind") in ("harness", "panel", "labels"):  # electrical quoters price with their own models
-        from .electrical import estimate_spec as electrical_estimate
-        result = electrical_estimate(spec, get_config(db))
-    elif spec.get("kind") == "flat_dxf":  # DXF flat parts price with their own nesting and cut model
-        from .flat import estimate_spec as flat_estimate
-        result = flat_estimate(spec, get_overrides(db))
-    elif spec.get("kind") == "assembly":  # STEP assemblies: each body priced from the model, plus joining
-        from .assembly import estimate_spec as assembly_estimate
-        result = assembly_estimate(spec, get_overrides(db))
-    else:
-        result = run_estimate(db, spec)
+    result = price_spec(spec, get_overrides(db))
     cad_notes = (spec.get("cad") or {}).get("notes") or []
     if cad_notes:  # keep the geometry-based assumptions from an instant quote
         result["assumptions"] = list(cad_notes) + result["assumptions"]
@@ -194,8 +203,13 @@ def get_quote(db: Session, quote_id: int) -> dict:
 
 def delete_quote(db: Session, quote_id: int) -> None:
     q = db.get(PartQuote, quote_id)
-    if q:
+    if q:  # SQLite does not enforce the foreign keys, so remove or detach dependent rows here
         from .models_crm import VendorQuote
+        from .models_jobs import Job
+        from .models_quote_tools import CustomerQuoteDoc, VendorRFQ
         db.query(VendorQuote).filter(VendorQuote.part_quote_id == quote_id).delete()
+        db.query(VendorRFQ).filter(VendorRFQ.part_quote_id == quote_id).delete()
+        db.query(CustomerQuoteDoc).filter(CustomerQuoteDoc.part_quote_id == quote_id).delete()  # its number stays retired
+        db.query(Job).filter(Job.part_quote_id == quote_id).update({Job.part_quote_id: None})
         db.delete(q)
         db.commit()

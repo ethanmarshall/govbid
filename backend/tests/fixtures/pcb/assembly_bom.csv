@@ -1,0 +1,11 @@
+Item,Ref,Part Number,Manufacturer,Description,Qty,Unit Price
+1,,1590BB,Hammond,"Enclosure, die-cast aluminum, 4.7 x 3.7 x 1.2 in",1,14.50
+2,A1,CTRL-PCBA-001,,Controller PCBA,1,
+3,S1,M2012SS1W01,NKK,Toggle switch SPDT,2,11.20
+4,J1,D38999/20WB35SN,Amphenol,"Connector, circular, D38999 receptacle",1,
+5,DS1,550-2207F,Dialight,LED indicator green,3,3.10
+6,,NHD-7.0-800480EF,Newhaven,7 in TFT display,1,
+7,PS1,RS-15-12,MEAN WELL,Power supply 12V 15W,1,9.80
+8,,4-40 x 1/4 screw,,"Screw, pan head, 4-40 x 1/4",12,0.05
+9,,,,Operator manual,1,
+10,W1,HARN-001,,Cable assembly internal,1,
