@@ -195,7 +195,8 @@ def test_customer_can_download_their_quote_as_pdf(client):
 
     text = "".join(p.extract_text() for p in PdfReader(io.BytesIO(r.content)).pages)
     assert q["ref"] in text and "each" in text and "margin" not in text.lower()
-    assert client.get(f"/api/public/quote/{q['ref']}/pdf?token=wrong").status_code == 400
+    bad = client.get(f"/api/public/quote/{q['ref']}/pdf?token=wrong")
+    assert bad.status_code == 404 and "text/html" in bad.headers["content-type"]
 
 
 def test_owner_can_preview_a_closed_page(monkeypatch):

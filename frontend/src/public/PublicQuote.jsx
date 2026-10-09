@@ -8,6 +8,27 @@ import './public.css'
 const money = (n, cents = true) => (n == null ? '' : `$${Number(n).toLocaleString(undefined, { minimumFractionDigits: cents ? 2 : 0, maximumFractionDigits: cents ? 2 : 0 })}`)
 const range = (lo, hi) => `${money(lo, lo < 100)} to ${money(hi, hi < 100)}`
 
+// File uploads go through XMLHttpRequest so the page can show upload progress (large STEP files on a phone take a while).
+function upload(url, form, onProgress) {
+  return new Promise((resolve, reject) => {
+    const x = new XMLHttpRequest()
+    x.open('POST', url)
+    x.upload.onprogress = (e) => { if (e.lengthComputable) onProgress(e.loaded / e.total) }
+    x.upload.onload = () => onProgress(1)
+    x.onload = () => {
+      let data = null
+      try { data = JSON.parse(x.responseText) } catch { /* not json */ }
+      if (x.status >= 200 && x.status < 300) resolve(data)
+      else reject(new Error((data && typeof data.detail === 'string' && data.detail) || `Something went wrong (${x.status}). Try again.`))
+    }
+    x.onerror = () => reject(new Error('The upload did not go through. Check your connection and try again.'))
+    x.send(form)
+  })
+}
+const FILE_KIND = [[/\.(step|stp)$/i, '3D model'], [/\.pdf$/i, 'Drawing'], [/\.dxf$/i, 'Flat pattern'], [/\.(zip|gbr|gtl|gbl|gko|drl|xln)$/i, 'Circuit board files']]
+const fileKind = (name) => (FILE_KIND.find(([rx]) => rx.test(name)) || [null, 'Reference'])[1]
+const size = (n) => (n < 102400 ? `${Math.max(1, Math.round(n / 1024))} KB` : `${(n / 1048576).toFixed(1)} MB`)
+
 async function call(method, url, body, form) {
   const opts = { method, headers: {} }
   if (form) opts.body = form
@@ -128,7 +149,7 @@ function SavedQuotes() {
             <span className="pq-saved-what">{q.files || 'No files'}<span className="pq-muted"> {q.created}, quantity {Number(q.quantity || 1).toLocaleString()}</span></span>
             <span className="pq-saved-price">{q.price}</span>
             <span className="pq-saved-act">
-              <a href={pdfLink(q.ref, q.token)}>PDF</a>
+              <a href={pdfLink(q.ref, q.token)} target="_blank" rel="noopener">PDF</a>
               <button type="button" className="pq-link" onClick={() => drop(q.ref)} aria-label={`Remove ${q.ref} from this list`}>Remove</button>
             </span>
           </li>
@@ -215,7 +236,9 @@ function SiteSections({ info }) {
       )}
 
       <footer className="pq-foot">
-        <div><b>{info.name}</b>{info.tagline ? <span className="pq-muted"> {info.tagline}</span> : null}</div>
+        <div><b>{info.name}</b>
+          {co && (co.uei || co.cage) && <div className="pq-muted pq-foot-codes">{[co.uei && `UEI ${co.uei}`, co.cage && `CAGE ${co.cage}`].filter(Boolean).join(', ')}</div>}
+        </div>
         <div className="pq-foot-links">
           {info.contact_email && <a href={`mailto:${info.contact_email}`}>{info.contact_email}</a>}
           {info.contact_phone && <a href={`tel:${info.contact_phone.replace(/[^0-9+]/g, '')}`}>{info.contact_phone}</a>}
@@ -242,6 +265,8 @@ function QuoteForm({ info }) {
   const input = useRef()
   const block = useRef()
   const timer = useRef()
+  const current = useRef(null) // { ref, token } of the quote on screen
+  const [progress, setProgress] = useState(null) // upload share 0..1 while sending files
   const hasDxf = files.some((f) => /\.dxf$/i.test(f.name))
   const extraSheet = useMemo(() => (info.sheet_materials || []).filter((x) => !info.materials.includes(x)), [info])
 
@@ -255,6 +280,8 @@ function QuoteForm({ info }) {
   const removeFile = (i) => { setFiles(files.filter((_, j) => j !== i)); setStale(!!req) }
 
   const getPrice = async () => {
+    clearTimeout(timer.current)
+    current.current = null // drop any reprice still on its way for the old quote
     setBusy(true); setErr('')
     const form = new FormData()
     if (!controlled) files.forEach((f) => form.append('files', f))
@@ -267,25 +294,35 @@ function QuoteForm({ info }) {
     form.append('website', '')
     if (info.owner && !info.enabled) form.append('preview', 'true')
     try {
-      const r = await call('POST', '/api/public/quote', undefined, form)
+      setProgress(0)
+      const r = await upload('/api/public/quote', form, setProgress)
+      current.current = { ref: r.ref, token: r.token }
       setReq(r); setStale(false); remember(r, r.token)
       setTimeout(() => { if (window.matchMedia('(max-width: 899px)').matches) block.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }) }, 50)
     } catch (e) { setErr(e.message) }
-    setBusy(false)
+    setBusy(false); setProgress(null)
   }
 
-  // after a price: quantity, material, finish and thickness reprice without uploading again
+  // after a price: quantity, material, finish and thickness reprice without uploading again.
+  // Each answer is applied only to the quote it was asked for, so a slow reply about an older quote
+  // can never overwrite a newer one (or pair its number with the wrong private link).
   useEffect(() => {
-    if (!req || req.submitted || stale) return
+    const mine = current.current
+    if (!mine || busy || req?.submitted || stale) return
+    const want = Math.max(1, parseInt(qty, 10) || 1)
+    const t = thickness === '' ? null : Number(thickness)
+    if (req && want === (req.result?.quantity || req.quantity) && material === (req.material || '') && finish === (req.finish || '') && t === (req.thickness ?? null)) return
     clearTimeout(timer.current)
     timer.current = setTimeout(async () => {
       try {
-        const r = await call('POST', `/api/public/quote/${req.ref}/options`, { token: req.token, quantity: Math.max(1, parseInt(qty, 10) || 1), material, finish, thickness: thickness === '' ? null : Number(thickness) })
-        setReq((old) => { remember(r, old.token); return { ...r, token: old.token } }); setErr('')
-      } catch (e) { setErr(e.message) }
+        const r = await call('POST', `/api/public/quote/${mine.ref}/options`, { token: mine.token, quantity: Math.max(1, parseInt(qty, 10) || 1), material, finish, thickness: thickness === '' ? null : Number(thickness) })
+        if (current.current?.ref !== mine.ref) return
+        remember(r, mine.token)
+        setReq({ ...r, token: mine.token }); setErr('')
+      } catch (e) { if (current.current?.ref === mine.ref) setErr(e.message) }
     }, 450)
     return () => clearTimeout(timer.current)
-  }, [qty, material, finish, thickness])
+  }, [qty, material, finish, thickness, busy])
 
   const res = req?.result
   return (
@@ -307,7 +344,7 @@ function QuoteForm({ info }) {
         {files.length > 0 && !controlled && (
           <ul className="pq-files">
             {files.map((f, i) => (
-              <li key={i}><span>{f.name}</span><span className="pq-muted">{f.size < 102400 ? `${Math.max(1, Math.round(f.size / 1024))} KB` : `${(f.size / 1048576).toFixed(1)} MB`}</span>
+              <li key={i}><span>{f.name}<span className="pq-filekind">{fileKind(f.name)}</span></span><span className="pq-muted">{size(f.size)}</span>
                 <button type="button" className="pq-link" onClick={() => removeFile(i)} aria-label={`Remove ${f.name}`}>Remove</button></li>
             ))}
           </ul>
@@ -347,14 +384,14 @@ function QuoteForm({ info }) {
         {err && <p className="pq-err" role="alert">{err}</p>}
         <div className="pq-actions">
           <button type="button" className="pq-btn" disabled={busy || (!files.length && !controlled && !notes.trim())} onClick={getPrice}>
-            {busy ? 'Pricing your files…' : req && !stale ? 'Price again' : 'Get price'}
+            {busy ? (progress != null && progress < 1 && files.length ? `Uploading ${Math.round(progress * 100)}%` : 'Reading your files…') : req && !stale ? 'Price again' : 'Get price'}
           </button>
           {stale && <span className="pq-muted">Your files changed. Get the price again.</span>}
         </div>
       </section>
 
       <aside className="pq-side" ref={block} aria-live="polite">
-        <TitleBlock req={req} info={info} qty={qty} material={material} busy={busy} />
+        <TitleBlock req={req} info={info} qty={qty} material={material} busy={busy} progress={progress} />
         {req && !stale && !req.submitted && <SaveBar req={req} token={req.token} info={info} />}
         {req && !stale && res?.kind !== 'needs_input' && <SubmitForm req={req} setReq={setReq} info={info} />}
       </aside>
@@ -362,7 +399,7 @@ function QuoteForm({ info }) {
   )
 }
 
-function TitleBlock({ req, info, qty, material, busy }) {
+function TitleBlock({ req, info, qty, material, busy, progress }) {
   const res = req?.result
   const kind = res?.kind
   const q = res?.quantity || Math.max(1, parseInt(qty, 10) || 1)
@@ -373,10 +410,15 @@ function TitleBlock({ req, info, qty, material, busy }) {
         <div className="pq-cell"><span>Quantity</span><b>{q.toLocaleString()}</b></div>
       </div>
       <div className="pq-tb-row">
-        <div className="pq-cell wide"><span>Material</span><b>{req?.material || material || 'From the drawing'}</b></div>
+        <div className="pq-cell wide"><span>Material</span><b>{req?.material || material || 'From your files'}</b></div>
       </div>
       <div className="pq-tb-price">
-        {busy && !res && <p className="pq-muted">Reading your files…</p>}
+        {busy && !res && (
+          <div className="pq-progress" role="status">
+            <p className="pq-muted">{progress != null && progress < 1 ? 'Uploading your files…' : 'Reading your files. Drawings and assemblies can take up to a minute.'}</p>
+            <div className="pq-bar"><span style={{ width: `${Math.round((progress == null ? 0.05 : progress < 1 ? progress * 0.6 : 0.85) * 100)}%` }} className={progress >= 1 ? 'pq-bar-wait' : ''} /></div>
+          </div>
+        )}
         {!res && !busy && <p className="pq-muted">Your price appears here. Add your files and choose Get price.</p>}
         {kind === 'instant' && (
           <>
@@ -396,7 +438,7 @@ function TitleBlock({ req, info, qty, material, busy }) {
         {res?.message && <p className="pq-msg">{res.message}</p>}
       </div>
       {res?.lead_days ? <div className="pq-tb-row"><div className="pq-cell wide"><span>Ships in about</span><b>{res.lead_days} days after the order is confirmed</b></div></div> : null}
-      {res?.items?.length > 0 && (res.items.length > 1 || res.items.some((i) => i.note)) && (
+      {res?.items?.length > 0 && (
         <ul className="pq-items">
           {res.items.map((it, i) => (
             <li key={i}>
@@ -430,7 +472,7 @@ function SubmitForm({ req, setReq, info }) {
         <p className="pq-muted">Keep this link to check on your request:</p>
         <div className="pq-linkrow"><input readOnly value={link} onFocus={(e) => e.target.select()} aria-label="Status link" />
           <button type="button" className="pq-btn ghost" onClick={() => { navigator.clipboard?.writeText(link).then(() => setCopied(true)).catch(() => {}) }}>{copied ? 'Copied' : 'Copy link'}</button></div>
-        <p><a href={pdfLink(req.ref, req.token)}>Download a PDF copy</a></p>
+        <p><a href={pdfLink(req.ref, req.token)} target="_blank" rel="noopener">Save a PDF copy</a></p>
       </div>
     )
   }
@@ -473,12 +515,17 @@ function SaveBar({ req, token, info }) {
   return (
     <div className="pq-save">
       <div className="pq-save-row">
-        <a className="pq-btn ghost" href={pdfLink(req.ref, token)} download={`${req.ref}.pdf`}>Download PDF</a>
+        <a className="pq-btn ghost" href={pdfLink(req.ref, token)} target="_blank" rel="noopener">Save as PDF</a>
         <button type="button" className="pq-btn ghost" onClick={copy}>{copied ? 'Link copied' : 'Copy link'}</button>
       </div>
       <p className="pq-muted pq-save-note">Saved in this browser under Your saved quotes. We keep quotes you have not sent us for {info.keep_days || 30} days.</p>
     </div>
   )
+}
+
+function Forget({ refId, token }) { // a saved entry whose link no longer works is dropped from the list
+  useEffect(() => { const list = loadSaved(); const next = list.filter((x) => !(x.ref === refId && x.token === token)); if (next.length !== list.length) { writeSaved(next); window.dispatchEvent(new Event('pq-saved')) } }, [refId, token])
+  return null
 }
 
 function Status({ refId, token, info }) {
@@ -500,7 +547,7 @@ function Status({ refId, token, info }) {
     }, 450)
     return () => clearTimeout(timer.current)
   }, [qty])
-  if (err && !r) return <div className="pq-closed"><h1>Quote not found</h1><p>{err} <button className="pq-link" onClick={() => navigate('/quote')}>Start a new quote</button></p></div>
+  if (err && !r) return <div className="pq-closed"><h1>Quote not found</h1><Forget refId={refId} token={token} /><p>{err} <button className="pq-link" onClick={() => navigate('/quote')}>Start a new quote</button></p></div>
   if (!r) return <p className="pq-muted pq-pad">Loading…</p>
   const draft = !r.submitted
   const res = r.result || {}
@@ -526,7 +573,7 @@ function Status({ refId, token, info }) {
         {draft && <SaveBar req={r} token={token} info={info} />}
         {draft || sent
           ? res.kind !== 'needs_input' && <SubmitForm req={{ ...r, token }} setReq={(v) => { setR(v); setSent(true) }} info={info} />
-          : <p><a href={pdfLink(r.ref, token)}>Download a PDF copy</a></p>}
+          : <p><a href={pdfLink(r.ref, token)} target="_blank" rel="noopener">Save a PDF copy</a></p>}
       </aside>
     </div>
   )

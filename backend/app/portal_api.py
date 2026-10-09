@@ -17,7 +17,7 @@ import logging
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.concurrency import run_in_threadpool
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, Response
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -92,13 +92,21 @@ def quote_pdf(ref: str, request: Request, token: str = "", db: Session = Depends
     _limit(portal.REPRICE_LIMIT, request)
     from . import portal_pdf
 
-    req = _customer(db, ref, token)
+    try:
+        req = portal.get_for_customer(db, ref, token)
+    except portal.PortalError:
+        # opened in a browser tab, so answer with a page a person can read (not JSON saved as a broken .pdf)
+        return HTMLResponse("<!doctype html><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'>"
+                            "<title>Quote not found</title><body style='font:17px/1.5 system-ui,sans-serif;max-width:34em;margin:12vh auto;padding:0 20px;color:#15212c'>"
+                            "<h1 style='font-size:24px'>Quote not found</h1><p>This quote link is not valid. It may have a typo, or the quote "
+                            "was removed after 30 days without being sent to us.</p><p><a href='/quote' style='color:#2356c4'>Start a new quote</a></p>",
+                            status_code=404)
     base = str(request.base_url).rstrip("/")
     if request.headers.get("x-forwarded-proto") == "https" and base.startswith("http://"):
         base = "https://" + base[len("http://"):]
     link = f"{base}/quote/status/{req.ref}?t={req.token}"
     pdf = portal_pdf.render(portal.public_view(req), portal.public_info(db), link, portal.DRAFT_DAYS)
-    return Response(pdf, media_type="application/pdf", headers={"Content-Disposition": f'attachment; filename="{req.ref}.pdf"',
+    return Response(pdf, media_type="application/pdf", headers={"Content-Disposition": f'inline; filename="{req.ref}.pdf"',
                                                                  "Cache-Control": "no-store"})
 
 

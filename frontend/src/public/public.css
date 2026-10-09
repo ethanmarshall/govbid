@@ -79,7 +79,7 @@
 .pq-err { color: var(--err); font-weight: 500; margin: 14px 0 0; }
 
 /* Title block */
-.pq-side { position: sticky; top: 20px; }
+.pq-side { position: sticky; top: 70px; }
 .pq-tb { border: 1.5px solid var(--ink); background: #fff; }
 .pq-tb-row { display: flex; border-bottom: 1px solid var(--ink); }
 .pq-cell { flex: 1; padding: 7px 10px 8px; border-left: 1px solid var(--ink); min-width: 0; }
@@ -110,11 +110,20 @@
 
 
 /* Section links under the header */
-.pq-nav { display: flex; flex-wrap: wrap; gap: 4px 26px; padding: 10px 0 11px; border-bottom: 1px solid var(--rule); margin-bottom: 28px; font-family: var(--cond); font-weight: 600; font-size: 17px; }
+.pq-nav { position: sticky; top: 0; z-index: 5; background: var(--sheet); display: flex; flex-wrap: wrap; gap: 4px 26px; padding: 10px 0 11px; border-bottom: 1px solid var(--rule); margin-bottom: 28px; font-family: var(--cond); font-weight: 600; font-size: 17px; }
 .pq-nav a { color: var(--ink); text-decoration: none; padding: 4px 0; border-bottom: 2px solid transparent; }
 .pq-nav a:hover { color: var(--dye); border-bottom-color: var(--dye); }
 .pq-preview { margin: -12px 0 24px; padding: 10px 14px; background: #f6ecd8; border-left: 3px solid var(--wait); font-size: 15px; }
-.pq-anchor { scroll-margin-top: 16px; }
+.pq-anchor { scroll-margin-top: 64px; }
+
+/* Upload and reading progress */
+.pq-filekind { margin-left: 10px; font-size: 13px; color: var(--ink-3); }
+.pq-progress p { margin: 0 0 10px; }
+.pq-bar { height: 6px; background: #e6ebe9; overflow: hidden; }
+.pq-bar span { display: block; height: 100%; background: var(--dye); transition: width .3s ease; }
+.pq-bar span.pq-bar-wait { animation: pq-pulse 1.4s ease-in-out infinite; }
+@keyframes pq-pulse { 50% { opacity: .45; } }
+.pq-foot-codes { font-size: 14px; margin-top: 2px; }
 
 /* Saving a quote */
 .pq-save { margin-top: 12px; }
@@ -190,7 +199,9 @@
   .pq-drop { padding: 28px 16px; }
   .pq-big { font-size: 40px; }
   .pq-big.pq-range { font-size: 29px; }
-  .pq-nav { gap: 2px 18px; font-size: 16px; margin-bottom: 22px; }
+  .pq-nav { gap: 0 18px; font-size: 16px; margin-bottom: 22px; flex-wrap: nowrap; overflow-x: auto; white-space: nowrap; scrollbar-width: none; margin-left: -16px; margin-right: -16px; padding-left: 16px; padding-right: 16px; }
+  .pq-nav::-webkit-scrollbar { display: none; }
+  .pq-anchor { scroll-margin-top: 56px; }
   .pq-preview { margin-top: -6px; }
   .pq-sec { margin-top: 34px; }
   .pq-sec h2 { font-size: 24px; }
@@ -217,4 +228,4 @@
   .pq-body { grid-template-columns: minmax(0, 1fr) 330px; gap: 28px; }
   .pq-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
-@media (prefers-reduced-motion: reduce) { .pq * { transition: none !important; scroll-behavior: auto !important; } }
+@media (prefers-reduced-motion: reduce) { .pq * { transition: none !important; animation: none !important; scroll-behavior: auto !important; } }

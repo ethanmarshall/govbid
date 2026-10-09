@@ -50,7 +50,9 @@ def render(view: dict, info: dict, link: str, keep_days: int = 30) -> bytes:
     width = letter[0] - 1.4 * inch
     story = []
 
-    contact = "   ".join(x for x in (info.get("contact_email"), info.get("contact_phone")) if x)
+    co = info.get("company") or {}
+    codes = ", ".join(x for x in (co.get("uei") and f"UEI {co['uei']}", co.get("cage") and f"CAGE {co['cage']}") if x)
+    contact = "   ".join(x for x in (info.get("contact_email"), info.get("contact_phone"), codes) if x)
     head = Table([[[P(info.get("name") or "Quote", "name"), P(info.get("tagline") or "", "sub")],
                    [P("QUOTE" if kind == "instant" else "ESTIMATE" if kind == "estimate" else "QUOTE REQUEST", "lab"), P(view["ref"], "name")]]],
                  colWidths=[width * 0.66, width * 0.34])
@@ -67,9 +69,8 @@ def render(view: dict, info: dict, link: str, keep_days: int = 30) -> bytes:
     status = view.get("status_label") or ""
     block = Table([
         [cell("Date", created), cell("Quantity", f"{q:,}"), cell("Status", status)],
-        [cell("Material", view.get("material") or "From the drawing"), cell("Finish", view.get("finish") or "From the drawing"),
-         cell("Kept until" if not view.get("submitted") else "Lead time", until if not view.get("submitted") else
-              (f"About {res['lead_days']} days after the order is confirmed" if res.get("lead_days") else "Confirmed with you"))],
+        [cell("Material", view.get("material") or "From your files"), cell("Finish", view.get("finish") or "From your files"),
+         cell("Price valid until" if kind == "instant" else "Saved until", until)],
     ], colWidths=[width / 3] * 3)
     block.setStyle(TableStyle([("BOX", (0, 0), (-1, -1), 1, ink), ("INNERGRID", (0, 0), (-1, -1), 0.6, ink), ("VALIGN", (0, 0), (-1, -1), "TOP"),
                                ("TOPPADDING", (0, 0), (-1, -1), 4), ("BOTTOMPADDING", (0, 0), (-1, -1), 6)]))
@@ -85,7 +86,7 @@ def render(view: dict, info: dict, link: str, keep_days: int = 30) -> bytes:
         story += [P("Not priced yet", "h")]
     else:
         story += [P("Priced by an engineer", "h")]
-    if res.get("lead_days") and not view.get("submitted"):
+    if res.get("lead_days"):
         story += [P(f"Ships in about {res['lead_days']} days after the order is confirmed.")]
     if res.get("message"):
         story += [Spacer(1, 6), P(res["message"])]
@@ -112,6 +113,9 @@ def render(view: dict, info: dict, link: str, keep_days: int = 30) -> bytes:
         story += [P("Your notes", "h"), P(view["notes"])]
 
     story += [Spacer(1, 14), P("Terms", "h"), P(info.get("terms") or "", "small")]
+    if contact:
+        story += [Spacer(1, 8), P(f"Questions about this quote? Contact {info.get('name') or 'us'}: "
+                                  + ", ".join(x for x in (info.get("contact_email"), info.get("contact_phone")) if x) + f". Mention {view['ref']}.", "small")]
     if link:
         story += [Spacer(1, 8), P("Open this quote online, change the quantity, or send it to us:", "small"),
                   Paragraph(f'<link href="{escape(link)}" color="#2356c4">{escape(link)}</link>', st["small"])]
