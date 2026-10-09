@@ -35,8 +35,9 @@
 .pq-zones-side span { flex: 1; display: grid; place-items: center; border-top: 1px solid var(--rule); }
 .pq-zones-side span:first-child { border-top: 0; }
 
-.pq-head { display: flex; justify-content: space-between; align-items: flex-end; gap: 24px; flex-wrap: wrap; padding: 6px 0 22px; border-bottom: 1.5px solid var(--ink); margin-bottom: 28px; }
-.pq-name { font-family: var(--cond); font-weight: 700; font-size: 34px; line-height: 1.05; letter-spacing: -0.01em; }
+.pq-head { display: flex; justify-content: space-between; align-items: flex-end; gap: 24px; flex-wrap: wrap; padding: 6px 0 22px; border-bottom: 1.5px solid var(--ink); margin-bottom: 0; }
+.pq-head + :not(.pq-nav) { margin-top: 28px; }
+.pq-name { display: inline-block; font-family: var(--cond); font-weight: 700; font-size: 34px; line-height: 1.05; letter-spacing: -0.01em; color: var(--ink) !important; text-decoration: none; }
 .pq-tagline { margin: 6px 0 0; color: var(--ink-2); max-width: 60ch; }
 .pq-contact { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; font-size: 15px; }
 .pq-contact a { text-decoration: none; }
@@ -107,6 +108,74 @@
 .pq-linkrow input { font-size: 14px; }
 .pq-closed { padding: 20px 0 10px; max-width: 64ch; }
 
+
+/* Section links under the header */
+.pq-nav { display: flex; flex-wrap: wrap; gap: 4px 26px; padding: 10px 0 11px; border-bottom: 1px solid var(--rule); margin-bottom: 28px; font-family: var(--cond); font-weight: 600; font-size: 17px; }
+.pq-nav a { color: var(--ink); text-decoration: none; padding: 4px 0; border-bottom: 2px solid transparent; }
+.pq-nav a:hover { color: var(--dye); border-bottom-color: var(--dye); }
+.pq-preview { margin: -12px 0 24px; padding: 10px 14px; background: #f6ecd8; border-left: 3px solid var(--wait); font-size: 15px; }
+.pq-anchor { scroll-margin-top: 16px; }
+
+/* Saving a quote */
+.pq-save { margin-top: 12px; }
+.pq-save-row { display: flex; gap: 10px; }
+.pq-save-row .pq-btn { flex: 1; text-align: center; text-decoration: none; display: inline-flex; align-items: center; justify-content: center; }
+.pq-save-note { font-size: 14px; margin: 8px 0 0; }
+
+/* Site sections: each one opens with a full-weight rule, like a new view on the sheet */
+.pq-sec { margin-top: 44px; padding-top: 22px; border-top: 1.5px solid var(--ink); }
+.pq-sec h2 { font-size: 27px; font-weight: 700; margin-bottom: 14px; }
+.pq h3 { font-family: var(--cond); font-weight: 600; font-size: 20px; margin: 0 0 10px; text-transform: none; letter-spacing: 0; color: var(--ink); }
+.pq-secnote { margin: -6px 0 12px; font-size: 15px; }
+.pq-prose { max-width: 66ch; margin: 0 0 12px; }
+.pq-two { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); gap: 44px; align-items: start; }
+
+/* Capabilities as a parts list with item balloons */
+.pq-bom { width: 100%; border-collapse: collapse; border: 1.5px solid var(--ink); font-size: 16px; }
+.pq-bom thead th { font-size: 12px; font-weight: 500; color: var(--ink-3); text-align: left; padding: 6px 12px; border-bottom: 1.5px solid var(--ink); background: #fff; }
+.pq-bom td, .pq-bom tbody th { border-bottom: 0; padding: 11px 12px; border-top: 1px solid var(--rule); vertical-align: top; text-align: left; }
+.pq-bom tbody th { font-family: var(--cond); font-weight: 600; font-size: 18px; white-space: nowrap; }
+.pq-bom td:first-child, .pq-bom thead th:first-child { width: 64px; }
+.pq-bom td:last-child { color: var(--ink-2); }
+.pq-balloon { display: inline-grid; place-items: center; width: 30px; height: 30px; border: 1.3px solid var(--ink); border-radius: 50%; font-family: var(--cond); font-weight: 600; font-size: 15px; background: #fff; }
+
+/* Experience as drawing notes */
+.pq-notes-list { margin: 0; padding-left: 1.6em; }
+.pq-notes-list li { padding: 2px 0 8px 4px; }
+.pq-notes-list li::marker { font-family: var(--cond); font-weight: 600; }
+
+/* How quoting works */
+.pq-steps { list-style: none; counter-reset: step; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); margin: 0; padding: 0; border: 1.5px solid var(--ink); }
+.pq-steps li { counter-increment: step; padding: 14px 16px 16px; border-left: 1px solid var(--ink); display: flex; flex-direction: column; gap: 4px; }
+.pq-steps li:first-child { border-left: 0; }
+.pq-steps li::before { content: counter(step); font-family: var(--cond); font-weight: 700; font-size: 30px; line-height: 1; color: var(--dye); margin-bottom: 6px; }
+.pq-steps b { font-family: var(--cond); font-weight: 600; font-size: 19px; }
+.pq-steps span { color: var(--ink-2); font-size: 15px; }
+
+.pq-ticks { list-style: none; margin: 0; padding: 0; }
+.pq-ticks li { position: relative; padding: 0 0 10px 26px; }
+.pq-ticks li::before { content: ''; position: absolute; left: 2px; top: 7px; width: 11px; height: 6px; border-left: 2px solid var(--ok); border-bottom: 2px solid var(--ok); transform: rotate(-45deg); }
+.pq-codes { margin-top: 44px; }
+.pq-codes .pq-cell b { font-size: 17px; }
+
+.pq-faq { border-top: 1px solid var(--rule); max-width: 860px; }
+.pq-faq details { border-bottom: 1px solid var(--rule); }
+.pq-faq summary { cursor: pointer; list-style: none; padding: 13px 34px 13px 0; position: relative; font-family: var(--cond); font-weight: 600; font-size: 19px; }
+.pq-faq summary::-webkit-details-marker { display: none; }
+.pq-faq summary::after { content: '+'; position: absolute; right: 6px; top: 9px; font-size: 24px; font-weight: 500; color: var(--dye); }
+.pq-faq details[open] summary::after { content: '\2212'; }
+.pq-faq details p { margin: 0 0 16px; color: var(--ink-2); max-width: 70ch; }
+
+.pq-saved { list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--rule); }
+.pq-saved li { display: grid; grid-template-columns: 130px minmax(0, 1fr) auto auto; gap: 16px; align-items: baseline; padding: 10px 0; border-bottom: 1px solid var(--rule); font-size: 15px; }
+.pq-saved-ref { font-family: var(--cond); font-weight: 600; font-size: 17px; }
+.pq-saved-what { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pq-saved-price { font-weight: 500; }
+.pq-saved-act { display: flex; gap: 12px; align-items: baseline; }
+
+.pq-foot { margin-top: 44px; padding-top: 16px; border-top: 1.5px solid var(--ink); display: flex; justify-content: space-between; gap: 12px 24px; flex-wrap: wrap; font-size: 15px; }
+.pq-foot-links { display: flex; gap: 6px 20px; flex-wrap: wrap; }
+
 @media (max-width: 899px) {
   .pq { padding: calc(12px + env(safe-area-inset-top, 0px)) calc(10px + env(safe-area-inset-right, 0px)) calc(28px + env(safe-area-inset-bottom, 0px)) calc(10px + env(safe-area-inset-left, 0px)); font-size: 16px; }
   .pq-sheet { padding: 20px 16px 26px; border-width: 1px; }
@@ -121,6 +190,28 @@
   .pq-drop { padding: 28px 16px; }
   .pq-big { font-size: 40px; }
   .pq-big.pq-range { font-size: 29px; }
+  .pq-nav { gap: 2px 18px; font-size: 16px; margin-bottom: 22px; }
+  .pq-preview { margin-top: -6px; }
+  .pq-sec { margin-top: 34px; }
+  .pq-sec h2 { font-size: 24px; }
+  .pq-two { grid-template-columns: minmax(0, 1fr); gap: 22px; }
+  .pq-codes { margin-top: 0; }
+  .pq-steps { grid-template-columns: minmax(0, 1fr); }
+  .pq-steps li { border-left: 0; border-top: 1px solid var(--ink); display: grid; grid-template-columns: 34px minmax(0, 1fr); column-gap: 8px; }
+  .pq-steps li:first-child { border-top: 0; }
+  .pq-steps li::before { grid-row: span 2; font-size: 26px; margin: 0; }
+  .pq-bom, .pq-bom tbody { display: block; border-collapse: separate; }
+  .pq-bom thead { display: none; }
+  .pq-bom tr { display: grid; grid-template-columns: 42px minmax(0, 1fr); border-top: 1px solid var(--rule); }
+  .pq-bom tr:first-child { border-top: 0; }
+  .pq-bom td, .pq-bom tbody th { border-top: 0; padding: 4px 10px 0; }
+  .pq-bom td:first-child { grid-row: span 2; padding: 10px 0 10px 10px; width: auto; }
+  .pq-bom tbody th { padding-top: 12px; white-space: normal; }
+  .pq-bom td:last-child { padding-bottom: 12px; font-size: 15px; }
+  .pq-saved li { grid-template-columns: minmax(0, 1fr) auto; gap: 2px 12px; }
+  .pq-saved-what { grid-column: 1 / -1; grid-row: 2; white-space: normal; }
+  .pq-saved-price { grid-column: 1; grid-row: 3; }
+  .pq-saved-act { grid-column: 2; grid-row: 1; }
 }
 @media (min-width: 900px) and (max-width: 1099px) {
   .pq-body { grid-template-columns: minmax(0, 1fr) 330px; gap: 28px; }

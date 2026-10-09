@@ -462,3 +462,10 @@ ul.checklist li.acc { background: #fdecea; }
 /* Assembly drawing found in the drawing quoter */
 .asm-notice { border-left: 3px solid var(--accent); background: #fffaf3; }
 .asm-notice h2 { margin-bottom: 6px; }
+
+/* Customer site link and sign out, at the top of the menu so they are always in reach */
+.nav-acct { display: flex; gap: 8px; margin: 0 0 14px; }
+.nav-acct a, .nav-acct button { flex: 1; display: flex; align-items: center; justify-content: center; min-height: 34px; margin: 0; padding: 6px 4px; font: inherit; font-size: 13px; white-space: nowrap;
+  color: #dfe5eb; background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.16); border-radius: var(--radius); cursor: pointer; text-decoration: none; }
+.nav-acct a:hover, .nav-acct button:hover { background: rgba(255,255,255,0.12); color: #fff; }
+@media (max-width: 900px) { .nav-acct a, .nav-acct button { min-height: 44px; font-size: 15px; } }

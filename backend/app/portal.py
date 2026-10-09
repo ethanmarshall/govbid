@@ -70,19 +70,88 @@ def get_settings(db: Session) -> PortalSettings:
 
 
 SETTINGS_FIELDS = ("enabled", "display_name", "tagline", "intro", "contact_email", "contact_phone", "notify_email", "estimate_low_pct",
-                   "estimate_high_pct", "incomplete_high_pct", "review_days", "max_quantity", "terms")
+                   "estimate_high_pct", "incomplete_high_pct", "review_days", "max_quantity", "terms", "show_codes")
+
+# What the customer site says about you until you change it in Portal settings. Written to be true of a small
+# veteran-owned shop that designs, builds and tests; edit every line so it matches what you actually do.
+DEFAULT_SITE = {
+    "about": "We are a veteran-owned small business that designs, builds and tests custom parts and electromechanical equipment. "
+             "Send us a model or a drawing and we will build to it, or tell us what the part has to do and we will help you get to a design.",
+    "capabilities": [
+        {"title": "CNC machining", "text": "Milled and turned parts in aluminum, steel, stainless and engineering plastics, from one prototype to production runs."},
+        {"title": "Sheet metal", "text": "Laser and waterjet cut flat parts, press brake forming, PEM hardware, brackets, panels and enclosures."},
+        {"title": "Welded assemblies and frames", "text": "Welded steel and aluminum assemblies, and T-slot aluminum extrusion frames."},
+        {"title": "3D printing", "text": "Fixtures, prototypes and low-volume parts in engineering plastics."},
+        {"title": "Cable harnesses", "text": "Harnesses built to your drawing, with labels, sleeving and continuity testing on every one."},
+        {"title": "Control panels", "text": "Panel layout, wiring, labeling and testing."},
+        {"title": "Box builds", "text": "Complete electromechanical assemblies: enclosure, circuit boards, switches, displays, power, wiring, integration and functional test."},
+        {"title": "Circuit boards", "text": "Boards built through a contract manufacturer from your Gerbers and BOM, then inspected and tested by us."},
+        {"title": "Engineering support", "text": "Electrical and mechanical design, drawings, and a manufacturability review before you commit to a build."},
+    ],
+    "experience": [
+        "Electrical engineering with mechanical design experience.",
+        "Design of custom training equipment and power distribution.",
+        "Temperature monitoring panels, including RTD measurement over long lead lengths.",
+        "Work on nuclear power training programs, where documentation and quality requirements are strict.",
+    ],
+    "industries": ["Defense and government", "Training equipment", "Industrial equipment", "Test and research labs"],
+    "quality": [
+        "Every part is inspected to your drawing. A first article inspection report is available when you need one.",
+        "Material certifications and a certificate of conformance on request.",
+        "Domestic and DFARS-compliant materials sourced when your contract calls for them.",
+        "Export-controlled technical data is never handled through this website.",
+    ],
+    "faq": [
+        {"q": "What files should I send?", "a": "A STEP model gives the fastest and most accurate price. A PDF drawing tells us tolerances, finishes and notes, so send both if you have them. For flat parts, a DXF and the sheet thickness. For circuit boards, one zip with the Gerbers, drill file, BOM and pick-and-place file."},
+        {"q": "Is the instant price final?", "a": "It is our price for the part as we read it from your files. We confirm every order with you before we start, and if anything in your files changes the price, we tell you first."},
+        {"q": "Why did I get an estimate instead of a price?", "a": "Assemblies, box builds, circuit boards and drawings our software cannot read with confidence get a price range. An engineer reviews your files and confirms the price with you within {review_days} business days."},
+        {"q": "How do I save my quote?", "a": "Every quote gets a reference number and a private link. Use Download PDF or Copy link next to your price. This browser also keeps a list under Your saved quotes. Quotes you have not sent to us are kept for 30 days."},
+        {"q": "Is there a minimum order?", "a": "No. One part is fine, and the price per part drops as the quantity goes up."},
+        {"q": "Are my files kept private?", "a": "Your files are stored on our server for quoting and for building your order. They are not sent to any outside service. Quotes you do not send to us are deleted with their files after 30 days."},
+        {"q": "Can you take export-controlled (ITAR or EAR) work?", "a": "Do not upload controlled data here. Check the export-controlled box, send your contact details, and we will talk with you about whether we can take the work and how to transfer the data."},
+        {"q": "How do I pay?", "a": "We agree on payment terms when we confirm your order. Purchase orders are welcome."},
+    ],
+}
+SITE_LIMITS = {"capabilities": 24, "experience": 20, "industries": 20, "quality": 20, "faq": 30}
+
+
+def site_content(s: PortalSettings) -> dict:
+    """The site text: what you saved, with defaults for anything you never set."""
+    saved = s.site or {}
+    return {k: saved[k] if k in saved else v for k, v in DEFAULT_SITE.items()}
+
+
+def _clean_site(v: dict) -> dict:
+    if not isinstance(v, dict):
+        raise PortalError("site must be an object")
+    out: dict = {}
+    if "about" in v:
+        out["about"] = str(v["about"] or "")[:3000]
+    for k in ("experience", "industries", "quality"):
+        if k in v:
+            out[k] = [str(x).strip()[:400] for x in (v[k] or []) if str(x).strip()][: SITE_LIMITS[k]]
+    if "capabilities" in v:
+        out["capabilities"] = [{"title": str(c.get("title") or "").strip()[:80], "text": str(c.get("text") or "").strip()[:500]}
+                               for c in (v["capabilities"] or []) if isinstance(c, dict) and str(c.get("title") or "").strip()][: SITE_LIMITS["capabilities"]]
+    if "faq" in v:
+        out["faq"] = [{"q": str(c.get("q") or "").strip()[:200], "a": str(c.get("a") or "").strip()[:1500]}
+                      for c in (v["faq"] or []) if isinstance(c, dict) and str(c.get("q") or "").strip()][: SITE_LIMITS["faq"]]
+    return out
 
 
 def settings_dict(s: PortalSettings) -> dict:
-    return {k: getattr(s, k) for k in SETTINGS_FIELDS}
+    return {**{k: getattr(s, k) for k in SETTINGS_FIELDS}, "site": site_content(s), "site_defaults": DEFAULT_SITE}
 
 
 def update_settings(db: Session, changes: dict) -> dict:
     s = get_settings(db)
     for k, v in (changes or {}).items():
+        if k == "site" and v is not None:
+            s.site = {**(s.site or {}), **_clean_site(v)}
+            continue
         if k not in SETTINGS_FIELDS or v is None:
             continue
-        if k == "enabled":
+        if k in ("enabled", "show_codes"):
             v = bool(v)
         elif k in ("estimate_low_pct", "estimate_high_pct", "incomplete_high_pct"):
             v = float(v)
@@ -113,7 +182,21 @@ def public_info(db: Session) -> dict:
             "terms": s.terms, "review_days": s.review_days, "max_quantity": s.max_quantity,
             "materials": sorted(cfg["materials"]), "print_materials": sorted(cfg["additive"]["materials"]),
             "sheet_materials": sorted(flat_materials(cfg)), "finishes": sorted(cfg["finishes"]),
-            "accept": ACCEPT, "max_files": MAX_FILES, "max_file_mb": MAX_FILE // (1024 * 1024)}
+            "accept": ACCEPT, "max_files": MAX_FILES, "max_file_mb": MAX_FILE // (1024 * 1024), "keep_days": DRAFT_DAYS,
+            "site": site_content(s), "company": _company_codes(prof) if s.show_codes else None}
+
+
+def _company_codes(prof) -> dict | None:
+    """Registration codes and only the certifications you actually hold (pending ones are not shown)."""
+    if not prof:
+        return None
+    from .eligibility import CERT_LABELS
+
+    certs = [CERT_LABELS.get(k, k) for k, v in (prof.certifications or {}).items() if v == "certified" and k != "SB"]
+    if (prof.certifications or {}).get("SB") == "certified":
+        certs.insert(0, "Small business")
+    out = {"uei": prof.uei or "", "cage": prof.cage or "", "naics": list(prof.naics_codes or [])[:12], "certifications": certs}
+    return out if any(out.values()) else None
 
 
 # ================================================================ abuse limits
@@ -540,9 +623,10 @@ def _clean_opts(req: PortalRequest, data: dict, max_qty: int) -> None:
         req.customer_notes = str(data["notes"])[:MAX_NOTES]
 
 
-def create(db: Session, uploads: list[tuple[str, bytes]], data: dict, ip: str) -> PortalRequest:
+def create(db: Session, uploads: list[tuple[str, bytes]], data: dict, ip: str, preview: bool = False) -> PortalRequest:
+    """preview: you, signed in, trying the page while it is still closed to customers."""
     s = get_settings(db)
-    if not s.enabled:
+    if not s.enabled and not preview:
         raise PortalError("Online quoting is not open yet.")
     purge_stale(db)
     req = PortalRequest(ref=_new_ref(db), token=secrets.token_urlsafe(24), status="draft", ip_hash=ip_hash(ip),
@@ -558,6 +642,8 @@ def create(db: Session, uploads: list[tuple[str, bytes]], data: dict, ip: str) -
         else:
             store_files(req, uploads)
         price_request(db, req)
+        if preview and not s.enabled:
+            req.internal = {**(req.internal or {}), "preview": True}
     except Exception:
         db.rollback()
         shutil.rmtree(PORTAL_DIR / req.ref, ignore_errors=True)

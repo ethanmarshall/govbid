@@ -21,7 +21,9 @@ export default function CustomerRequests() {
   const [drafts, setDrafts] = useState(false)
   const [err, setErr] = useState('')
   const [showSettings, setShowSettings] = useState(false)
+  const [open, setOpen] = useState(null)
   const sel = params.get('id')
+  useEffect(() => { api.get('/api/portal/settings').then((v) => setOpen(v.enabled)).catch(() => {}) }, [showSettings])
   const load = () => api.get('/api/portal/requests?' + new URLSearchParams({ status: filter, include_drafts: drafts })).then(setRows).catch((e) => setErr(e.message))
   useEffect(() => { load() }, [filter, drafts])
   const publicUrl = `${window.location.origin}/quote`
@@ -39,7 +41,11 @@ export default function CustomerRequests() {
           </div>
           <button className="link" onClick={() => setShowSettings(!showSettings)}>{showSettings ? 'Hide' : 'Portal settings'}</button>
         </div>
-        {showSettings && <PortalSettings onSaved={load} />}
+        {open === false && !showSettings && (
+          <p className="small due-soon" style={{ marginBottom: 0 }}>Your customer site is closed. Customers see your capabilities and a note to email you. Because you are signed in, you can open it and try quotes yourself. Turn it on in Portal settings.</p>
+        )}
+        {open && !showSettings && <p className="small okline" style={{ marginBottom: 0 }}>Your customer site is open. Anyone with the link can get prices.</p>}
+        {showSettings && <PortalSettings onSaved={() => { load(); api.get('/api/portal/settings').then((v) => setOpen(v.enabled)).catch(() => {}) }} />}
       </div>
       {err && <div className="err">{err}</div>}
       <div className="row" style={{ marginBottom: 10 }}>
@@ -147,19 +153,38 @@ function RequestDetail({ id, onChange, onClose }) {
   )
 }
 
+// The site text is edited as plain text: one entry per line, or "Title: details" for capabilities,
+// and question/answer blocks separated by a blank line for questions.
+const lines = (t) => String(t || '').split('\n').map((x) => x.trim()).filter(Boolean)
+const toCaps = (list) => (list || []).map((c) => (c.text ? `${c.title}: ${c.text}` : c.title)).join('\n')
+const fromCaps = (t) => lines(t).map((l) => { const i = l.indexOf(':'); return i > 0 ? { title: l.slice(0, i).trim(), text: l.slice(i + 1).trim() } : { title: l, text: '' } })
+const toFaq = (list) => (list || []).map((f) => `${f.q}\n${f.a}`).join('\n\n')
+const fromFaq = (t) => String(t || '').split(/\n\s*\n/).map((b) => b.trim()).filter(Boolean).map((b) => { const [q, ...a] = b.split('\n'); return { q: q.trim(), a: a.join(' ').trim() } })
+const siteText = (site) => ({ about: site.about || '', capabilities: toCaps(site.capabilities), experience: (site.experience || []).join('\n'),
+  industries: (site.industries || []).join('\n'), quality: (site.quality || []).join('\n'), faq: toFaq(site.faq) })
+const siteFrom = (t) => ({ about: t.about, capabilities: fromCaps(t.capabilities), experience: lines(t.experience), industries: lines(t.industries), quality: lines(t.quality), faq: fromFaq(t.faq) })
+
 function PortalSettings({ onSaved }) {
   const [s, setS] = useState(null)
+  const [site, setSite] = useState(null)
   const [err, setErr] = useState('')
   const [msg, setMsg] = useState('')
-  useEffect(() => { api.get('/api/portal/settings').then(setS).catch((e) => setErr(e.message)) }, [])
+  useEffect(() => { api.get('/api/portal/settings').then((v) => { setS(v); setSite(siteText(v.site)) }).catch((e) => setErr(e.message)) }, [])
   if (!s) return <p className="muted">{err || 'Loading…'}</p>
-  const save = async () => { setErr(''); try { setS(await api.put('/api/portal/settings', s)); setMsg('Saved.'); onSaved?.() } catch (e) { setErr(e.message) } }
+  const save = async () => {
+    setErr(''); setMsg('')
+    try { const { site: _ignored, site_defaults: _d, ...rest } = s; const v = await api.put('/api/portal/settings', { ...rest, site: siteFrom(site) }); setS(v); setSite(siteText(v.site)); setMsg('Saved.'); onSaved?.() } catch (e) { setErr(e.message) }
+  }
   const f = (k, label, type = 'text', props = {}) => (
     <label className="f">{label}<input type={type} value={s[k] ?? ''} onChange={(e) => setS({ ...s, [k]: type === 'number' ? Number(e.target.value) : e.target.value })} {...props} /></label>
   )
+  const t = (k, label, hint, rows = 5) => (
+    <label className="f" style={{ marginTop: 10 }}>{label}{hint && <span className="small muted" style={{ fontWeight: 400 }}>{hint}</span>}
+      <textarea value={site[k]} onChange={(e) => setSite({ ...site, [k]: e.target.value })} rows={rows} style={{ minHeight: rows * 20 }} /></label>
+  )
   return (
     <div style={{ marginTop: 12 }}>
-      <label className="check"><input type="checkbox" checked={s.enabled} onChange={(e) => setS({ ...s, enabled: e.target.checked })} /> <b>Customer page is open</b></label>
+      <label className="check"><input type="checkbox" checked={s.enabled} onChange={(e) => setS({ ...s, enabled: e.target.checked })} /> <b>Customer site is open for quotes</b></label>
       <p className="small due-soon">Before you open it: replace the placeholder shop rates (Part quotes, Shop rates and the rates on each tab). Customers see prices built from them.</p>
       <div className="grid g3">
         {f('display_name', 'Company name shown (blank: your profile name)')}
@@ -173,11 +198,26 @@ function PortalSettings({ onSaved }) {
         {f('incomplete_high_pct', 'Above by % when parts need manual prices', 'number', { min: 0 })}
       </div>
       <label className="f" style={{ marginTop: 10 }}>Tagline<input value={s.tagline} onChange={(e) => setS({ ...s, tagline: e.target.value })} /></label>
-      <label className="f" style={{ marginTop: 10 }}>Intro<textarea value={s.intro} onChange={(e) => setS({ ...s, intro: e.target.value })} style={{ minHeight: 60 }} /></label>
+      <label className="f" style={{ marginTop: 10 }}>Intro above the upload box<textarea value={s.intro} onChange={(e) => setS({ ...s, intro: e.target.value })} style={{ minHeight: 60 }} /></label>
       <label className="f" style={{ marginTop: 10 }}>Terms the customer accepts<textarea value={s.terms} onChange={(e) => setS({ ...s, terms: e.target.value })} style={{ minHeight: 70 }} /></label>
+
+      <h3 style={{ marginTop: 22 }}>What the site says about you</h3>
+      <p className="small due-soon">This is suggested text. Read every line and change it so it matches what you actually do, in house or through partners. Customers will hold you to it.</p>
+      {t('about', 'About us', 'A paragraph or two. Leave a blank line between paragraphs.', 4)}
+      {t('capabilities', 'Capabilities', 'One per line, as Title: details', 9)}
+      <div className="grid g2">
+        {t('experience', 'Experience', 'One per line', 5)}
+        {t('industries', 'Who you work with', 'One per line', 5)}
+      </div>
+      {t('quality', 'Quality and compliance', 'One per line', 5)}
+      {t('faq', 'Questions', 'Question on the first line, answer below it, blank line between questions. {review_days} becomes your review time.', 12)}
+      <label className="check" style={{ marginTop: 8 }}><input type="checkbox" checked={!!s.show_codes} onChange={(e) => setS({ ...s, show_codes: e.target.checked })} /> Show your UEI, CAGE code, NAICS codes and the certifications you hold (from Company profile). Pending certifications are never shown.</label>
+      <p className="small"><button className="link" onClick={() => setSite(siteText(s.site_defaults))}>Put back the suggested text</button> (not saved until you save)</p>
+
       <p className="small muted">Email notices need SMTP_HOST and the other SMTP settings on the server. Requests are saved either way.</p>
       {err && <div className="err">{err}</div>}
-      <div className="row"><button className="primary" onClick={save}>Save portal settings</button>{msg && <span className="small okline">{msg}</span>}</div>
+      <div className="row"><button className="primary" onClick={save}>Save portal settings</button>{msg && <span className="small okline">{msg}</span>}
+        <a className="small" href="/quote" target="_blank" rel="noreferrer">View the customer site</a></div>
     </div>
   )
 }

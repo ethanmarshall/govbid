@@ -111,7 +111,7 @@ function Shell({ auth }) {
     if (menu) window.addEventListener('keydown', key)
     return () => window.removeEventListener('keydown', key)
   }, [menu])
-  const logout = async () => { await api.post('/api/auth/logout', {}); window.location.reload() }
+  const logout = async () => { try { await api.post('/api/auth/logout', {}) } finally { window.location.href = '/' } }
 
   return (
     <AuthContext.Provider value={auth}>
@@ -128,6 +128,10 @@ function Shell({ auth }) {
             <div className="brand">GovBid<span>Pro</span></div>
             <button className="nav-close" aria-label="Close menu" onClick={() => setMenu(false)}>×</button>
           </div>
+          <div className="nav-acct">
+            <a href="/quote" target="_blank" rel="noreferrer">Customer site</a>
+            {auth.login_required && <button type="button" onClick={logout} title={`Signed in as ${auth.username}`}>Sign out</button>}
+          </div>
           {NAV.map(([group, links]) => (
             <div key={group || 'top'}>
               {group && <div className="navgroup">{group}</div>}
@@ -138,7 +142,7 @@ function Shell({ auth }) {
             SAM.gov key: {meta?.sam_key_configured ? 'set' : 'missing'}
             <br />
             AI analysis: {meta?.ai_configured ? 'on' : 'rule-based'}
-            {auth.login_required && <><br /><button className="link navlink" onClick={logout}>Sign out ({auth.username})</button></>}
+            {auth.login_required && <><br />Signed in as {auth.username}</>}
           </div>
         </nav>
         <main className="main">

@@ -42,6 +42,9 @@ class PortalRequest(Base):
     quote_ids: Mapped[list] = mapped_column(JSON, default=list)  # internal PartQuotes made from this request
     ip_hash: Mapped[str] = mapped_column(String(64), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    # what the customer site says about you: about, capabilities, experience, industries, quality, faq (blank keys use the defaults)
+    site: Mapped[dict] = mapped_column(JSON, default=dict)
+    show_codes: Mapped[bool] = mapped_column(Boolean, default=True)  # UEI, CAGE, NAICS and held certifications on the page
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     submitted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
@@ -67,4 +70,7 @@ class PortalSettings(Base):
     terms: Mapped[str] = mapped_column(Text, default="Instant quotes are valid for 30 days and are confirmed by us before the order is placed. "
                                                     "Estimates are not offers: we confirm the scope and price with you first. "
                                                     "Do not upload export-controlled (ITAR/EAR) or classified technical data.")
+    # what the customer site says about you: about, capabilities, experience, industries, quality, faq (blank keys use the defaults)
+    site: Mapped[dict] = mapped_column(JSON, default=dict)
+    show_codes: Mapped[bool] = mapped_column(Boolean, default=True)  # UEI, CAGE, NAICS and held certifications on the page
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

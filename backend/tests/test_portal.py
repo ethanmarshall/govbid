@@ -151,3 +151,63 @@ def test_rate_limit(client):
     finally:
         portal.QUOTE_LIMIT.per_ip = old
         portal.QUOTE_LIMIT.clear()
+
+
+def test_site_content_defaults_and_edits(client):
+    info = client.get("/api/public/info").json()
+    assert info["site"]["capabilities"] and info["site"]["faq"] and info["owner"] is False
+    s = client.put("/api/portal/settings", json={"site": {"about": "We build test stands.", "capabilities": [{"title": "Harnesses", "text": "To print"}, {"title": ""}],
+                                                          "experience": ["Ten years of panels", "  "]}}).json()
+    assert s["site"]["about"] == "We build test stands." and s["site"]["capabilities"] == [{"title": "Harnesses", "text": "To print"}]
+    assert s["site"]["experience"] == ["Ten years of panels"] and s["site"]["faq"]  # untouched keys keep the defaults
+    info = client.get("/api/public/info").json()
+    assert info["site"]["about"] == "We build test stands."
+    client.put("/api/portal/settings", json={"site": {k: v for k, v in portal.DEFAULT_SITE.items()}})
+
+
+def test_only_held_certifications_are_shown(client):
+    from app.db import SessionLocal
+    from app.models import CompanyProfile
+
+    db = SessionLocal()
+    prof = db.query(CompanyProfile).first() or CompanyProfile(name="Test Co")
+    old = (prof.uei or "", prof.cage or "", dict(prof.certifications or {}))
+    prof.uei, prof.cage, prof.certifications = "ABC123DEF456", "1A2B3", {"SDVOSB": "pending", "SB": "certified", "HUBZONE": "certified"}
+    db.add(prof); db.commit()
+    try:
+        c = client.get("/api/public/info").json()["company"]
+        assert c["uei"] == "ABC123DEF456" and "Small business" in c["certifications"] and "HUBZone" in c["certifications"]
+        assert not any("SDVOSB" in x for x in c["certifications"])  # pending is not claimed
+        client.put("/api/portal/settings", json={"show_codes": False})
+        assert client.get("/api/public/info").json()["company"] is None
+    finally:
+        client.put("/api/portal/settings", json={"show_codes": True})
+        prof.uei, prof.cage, prof.certifications = old
+        db.commit(); db.close()
+
+
+def test_customer_can_download_their_quote_as_pdf(client):
+    q = _quote(client, [FIX / "cad" / "machined_block.step"], quantity=3).json()
+    r = client.get(f"/api/public/quote/{q['ref']}/pdf?token={q['token']}")
+    assert r.status_code == 200 and r.content[:4] == b"%PDF" and q["ref"] in r.headers["content-disposition"]
+    from pypdf import PdfReader
+    import io
+
+    text = "".join(p.extract_text() for p in PdfReader(io.BytesIO(r.content)).pages)
+    assert q["ref"] in text and "each" in text and "margin" not in text.lower()
+    assert client.get(f"/api/public/quote/{q['ref']}/pdf?token=wrong").status_code == 400
+
+
+def test_owner_can_preview_a_closed_page(monkeypatch):
+    monkeypatch.setenv("APP_PASSWORD", "pw")
+    monkeypatch.setenv("APP_USERNAME", "owner")
+    portal.QUOTE_LIMIT.clear()
+    with TestClient(app) as c:
+        assert c.post("/api/auth/login", json={"username": "owner", "password": "pw"}).status_code == 200
+        c.put("/api/portal/settings", json={"enabled": False})
+        assert c.get("/api/public/info").json()["owner"] is True
+        r = _quote(c, [FIX / "cad" / "machined_block.step"], preview="true")
+        assert r.status_code == 200 and r.json()["result"]["kind"] == "instant"
+        c.cookies.clear()
+        r = _quote(c, [FIX / "cad" / "machined_block.step"], preview="true")  # a visitor cannot use the preview flag
+        assert r.status_code == 400

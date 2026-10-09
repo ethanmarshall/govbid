@@ -17,12 +17,13 @@ import logging
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.concurrency import run_in_threadpool
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from . import portal
+from . import auth
 from .auth import _client
 from .db import SessionLocal, get_db
 from .models_portal import PORTAL_STATUSES, PortalRequest
@@ -45,15 +46,20 @@ def _limit(limiter: portal.Limiter, request: Request):
 
 
 # ================================================================ public
+def _owner(request: Request) -> bool:
+    """You, signed in to GovBid Pro (only when a password is set). Lets you preview the page before it opens."""
+    return auth.enabled() and auth.valid_session(request.cookies.get(auth.COOKIE))
+
+
 @public.get("/info")
-def info(db: Session = Depends(get_db)):
-    return portal.public_info(db)
+def info(request: Request, db: Session = Depends(get_db)):
+    return {**portal.public_info(db), "owner": _owner(request)}
 
 
 @public.post("/quote")
 async def new_quote(request: Request, files: list[UploadFile] = File(default=[]), quantity: int = Form(1), material: str = Form(""),
                     finish: str = Form(""), thickness: str = Form(""), notes: str = Form(""), export_controlled: bool = Form(False),
-                    website: str = Form(""), db: Session = Depends(get_db)):
+                    website: str = Form(""), preview: bool = Form(False), db: Session = Depends(get_db)):
     if website:  # hidden field: only bots fill it in
         raise HTTPException(400, "Could not process the request.")
     _limit(portal.QUOTE_LIMIT, request)
@@ -67,7 +73,7 @@ async def new_quote(request: Request, files: list[UploadFile] = File(default=[])
         uploads.append((f.filename or "file", data))
     data = {"quantity": quantity, "material": material, "finish": finish, "thickness": thickness, "notes": notes,
             "export_controlled": export_controlled}
-    req = await run_in_threadpool(_guard, portal.create, db, uploads, data, _client(request))
+    req = await run_in_threadpool(_guard, portal.create, db, uploads, data, _client(request), preview and _owner(request))
     return {**portal.public_view(req), "token": req.token}
 
 
@@ -78,6 +84,22 @@ def _customer(db: Session, ref: str, token: str) -> PortalRequest:
 @public.get("/quote/{ref}")
 def view(ref: str, token: str = "", db: Session = Depends(get_db)):
     return portal.public_view(_customer(db, ref, token))
+
+
+@public.get("/quote/{ref}/pdf")
+def quote_pdf(ref: str, request: Request, token: str = "", db: Session = Depends(get_db)):
+    """The customer's copy of the quote, with the private link back to it."""
+    _limit(portal.REPRICE_LIMIT, request)
+    from . import portal_pdf
+
+    req = _customer(db, ref, token)
+    base = str(request.base_url).rstrip("/")
+    if request.headers.get("x-forwarded-proto") == "https" and base.startswith("http://"):
+        base = "https://" + base[len("http://"):]
+    link = f"{base}/quote/status/{req.ref}?t={req.token}"
+    pdf = portal_pdf.render(portal.public_view(req), portal.public_info(db), link, portal.DRAFT_DAYS)
+    return Response(pdf, media_type="application/pdf", headers={"Content-Disposition": f'attachment; filename="{req.ref}.pdf"',
+                                                                 "Cache-Control": "no-store"})
 
 
 class OptionsIn(BaseModel):
