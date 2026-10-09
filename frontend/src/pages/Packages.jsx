@@ -153,7 +153,7 @@ function Library() {
   const grouped = rows.reduce((acc, r) => ((acc[r.category] ||= []).push(r), acc), {})
 
   return (
-    <div className="grid" style={{ gridTemplateColumns: 'minmax(260px, 340px) 1fr' }}>
+    <div className="grid list-detail">
       <div>
         <div className="row" style={{ marginBottom: 10 }}>
           <input style={{ flex: 1 }} value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search library" />

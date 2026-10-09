@@ -1,4 +1,10 @@
 :root {
+  --safe-t: env(safe-area-inset-top, 0px);
+  --safe-r: env(safe-area-inset-right, 0px);
+  --safe-b: env(safe-area-inset-bottom, 0px);
+  --safe-l: env(safe-area-inset-left, 0px);
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
   --bg: #f4f2ee;
   --panel: #ffffff;
   --ink: #1b2430;
@@ -359,3 +365,96 @@ ul.checklist li.acc { background: #fdecea; }
 /* Manufacturability findings */
 .dfm-list li { padding: 8px 0; border-bottom: 1px solid var(--line); }
 .dfm-list li:last-child { border-bottom: 0; }
+
+/* ================================================================ iPhone and iPad
+   Wide screens (1100 px and up: desktop, iPad landscape) keep the sidebar. Narrower screens (iPhone, iPad
+   portrait, split view) get a top bar with a slide-out menu. Touch screens get 16 px inputs (iOS Safari zooms
+   in on anything smaller), 44 px tap targets and no hover-only controls. Safe-area insets keep content clear
+   of the notch, Dynamic Island and home indicator, including when the site is added to the home screen. */
+.topbar, .nav-backdrop, .nav-close { display: none; }
+.layout, .login-wrap { min-height: 100vh; min-height: 100dvh; }
+.nav { height: 100vh; height: 100dvh; padding-left: calc(14px + var(--safe-l)); }
+.main { padding-right: calc(32px + var(--safe-r)); }
+.outline, .crm-split > .panel:last-child { max-height: calc(100dvh - 32px); }
+@media (min-width: 901px) { .builder.iq > div:last-child { max-height: calc(100dvh - 32px); } }
+
+@media (max-width: 1099px) {
+  .layout { grid-template-columns: minmax(0, 1fr); }
+  .topbar { display: flex; align-items: center; gap: 10px; position: sticky; top: 0; z-index: 40; background: var(--nav); color: #fff;
+            padding: calc(8px + var(--safe-t)) calc(14px + var(--safe-r)) 8px calc(10px + var(--safe-l)); min-height: calc(52px + var(--safe-t)); }
+  .topbar-title { flex: 1; min-width: 0; font-weight: 600; font-size: 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .topbar-brand { padding: 0; font-size: 15px; }
+  .menu-btn { width: 44px; height: 44px; border: 0; background: none; padding: 11px 10px; display: flex; flex-direction: column; justify-content: space-between; }
+  .menu-btn span { display: block; height: 2px; border-radius: 1px; background: #fff; }
+  .nav { position: fixed; top: 0; left: 0; bottom: 0; z-index: 60; width: min(300px, 86vw); height: 100%;
+         transform: translateX(-105%); transition: transform .22s ease; box-shadow: 4px 0 24px rgba(0, 0, 0, .25);
+         padding: calc(16px + var(--safe-t)) 14px calc(16px + var(--safe-b)) calc(14px + var(--safe-l)); overscroll-behavior: contain; }
+  .nav.open { transform: none; }
+  .nav .foot { display: block; }
+  .nav a { padding: 10px 12px; font-size: 15px; }
+  .nav-head { margin-bottom: 4px; }
+  .nav-head .brand { padding-bottom: 0; }
+  .nav-close { display: block; width: 44px; height: 44px; border: 0; background: none; color: #c9d2dc; font-size: 28px; line-height: 1; padding: 0; }
+  .nav-backdrop { display: block; position: fixed; inset: 0; z-index: 50; background: rgba(10, 16, 24, .45); }
+  body.menu-open { overflow: hidden; }
+  .main { padding: 20px calc(20px + var(--safe-r)) calc(48px + var(--safe-b)) calc(20px + var(--safe-l)); }
+}
+
+.list-detail { grid-template-columns: minmax(260px, 340px) minmax(0, 1fr); }
+.builder.quote-split { grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr); }
+.section-fields { grid-template-columns: 1.3fr 0.6fr 2.4fr 0.7fr 1fr; gap: 10px; }
+@media (max-width: 900px) {
+  .list-detail, .builder.quote-split { grid-template-columns: minmax(0, 1fr); }
+  .section-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .section-fields > :nth-child(3) { grid-column: 1 / -1; } /* section title gets a full row */
+}
+
+/* iPad portrait and small tablets: two columns where three or four do not fit */
+@media (min-width: 601px) and (max-width: 900px) {
+  .g3, .g4 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .g2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  /* a field set to span 3 or 4 columns would add an extra narrow column here: make it a full row */
+  .grid > [style*="span 3"], .grid > [style*="span 4"], .grid > [style*="1 / -1"] { grid-column: 1 / -1 !important; }
+}
+
+/* iPhone */
+@media (max-width: 600px) {
+  .main { padding: 14px calc(12px + var(--safe-r)) calc(40px + var(--safe-b)) calc(12px + var(--safe-l)); }
+  .panel { padding: 14px 12px; }
+  .g4 { grid-template-columns: repeat(2, minmax(0, 1fr)); } /* stat tiles stay two across */
+  /* one column: fields that span columns must not create an extra implicit column */
+  .g2 > *, .g3 > *, .g4 > [style*="grid-column"] { grid-column: 1 / -1 !important; }
+  .grid { gap: 12px; }
+  h1 { font-size: 19px; }
+  .sub { margin-bottom: 14px; }
+  h2 { font-size: 16px; }
+  .price-big { font-size: 32px; }
+  .dropzone { padding: 32px 14px; }
+  .stat .n { font-size: 22px; }
+  .tabs { margin-left: -12px; margin-right: -12px; padding: 0 12px; scrollbar-width: none; }
+  .tabs::-webkit-scrollbar { display: none; }
+  .std-drawer, .std-drawer-wrap > * { padding-bottom: calc(32px + var(--safe-b)); }
+  .kanban { grid-template-columns: repeat(7, 78vw); scroll-snap-type: x mandatory; }
+  .kanban > * { scroll-snap-align: start; }
+  .cap-frame { min-height: 420px; }
+}
+
+/* Touch screens (iPhone, iPad, touch laptops) */
+@media (pointer: coarse) {
+  input, select, textarea, .ex-lines input, .ex-lines select, .cmmc-table textarea { font-size: 16px; }
+  button, .btn { min-height: 44px; }
+  button.link { min-height: 0; padding: 6px 2px; }
+  button.chip, button.seg, .small-btn { min-height: 36px; }
+  .tabs button { min-height: 44px; }
+  label.check { min-height: 36px; }
+  label.check input[type=checkbox], td input[type=checkbox] { width: 20px; height: 20px; }
+  input, select { min-height: 40px; }
+  .oitem .omove { display: flex; } /* no hover on touch: always show the move buttons */
+  .oitem { padding: 10px 6px; }
+  .dropzone::after { content: "or tap to choose a file"; display: block; margin-top: 6px; font-size: 13px; color: var(--ink-3); }
+  .dropzone.dz-sm::after { display: none; }
+  tr.click:hover td, .pp-item:hover, .oitem:hover { background: inherit; }
+  .panel, .tabs, .kanban, .desc { -webkit-overflow-scrolling: touch; }
+  * { -webkit-tap-highlight-color: rgba(181, 70, 44, .12); }
+  button, a, label, select, input { touch-action: manipulation; }
+}

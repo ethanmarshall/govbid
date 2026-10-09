@@ -716,9 +716,14 @@ FRONTEND_DIST = Path(__file__).resolve().parents[2] / "frontend" / "dist"
 if FRONTEND_DIST.exists():
     app.mount("/assets", StaticFiles(directory=FRONTEND_DIST / "assets"), name="assets")
 
+    import mimetypes
+
+    mimetypes.add_type("application/manifest+json", ".webmanifest")  # home-screen install on iPhone and iPad
+    _DIST_ROOT = FRONTEND_DIST.resolve()
+
     @app.get("/{path:path}", include_in_schema=False)
     def spa(path: str):
-        target = FRONTEND_DIST / path
-        if path and target.is_file():
+        target = (FRONTEND_DIST / path).resolve()
+        if path and target.is_file() and target.is_relative_to(_DIST_ROOT):  # never serve files outside the build
             return FileResponse(target)
         return FileResponse(FRONTEND_DIST / "index.html")

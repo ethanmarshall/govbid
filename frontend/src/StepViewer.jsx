@@ -11,7 +11,7 @@ export default function StepViewer({ mesh, height = 340 }) {
     if (!el || !mesh?.positions?.length) return
     const w = el.clientWidth || 500
     const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true })
-    renderer.setPixelRatio(window.devicePixelRatio || 1)
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2)) // 3x iPhones: 2x looks the same and renders far faster
     renderer.setSize(w, height)
     el.appendChild(renderer.domElement)
 
@@ -59,5 +59,5 @@ export default function StepViewer({ mesh, height = 340 }) {
     }
   }, [mesh, height])
 
-  return <div ref={box} className="viewer" style={{ height }} title="Drag to rotate, scroll to zoom, right-drag to pan" />
+  return <div ref={box} className="viewer" style={{ height }} title={window.matchMedia?.("(pointer: coarse)").matches ? "Drag to rotate, pinch to zoom, two-finger drag to pan" : "Drag to rotate, scroll to zoom, right-drag to pan"} />
 }

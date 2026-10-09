@@ -160,7 +160,7 @@ function QuoteBuilder({ meta, quoteId, oppId, onSaved }) {
 
   const shape = spec.stock?.shape || 'plate'
   return (
-    <div className="builder" style={{ gridTemplateColumns: 'minmax(0, 1.05fr) minmax(0, 1fr)' }}>
+    <div className="builder quote-split">
       <div>
         <div className="panel">
           <div className="row spread"><h2 style={{ margin: 0 }}>Part</h2>

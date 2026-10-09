@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect, useState } from 'react'
-import { NavLink, Route, Routes } from 'react-router-dom'
+import { NavLink, Route, Routes, useLocation } from 'react-router-dom'
 import { api } from './api'
 import Dashboard from './pages/Dashboard.jsx'
 import Opportunities from './pages/Opportunities.jsx'
@@ -69,45 +69,70 @@ function Login({ onDone }) {
 export const AuthContext = createContext(null)
 export const useAuth = () => useContext(AuthContext)
 
+const NAV = [
+  [null, [['/', 'Dashboard'], ['/search', 'Search everything']]],
+  ['Find work', [['/opportunities', 'Opportunities'], ['/pipeline', 'Pipeline'], ['/competitors', 'Competitor intel'], ['/market', 'Recompetes and buyers'], ['/import', 'Import (DIBBS, forecasts)']]],
+  ['Bid', [['/packages', 'Packages'], ['/part-quotes', 'Part quotes'], ['/pricing-workbook', 'Pricing workbook'], ['/source-approvals', 'Source approvals'], ['/standards', 'Standards library'], ['/resources', 'Resources']]],
+  ['Deliver', [['/jobs', 'Jobs'], ['/quality', 'Quality and suppliers'], ['/flowdown', 'Clause flowdown'], ['/finance', 'Invoices and finance']]],
+  ['Business', [['/contacts', 'Contacts and teaming'], ['/past-performance', 'Past performance'], ['/capability', 'Capability statement'], ['/compliance', 'CMMC compliance'], ['/profile', 'Company profile']]],
+]
+
+function pageTitle(path) {
+  let best = ['', 'GovBid Pro']
+  for (const [, links] of NAV) for (const [to, label] of links) {
+    if ((to === '/' ? path === '/' : path === to || path.startsWith(to + '/')) && to.length >= best[0].length) best = [to, label]
+  }
+  return best[1]
+}
+
 function Shell({ auth }) {
   const [meta, setMeta] = useState(null)
+  const [menu, setMenu] = useState(false)
+  const loc = useLocation()
   useEffect(() => {
     api.get('/api/meta').then(setMeta).catch(() => setMeta({ set_asides: {}, certifications: {}, pipeline_stages: [] }))
   }, [])
+  useEffect(() => { setMenu(false); window.scrollTo(0, 0) }, [loc.pathname])
+  useEffect(() => { // narrow screens: bring the selected tab into view in a scrolling tab strip
+    let tries = 0, t
+    const go = () => { // pages draw their tabs after their data loads, so look for a little while
+      const on = document.querySelector('.tabs .on')
+      const strip = on?.parentElement
+      if (strip) { if (strip.scrollWidth > strip.clientWidth) strip.scrollLeft = on.offsetLeft - strip.offsetLeft - (strip.clientWidth - on.clientWidth) / 2 }
+      else if (tries++ < 20) t = setTimeout(go, 100)
+    }
+    t = setTimeout(go, 50)
+    return () => clearTimeout(t)
+  }, [loc.pathname, loc.search])
+  useEffect(() => { // phones and tablets: lock the page behind the open menu, close it with Escape
+    document.body.classList.toggle('menu-open', menu)
+    const key = (e) => { if (e.key === 'Escape') setMenu(false) }
+    if (menu) window.addEventListener('keydown', key)
+    return () => window.removeEventListener('keydown', key)
+  }, [menu])
   const logout = async () => { await api.post('/api/auth/logout', {}); window.location.reload() }
 
   return (
     <AuthContext.Provider value={auth}>
     <MetaContext.Provider value={meta}>
+      <header className="topbar">
+        <button className="menu-btn" aria-label="Open menu" aria-expanded={menu} onClick={() => setMenu(true)}><span /><span /><span /></button>
+        <div className="topbar-title">{pageTitle(loc.pathname)}</div>
+        <div className="brand topbar-brand">GovBid<span>Pro</span></div>
+      </header>
+      {menu && <div className="nav-backdrop" onClick={() => setMenu(false)} />}
       <div className="layout">
-        <nav className="nav">
-          <div className="brand">GovBid<span>Pro</span></div>
-          <NavLink to="/" end>Dashboard</NavLink>
-          <NavLink to="/search">Search everything</NavLink>
-          <div className="navgroup">Find work</div>
-          <NavLink to="/opportunities">Opportunities</NavLink>
-          <NavLink to="/pipeline">Pipeline</NavLink>
-          <NavLink to="/competitors">Competitor intel</NavLink>
-          <NavLink to="/market">Recompetes and buyers</NavLink>
-          <NavLink to="/import">Import (DIBBS, forecasts)</NavLink>
-          <div className="navgroup">Bid</div>
-          <NavLink to="/packages">Packages</NavLink>
-          <NavLink to="/part-quotes">Part quotes</NavLink>
-          <NavLink to="/pricing-workbook">Pricing workbook</NavLink>
-          <NavLink to="/source-approvals">Source approvals</NavLink>
-          <NavLink to="/standards">Standards library</NavLink>
-          <NavLink to="/resources">Resources</NavLink>
-          <div className="navgroup">Deliver</div>
-          <NavLink to="/jobs">Jobs</NavLink>
-          <NavLink to="/quality">Quality and suppliers</NavLink>
-          <NavLink to="/flowdown">Clause flowdown</NavLink>
-          <NavLink to="/finance">Invoices and finance</NavLink>
-          <div className="navgroup">Business</div>
-          <NavLink to="/contacts">Contacts and teaming</NavLink>
-          <NavLink to="/past-performance">Past performance</NavLink>
-          <NavLink to="/capability">Capability statement</NavLink>
-          <NavLink to="/compliance">CMMC compliance</NavLink>
-          <NavLink to="/profile">Company profile</NavLink>
+        <nav className={`nav ${menu ? 'open' : ''}`} aria-label="Main">
+          <div className="row spread nav-head">
+            <div className="brand">GovBid<span>Pro</span></div>
+            <button className="nav-close" aria-label="Close menu" onClick={() => setMenu(false)}>×</button>
+          </div>
+          {NAV.map(([group, links]) => (
+            <div key={group || 'top'}>
+              {group && <div className="navgroup">{group}</div>}
+              {links.map(([to, label]) => <NavLink key={to} to={to} end={to === '/'}>{label}</NavLink>)}
+            </div>
+          ))}
           <div className="foot">
             SAM.gov key: {meta?.sam_key_configured ? 'set' : 'missing'}
             <br />

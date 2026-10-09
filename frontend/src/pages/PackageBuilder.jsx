@@ -238,7 +238,7 @@ function SectionEditor({ pkg, section, meta, onSaved, reload, assigned }) {
 
   return (
     <div className="panel">
-      <div className="grid" style={{ gridTemplateColumns: '1.3fr 0.6fr 2.4fr 0.7fr 1fr', gap: 10 }}>
+      <div className="grid section-fields">
         <label className="f">Volume<input value={s.volume} onChange={(e) => change({ volume: e.target.value })} /></label>
         <label className="f">Number<input value={s.number} onChange={(e) => change({ number: e.target.value })} /></label>
         <label className="f">Section title<input value={s.title} onChange={(e) => change({ title: e.target.value })} /></label>
