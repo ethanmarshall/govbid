@@ -83,7 +83,9 @@ def _customer(db: Session, ref: str, token: str) -> PortalRequest:
 
 @public.get("/quote/{ref}")
 def view(ref: str, token: str = "", db: Session = Depends(get_db)):
-    return portal.public_view(_customer(db, ref, token))
+    req = _customer(db, ref, token)
+    portal.ensure_job(req)  # big models: keep reading (also after a server restart)
+    return portal.public_view(req)
 
 
 @public.get("/quote/{ref}/pdf")

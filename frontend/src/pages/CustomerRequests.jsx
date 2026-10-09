@@ -6,7 +6,7 @@ import { ItemReads } from '../public/PublicQuote'
 const usd = (n) => (n == null ? '' : `$${Number(n).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`)
 const STATUSES = ['submitted', 'reviewing', 'confirmed', 'declined', 'closed', 'draft']
 const STATUS_LABEL = { draft: 'Not submitted', submitted: 'New', reviewing: 'In review', confirmed: 'Confirmed', declined: 'Declined', closed: 'Closed' }
-const KIND_LABEL = { instant: 'Instant', estimate: 'Estimate', manual: 'Manual', needs_input: 'Needs input' }
+const KIND_LABEL = { instant: 'Instant', estimate: 'Estimate', manual: 'Manual', needs_input: 'Needs input', processing: 'Reading model' }
 
 function shown(r) {
   const p = r.public_result || {}

@@ -247,3 +247,24 @@ def test_drawing_dxf_and_board_reads(client):
     assert f["view"]["kind"] == "flat" and any("6.000 x 4.000" in x["value"] for x in f["facts"])
     b = _quote(client, [FIX / "pcb" / "kicad_fab.zip"]).json()["result"]["items"][0]
     assert any(x["label"] == "Board" and "4 layers" in x["value"] for x in b["facts"])
+
+
+def test_big_model_is_read_in_the_background(client, monkeypatch):
+    import time
+
+    from app import isolate
+
+    monkeypatch.setattr(isolate, "BIG_FILE", 10 * 1024)  # treat the 47 KB test model as "big"
+    q = _quote(client, [FIX / "cad" / "machined_block.step"], quantity=2).json()
+    assert q["result"]["kind"] == "processing" and "reading it now" in q["result"]["message"]
+    for _ in range(120):
+        time.sleep(1)
+        v = client.get(f"/api/public/quote/{q['ref']}?token={q['token']}").json()
+        if v["result"]["kind"] != "processing":
+            break
+    assert v["result"]["kind"] == "instant" and v["result"]["unit_price"] > 0 and v["result"]["quantity"] == 2
+    assert v["result"]["items"][0]["view"]["kind"] == "model"
+
+
+def test_size_limits_allow_large_models():
+    assert portal.MAX_FILE >= 150 * 1024 * 1024 and portal.MAX_TOTAL > portal.MAX_FILE

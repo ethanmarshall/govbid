@@ -29,7 +29,7 @@ from .config import UPLOAD_DIR
 from .db import get_db
 
 router = APIRouter(prefix="/api/drawings")
-MAX_BYTES = 40 * 1024 * 1024
+MAX_BYTES = 150 * 1024 * 1024
 DRAWING_DIR = UPLOAD_DIR / "drawings"
 
 
@@ -55,7 +55,7 @@ async def read(file: UploadFile = File(...), use_ai: bool = Form(False), db: Ses
     """Read a PDF drawing. Returns the parsed fields, drawing_id, filename and quote_options."""
     data = await file.read()
     if len(data) > MAX_BYTES:
-        raise HTTPException(413, "The drawing is larger than 40 MB.")
+        raise HTTPException(413, "The drawing is larger than 150 MB.")
     if not data.lstrip()[:5].startswith(b"%PDF"):
         raise HTTPException(400, "That is not a PDF. Upload the drawing as a PDF file.")
     DRAWING_DIR.mkdir(parents=True, exist_ok=True)

@@ -86,6 +86,47 @@ def _same_line(p1, d1, p2, d2, tol):
     return math.sqrt(_dot(perp, perp)) < tol
 
 
+class _AxisIndex:
+    """Cylinder groups bucketed by convexity, axis direction and where the axis line passes (1 mm cells),
+    with radius checked by the caller. near() returns the groups that could share a line with (p, d)."""
+
+    CELL = 1.0  # mm
+
+    def __init__(self):
+        self.cells: dict = {}
+
+    @staticmethod
+    def _line(p, d):
+        # direction with a fixed sign, and the point on the axis line closest to the origin
+        for c in d:
+            if abs(c) > 1e-9:
+                if c < 0:
+                    d = tuple(-x for x in d)
+                break
+        t = sum(a * b for a, b in zip(p, d))
+        foot = tuple(a - t * b for a, b in zip(p, d))
+        return tuple(round(x, 3) for x in d), foot
+
+    def _key(self, concave, dkey, foot):
+        return (concave, dkey) + tuple(math.floor(f / self.CELL) for f in foot)
+
+    def add(self, g):
+        dkey, foot = self._line(g["p"], g["d"])
+        self.cells.setdefault(self._key(g["concave"], dkey, foot), []).append(g)
+
+    def near(self, concave, r, rtol, p, d):
+        dkey, foot = self._line(p, d)
+        base = self._key(concave, dkey, foot)
+        out = []
+        for dx in (-1, 0, 1):
+            for dy in (-1, 0, 1):
+                for dz in (-1, 0, 1):
+                    for g in self.cells.get(base[:2] + (base[2] + dx, base[3] + dy, base[4] + dz), ()):
+                        if r is None or abs(g["r"] - r) < rtol + 1e-9:
+                            out.append(g)
+        return out
+
+
 def analyze(shape) -> dict:
     """Measure a solid. All lengths in inches, areas in in², volumes in in³."""
     from OCP.Bnd import Bnd_OBB
@@ -158,16 +199,21 @@ def analyze(shape) -> dict:
             counts["freeform"] += 1
 
     tol_mm = 0.01
-    # Merge cylinder faces that belong to the same feature (same axis line and radius)
+    # Merge cylinder faces that belong to the same feature (same axis line and radius).
+    # Indexed by radius, direction and where the axis line passes, so big assemblies with thousands
+    # of holes stay fast (comparing every pair took minutes on an 80 MB model).
     groups: list[dict] = []
+    index = _AxisIndex()
     for r, p, d, concave, span, fa in cyls:
-        for g in groups:
-            if g["concave"] == concave and abs(g["r"] - r) < 1e-3 and _same_line(g["p"], g["d"], p, d, tol_mm):
+        for g in index.near(concave, r, 1e-3, p, d):
+            if abs(g["r"] - r) < 1e-3 and _same_line(g["p"], g["d"], p, d, tol_mm):
                 g["span"] += span
                 g["area"] += fa
                 break
         else:
-            groups.append({"r": r, "p": p, "d": d, "concave": concave, "span": span, "area": fa})
+            g = {"r": r, "p": p, "d": d, "concave": concave, "span": span, "area": fa}
+            groups.append(g)
+            index.add(g)
 
     # Sheet metal thickness: distance from the largest flat face to the nearest parallel flat face.
     # Falls back to 2V/A, which reads low on small parts because edge faces add area.
@@ -185,15 +231,18 @@ def analyze(shape) -> dict:
     bends = []
     for g in groups:
         if g["concave"] and g["span"] < 2 * math.pi - 0.05:
-            for h in groups:
-                if (not h["concave"]) and abs(h["r"] - g["r"] - t_est) < max(0.15 * t_est, 0.004) and _same_line(g["p"], g["d"], h["p"], h["d"], tol_mm):
+            rtol = max(0.15 * t_est, 0.004)
+            for h in index.near(False, g["r"] + t_est, rtol, g["p"], g["d"]):
+                if abs(h["r"] - g["r"] - t_est) < rtol and _same_line(g["p"], g["d"], h["p"], h["d"], tol_mm):
                     bends.append({"inner_radius": round(g["r"], 4), "angle_deg": round(math.degrees(g["span"]), 1)})
                     break
     bend_radii = {b["inner_radius"] for b in bends}
     if bends:  # outer radius minus inner radius is the exact thickness
         for g in groups:
-            for h in groups:
-                if g["concave"] and not h["concave"] and round(g["r"], 4) in bend_radii and _same_line(g["p"], g["d"], h["p"], h["d"], tol_mm):
+            if not (g["concave"] and round(g["r"], 4) in bend_radii):
+                continue
+            for h in index.near(False, None, None, g["p"], g["d"]):
+                if _same_line(g["p"], g["d"], h["p"], h["d"], tol_mm):
                     t_est = h["r"] - g["r"]
                     break
 

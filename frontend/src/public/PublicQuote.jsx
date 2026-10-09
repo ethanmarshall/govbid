@@ -51,6 +51,7 @@ function priceText(res) {
   if (res.kind === 'instant') return `${money(res.unit_price)} each`
   if (res.kind === 'estimate') return `${range(res.unit_low, res.unit_high)} each (estimate)`
   if (res.kind === 'needs_input') return 'Needs one more detail'
+  if (res.kind === 'processing') return 'Reading your model'
   return 'Priced by an engineer'
 }
 function remember(req, token) {
@@ -276,14 +277,17 @@ function QuoteForm({ info }) {
   const addFiles = (list) => {
     const next = [...files]
     const bad = []
+    const big = []
     for (const f of list) {
       const ext = (f.name.match(/\.[^.]+$/) || [''])[0].toLowerCase()
       if (okExt.length && !okExt.includes(ext)) { bad.push(f.name); continue }
+      if (f.size > info.max_file_mb * 1048576) { big.push(f.name); continue }
       if (!next.some((x) => x.name === f.name && x.size === f.size)) next.push(f)
     }
     setFiles(next.slice(0, info.max_files))
     setStale(!!req)
-    setErr(bad.length ? `We can't use ${bad.join(', ')}. Send STEP (.step or .stp), PDF, DXF, or circuit board files (a .zip of Gerbers is best).`
+    setErr(big.length ? `${big.join(', ')} is larger than ${info.max_file_mb} MB. Email it to us${info.contact_email ? ` at ${info.contact_email}` : ''} or send a share link in the notes.`
+      : bad.length ? `We can't use ${bad.join(', ')}. Send STEP (.step or .stp), PDF, DXF, or circuit board files (a .zip of Gerbers is best).`
       : next.length > info.max_files ? `Up to ${info.max_files} files. Zip PCB files together.` : '')
   }
   const removeFile = (i) => { setFiles(files.filter((_, j) => j !== i)); setStale(!!req) }
@@ -332,6 +336,21 @@ function QuoteForm({ info }) {
     }, 450)
     return () => clearTimeout(timer.current)
   }, [qty, material, finish, thickness, busy])
+
+  // a big model is read in the background: check back until the price is ready
+  useEffect(() => {
+    if (req?.result?.kind !== 'processing' || stale) return
+    const mine = current.current
+    const t = setInterval(async () => {
+      if (!mine || current.current?.ref !== mine.ref) return
+      try {
+        const r = await call('GET', `/api/public/quote/${mine.ref}?token=${encodeURIComponent(mine.token)}`)
+        if (current.current?.ref !== mine.ref) return
+        if (r.result?.kind !== 'processing') { remember(r, mine.token); setReq({ ...r, token: mine.token }) }
+      } catch { /* try again next time */ }
+    }, 5000)
+    return () => clearInterval(t)
+  }, [req?.ref, req?.result?.kind, stale])
 
   const res = req?.result
   return (
@@ -403,7 +422,7 @@ function QuoteForm({ info }) {
       <aside className="pq-side" ref={block} aria-live="polite">
         <TitleBlock req={req} info={info} qty={qty} material={material} busy={busy} progress={progress} />
         {req && !stale && !req.submitted && <SaveBar req={req} token={req.token} info={info} />}
-        {req && !stale && res?.kind !== 'needs_input' && <SubmitForm req={req} setReq={setReq} info={info} />}
+        {req && !stale && res?.kind !== 'needs_input' && res?.kind !== 'processing' && <SubmitForm req={req} setReq={setReq} info={info} />}
       </aside>
     </div>
     {req && !stale && <ItemReads req={req} token={req.token} />}
@@ -447,6 +466,12 @@ function TitleBlock({ req, info, qty, material, busy, progress }) {
           </>
         )}
         {(kind === 'manual' || kind === 'needs_input') && <span className="pq-kind">{kind === 'manual' ? 'Priced by an engineer' : 'One more detail'}</span>}
+        {kind === 'processing' && (
+          <div className="pq-progress" role="status">
+            <span className="pq-kind">Reading your model</span>
+            <div className="pq-bar" style={{ marginTop: 12 }}><span className="pq-bar-wait" style={{ width: '70%' }} /></div>
+          </div>
+        )}
         {res?.message && <p className="pq-msg">{res.message}</p>}
       </div>
       {res?.lead_days ? <div className="pq-tb-row"><div className="pq-cell wide"><span>Ships in about</span><b>{res.lead_days} days after the order is confirmed</b></div></div> : null}
@@ -599,6 +624,14 @@ function Status({ refId, token, info }) {
     }, 450)
     return () => clearTimeout(timer.current)
   }, [qty])
+  useEffect(() => {
+    if (r?.result?.kind !== 'processing') return
+    const t = setInterval(() => {
+      call('GET', `/api/public/quote/${refId}?token=${encodeURIComponent(token)}`)
+        .then((v) => { if (v.result?.kind !== 'processing') { setR(v); remember(v, token) } }).catch(() => {})
+    }, 5000)
+    return () => clearInterval(t)
+  }, [r?.result?.kind, refId, token])
   if (err && !r) return <div className="pq-closed"><h1>Quote not found</h1><Forget refId={refId} token={token} /><p>{err} <button className="pq-link" onClick={() => navigate('/quote')}>Start a new quote</button></p></div>
   if (!r) return <p className="pq-muted pq-pad">Loading…</p>
   const draft = !r.submitted
@@ -625,7 +658,7 @@ function Status({ refId, token, info }) {
         <TitleBlock req={r} info={info} qty={qty || r.quantity} material={r.material} busy={false} />
         {draft && <SaveBar req={r} token={token} info={info} />}
         {draft || sent
-          ? res.kind !== 'needs_input' && <SubmitForm req={{ ...r, token }} setReq={(v) => { setR(v); setSent(true) }} info={info} />
+          ? res.kind !== 'needs_input' && res.kind !== 'processing' && <SubmitForm req={{ ...r, token }} setReq={(v) => { setR(v); setSent(true) }} info={info} />
           : <p><a href={pdfLink(r.ref, token)} target="_blank" rel="noopener">Save a PDF copy</a></p>}
       </aside>
     </div>

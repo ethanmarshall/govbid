@@ -9,7 +9,7 @@ import json
 import math
 from pathlib import Path
 
-from . import cad, pricing
+from . import cad, isolate, pricing
 from .config import UPLOAD_DIR
 
 CAD_DIR = UPLOAD_DIR / "cad"
@@ -28,6 +28,12 @@ SHEET_GAUGES_IN = [0.020, 0.025, 0.032, 0.036, 0.040, 0.048, 0.050, 0.060, 0.063
 STOCK_ALLOWANCE_IN = 0.125  # added to each bounding-box dimension for machining stock
 
 
+def _analyze_to_cache(step_path: str, meta_path: str) -> bool:
+    """Run in a helper process for big files (see isolate.py)."""
+    Path(meta_path).write_text(json.dumps(cad.analyze_file(Path(step_path))))
+    return True
+
+
 def store_upload(data: bytes, filename: str) -> dict:
     """Save the STEP file, analyze it once, cache the result. Returns file_id, filename, geometry, mesh."""
     if not data:
@@ -40,6 +46,12 @@ def store_upload(data: bytes, filename: str) -> dict:
     meta_path = CAD_DIR / f"{fid}.json"
     if not step_path.exists():
         step_path.write_bytes(data)
+    if not meta_path.exists() and len(data) > isolate.BIG_FILE:
+        # a big model is read in a helper process, so running out of memory cannot take the server down
+        try:
+            isolate.run(f"{__name__}:_analyze_to_cache", str(step_path), str(meta_path))
+        except isolate.IsolatedError as exc:
+            raise cad.CadError(f"This model is too large or complex to read automatically ({exc}). An engineer will look at it.") from None
     if meta_path.exists():
         cached = json.loads(meta_path.read_text())
     else:

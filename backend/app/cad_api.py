@@ -13,7 +13,7 @@ from . import cad, cad_quote, inserts, pricing, quotes
 from .db import get_db
 
 router = APIRouter(prefix="/api/cad")
-MAX_BYTES = 60 * 1024 * 1024
+MAX_BYTES = 150 * 1024 * 1024
 
 
 @router.get("/options")
@@ -36,7 +36,7 @@ def options(db: Session = Depends(get_db)):
 async def upload(file: UploadFile = File(...)):
     data = await file.read()
     if len(data) > MAX_BYTES:
-        raise HTTPException(413, "STEP file is larger than 60 MB.")
+        raise HTTPException(413, "STEP file is larger than 150 MB.")
     try:
         # OpenCascade work is CPU-bound; keep the server responsive
         return await run_in_threadpool(cad_quote.store_upload, data, file.filename or "part.step")

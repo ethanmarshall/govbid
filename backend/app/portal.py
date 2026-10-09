@@ -18,10 +18,12 @@ distribution statement is deleted on arrival and the request goes to manual revi
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import re
 import secrets
 import shutil
+import threading
 import time
 from collections import defaultdict, deque
 from datetime import date, datetime, timedelta
@@ -30,14 +32,14 @@ from pathlib import Path
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from . import portal_read, pricing, quotes
+from . import isolate, portal_read, pricing, quotes
 from .config import UPLOAD_DIR
 from .models_portal import PORTAL_STATUSES, PortalRequest, PortalSettings
 
 PORTAL_DIR = UPLOAD_DIR / "portal"
 MAX_FILES = 8
-MAX_FILE = 40 * 1024 * 1024
-MAX_TOTAL = 100 * 1024 * 1024
+MAX_FILE = 150 * 1024 * 1024
+MAX_TOTAL = 250 * 1024 * 1024
 MAX_NOTES = 3000
 DRAFT_DAYS = 30  # unsubmitted requests (and their files) are removed after this
 
@@ -342,6 +344,14 @@ def _view(req: PortalRequest, key_parts: tuple, make_shape, kind: str) -> dict |
         return None
 
 
+def _iso_split(file_id: str) -> bool:
+    """Helper process: split a big assembly into its bodies (cached by assembly.split)."""
+    from .assembly import split
+
+    split(file_id)
+    return True
+
+
 def view_sheet(req: PortalRequest, key: str) -> dict | None:
     from . import portal_views as pv
 
@@ -426,6 +436,18 @@ def price_request(db: Session, req: PortalRequest) -> None:
     # ---- STEP models
     for f in steps:
         name = Path(f["name"]).stem
+        if f.get("size", 0) > isolate.BIG_FILE:  # big model: read in the background, the page updates when it is done
+            st = _prep_state(req, f)
+            if st.get("status") == "failed":
+                items.append(_item(name, "manual", "3D model", None, n, kind="step",
+                                   public_reason="Your model is too large or detailed to read automatically, so an engineer will price it.",
+                                   internal_reasons=[st.get("error", "")]))
+                continue
+            if st.get("status") != "done":
+                items.append(_item(name, "processing", "3D model", None, n, kind="step",
+                                   public_reason="Your model is large, so we are reading it now. This page updates on its own when it is ready, "
+                                                 "usually within a few minutes. You can also save the link and come back."))
+                continue
         try:
             stored = cad_quote.store_upload(file_path(req, f).read_bytes(), f["name"])
         except (cad.CadError, Exception) as exc:  # noqa: BLE001
@@ -436,7 +458,17 @@ def price_request(db: Session, req: PortalRequest) -> None:
         mat, is_print = _material(req, cfg, drawing_mat)
         msrc = _mat_source(req, cfg, mat, drawing_mat)
         step_path = file_path(req, f)
-        view = _view(req, (stored["file_id"],), lambda p=step_path: cad.load_step(p), "model")
+        big = f.get("size", 0) > isolate.BIG_FILE
+        view = None if big and pv.load(req_dir(req) / "views", pv.cache_key(stored["file_id"], "model", 2)) is None \
+            else _view(req, (stored["file_id"],), lambda p=step_path: cad.load_step(p), "model")
+        if solids > 1 and _prep_state(req, f).get("split_error"):
+            bb = (stored.get("geometry") or {}).get("bounding_box") or {}
+            facts = [portal_read.row("Overall size", portal_read._size(bb.get("length"), bb.get("width"), bb.get("height"))),
+                     portal_read.row("Parts in the model", solids), portal_read.material_row(mat, msrc)]
+            items.append(_item(name, "manual", f"Assembly ({solids} parts)", None, n, kind="assembly", view=view, facts=facts,
+                               public_reason=f"Your model has {solids} separate parts and is very large, so an engineer will price it.",
+                               internal_reasons=[_prep_state(req, f)["split_error"]]))
+            continue
         if solids > 1:
             try:
                 from .assembly import quote_assembly, split
@@ -619,7 +651,9 @@ def _round_est(v: float) -> float:
 def _finish(req: PortalRequest, s: PortalSettings, items: list[dict], manual_reason: str = "") -> None:
     n = req.quantity
     routes = {i["route"] for i in items}
-    if manual_reason or not items or "manual" in routes:
+    if "processing" in routes and not manual_reason:
+        kind = "processing"
+    elif manual_reason or not items or "manual" in routes:
         kind = "manual"
     elif "needs_input" in routes:
         kind = "needs_input"
@@ -659,6 +693,9 @@ def _finish(req: PortalRequest, s: PortalSettings, items: list[dict], manual_rea
                            "before we complete the order.")
     elif kind == "needs_input":
         out.update(message="Almost there: answer the question below to see your price.")
+    elif kind == "processing":
+        out.update(message="Your model is large, so we are reading it now. This page updates on its own when the price is ready, "
+                           "usually within a few minutes. You can save the link and come back.")
     else:
         out.update(message=manual_reason or "We need to look at this one by hand. Submit it with your contact details and an engineer will "
                                             f"reach out within {s.review_days} business day{'s' if s.review_days != 1 else ''} with a price.")
@@ -666,6 +703,121 @@ def _finish(req: PortalRequest, s: PortalSettings, items: list[dict], manual_rea
     req.public_result = out
     req.internal = {"priced_at": datetime.utcnow().isoformat(timespec="seconds"), "unit_total": round(unit, 2),
                     "items": [{k: v for k, v in i.items()} for i in items]}
+
+
+# ================================================================ big models in the background
+_jobs: dict[str, threading.Thread] = {}
+_jobs_lock = threading.Lock()
+_heavy = threading.Semaphore(1)  # one big model at a time: each can use most of the server's memory
+
+
+def _prep_path(req: PortalRequest, f: dict) -> Path:
+    return req_dir(req) / "prep" / f"{f['stored']}.json"
+
+
+def _prep_state(req: PortalRequest, f: dict) -> dict:
+    try:
+        return json.loads(_prep_path(req, f).read_text())
+    except (OSError, ValueError):
+        return {}
+
+
+def _iso_analyze(step_path: str, filename: str) -> dict:
+    """Helper process 1: store and measure a big model (cached by its content)."""
+    from . import cad, cad_quote
+
+    data = Path(step_path).read_bytes()
+    if "ISO-10303" not in data[:2000].decode("latin-1", "replace").upper():
+        raise cad.CadError("That is not a STEP file.")
+    fid = cad.file_id_for(data)
+    sp, meta = cad_quote.CAD_DIR / f"{fid}.step", cad_quote.CAD_DIR / f"{fid}.json"
+    if not sp.exists():
+        sp.write_bytes(data)
+    del data
+    if not meta.exists():
+        cad_quote._analyze_to_cache(str(sp), str(meta))
+    solids = (json.loads(meta.read_text()).get("geometry") or {}).get("solids", 1)
+    return {"file_id": fid, "solids": solids}
+
+
+def _iso_draw(file_id: str, views_dir: str) -> bool:
+    """Helper process 3: the three-view drawing of a big model."""
+    from . import cad, cad_quote
+    from . import portal_views as pv
+
+    key = pv.cache_key(file_id, "model", 2)
+    if pv.load(Path(views_dir), key) is None:
+        pv.save(Path(views_dir), key, pv.build_sheet(cad.load_step(cad_quote.CAD_DIR / f"{file_id}.step"), kind="model"))
+    return True
+
+
+def _prepare_big(req: PortalRequest, f: dict) -> dict:
+    """Read one big model in three separate helper processes (each starts with empty memory):
+    measure it, split an assembly into its parts, draw it. Only the first must succeed."""
+    limit = int(os.getenv("CAD_BIG_TIME_S", "1500"))
+    out = isolate.run(f"{__name__}:_iso_analyze", str(file_path(req, f)), f["name"], timeout=limit)
+    if out.get("solids", 1) > 1:
+        try:
+            isolate.run(f"{__name__}:_iso_split", out["file_id"], timeout=limit)
+        except isolate.IsolatedError as exc:
+            out["split_error"] = str(exc)
+    try:
+        isolate.run(f"{__name__}:_iso_draw", out["file_id"], str(req_dir(req) / "views"), timeout=limit)
+    except isolate.IsolatedError as exc:
+        out["draw_error"] = str(exc)
+    return out
+
+
+def _run_job(ref: str) -> None:
+    from .db import SessionLocal
+
+    try:
+        with _heavy:
+            for attempt in range(30):  # the request is committed just after the job starts
+                db = SessionLocal()
+                req = db.scalar(select(PortalRequest).where(PortalRequest.ref == ref))
+                if req is not None:
+                    break
+                db.close()
+                time.sleep(1)
+            else:
+                return
+            try:
+                for f in req.files or []:
+                    if f["kind"] != "step" or f.get("removed") or f.get("size", 0) <= isolate.BIG_FILE or _prep_state(req, f).get("status"):
+                        continue
+                    pp = _prep_path(req, f)
+                    pp.parent.mkdir(parents=True, exist_ok=True)
+                    try:
+                        out = _prepare_big(req, f)
+                        pp.write_text(json.dumps({"status": "done", **out}))
+                    except isolate.IsolatedError as exc:
+                        pp.write_text(json.dumps({"status": "failed", "error": str(exc)}))
+                db.refresh(req)
+                price_request(db, req)
+                db.commit()
+            finally:
+                db.close()
+    except Exception as exc:  # noqa: BLE001
+        import logging
+
+        logging.getLogger(__name__).warning("Background reading for %s failed: %s", ref, exc)
+    finally:
+        with _jobs_lock:
+            _jobs.pop(ref, None)
+
+
+def ensure_job(req: PortalRequest) -> None:
+    """Start (or restart, after a server restart) the background reading of a request's big models."""
+    if (req.public_result or {}).get("kind") != "processing":
+        return
+    with _jobs_lock:
+        t = _jobs.get(req.ref)
+        if t and t.is_alive():
+            return
+        t = threading.Thread(target=_run_job, args=(req.ref,), daemon=True, name=f"cad-{req.ref}")
+        _jobs[req.ref] = t
+        t.start()
 
 
 # ================================================================ requests
@@ -740,6 +892,7 @@ def create(db: Session, uploads: list[tuple[str, bytes]], data: dict, ip: str, p
         shutil.rmtree(PORTAL_DIR / req.ref, ignore_errors=True)
         raise
     db.commit()
+    ensure_job(req)
     return req
 
 
@@ -758,6 +911,7 @@ def reprice(db: Session, req: PortalRequest, data: dict) -> PortalRequest:
     _clean_opts(req, data, get_settings(db).max_quantity)
     price_request(db, req)
     db.commit()
+    ensure_job(req)
     return req
 
 

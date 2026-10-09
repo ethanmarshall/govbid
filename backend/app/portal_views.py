@@ -136,7 +136,7 @@ def _polyline(edge, defl: float) -> list:
     return [(c.Value(t).X() / MM, c.Value(t).Y() / MM) for t in (a + (b - a) * i / 8 for i in range(9))]
 
 
-def project(shape, direction, xdir, diag_mm: float, poly: bool = False) -> dict:
+def project(shape, direction, xdir, diag_mm: float, poly: bool = False, hidden: bool = True, mesh_ratio: float = 0.002) -> dict:
     """Visible and hidden edges of the shape seen from `direction`, as 2D polylines in inches."""
     from OCP.BRepLib import BRepLib
     from OCP.gp import gp_Ax2, gp_Dir, gp_Pnt
@@ -147,7 +147,7 @@ def project(shape, direction, xdir, diag_mm: float, poly: bool = False) -> dict:
         from OCP.BRepMesh import BRepMesh_IncrementalMesh
         from OCP.HLRBRep import HLRBRep_PolyAlgo, HLRBRep_PolyHLRToShape
 
-        BRepMesh_IncrementalMesh(shape, diag_mm * 0.002, False, 0.3, True)
+        BRepMesh_IncrementalMesh(shape, diag_mm * mesh_ratio, False, 0.5 if mesh_ratio > 0.002 else 0.3, True)
         algo = HLRBRep_PolyAlgo(shape)
         algo.Projector(HLRAlgo_Projector(ax))
         algo.Update()
@@ -164,7 +164,7 @@ def project(shape, direction, xdir, diag_mm: float, poly: bool = False) -> dict:
         hs = HLRBRep_HLRToShape(algo)
     defl = diag_mm * 0.0015
     out = {"visible": [], "hidden": []}
-    for key, comps in (("visible", (hs.VCompound(), hs.OutLineVCompound())), ("hidden", (hs.HCompound(),))):
+    for key, comps in (("visible", (hs.VCompound(), hs.OutLineVCompound())), ("hidden", (hs.HCompound(),) if hidden else ())):
         for comp in comps:
             if comp is None or comp.IsNull():
                 continue
@@ -198,15 +198,43 @@ def build_sheet(shape, *, kind: str = "model", label: str = "") -> dict:
     """Project the shape into the four views and lay them out. kind: model | flat | envelope."""
     L, W, H = _bbox_in(shape)
     diag = math.sqrt(L * L + W * W + H * H) * MM or 1.0
-    poly = _face_count(shape) > 900  # very detailed models: the faster mesh-based hidden lines
+    faces = _face_count(shape)
+    poly = faces > 900  # detailed models: the faster mesh-based hidden lines
+    huge = faces > 5000  # very big models (large assemblies): coarse mesh, no hidden lines, tiny edges left out
     views = {}
     for name, (d, x) in VIEWS.items():
-        v = project(shape, d, x, diag, poly=poly)
-        if name == "iso":
-            v["hidden"] = []  # an isometric reads best without hidden lines
+        v = project(shape, d, x, diag, poly=poly, hidden=not huge and name != "iso", mesh_ratio=0.01 if huge else 0.002)
         b = _bounds(v["visible"] + v["hidden"])
-        views[name] = {"visible": _round(v["visible"]), "hidden": _round(v["hidden"]), "bounds": [round(c, 4) for c in b]}
+        span = max(b[2] - b[0], b[3] - b[1], 1e-6)
+        vis, hid = _thin(v["visible"], span, huge), _thin(v["hidden"], span, huge)
+        views[name] = {"visible": _round(vis), "hidden": _round(hid), "bounds": [round(c, 4) for c in b]}
     return {"kind": kind, "label": label, "size": [round(L, 3), round(W, 3), round(H, 3)], "views": views}
+
+
+MAX_POINTS = 60_000  # per view: plenty for a drawing a few hundred pixels wide
+
+
+def _thin(lines: list, span: float, huge: bool) -> list:
+    """Leave out edges too small to see at drawing size, and keep each view to a sensible size."""
+    min_size = span * (0.004 if huge else 0.0008)
+
+    def size(pl):
+        xs, ys = [p[0] for p in pl], [p[1] for p in pl]
+        return max(max(xs) - min(xs), max(ys) - min(ys))
+
+    sized = [(size(pl), pl) for pl in lines]
+    keep = [(sz, pl) for sz, pl in sized if sz >= min_size]
+    total = sum(len(pl) for _, pl in keep)
+    if total > MAX_POINTS:  # biggest edges first until the budget is spent
+        keep.sort(key=lambda x: -x[0])
+        out, n = [], 0
+        for sz, pl in keep:
+            if n + len(pl) > MAX_POINTS:
+                break
+            out.append(pl)
+            n += len(pl)
+        return out
+    return [pl for _, pl in keep]
 
 
 def _round(lines: list) -> list:
