@@ -429,7 +429,9 @@ def quote_box_build(spec: dict[str, Any]) -> dict[str, Any]:
     ess_thermal, ess_vibration, lab_tests [mil_std_461|mil_std_810|mil_std_167|mil_s_901], work_instructions, test_procedure,
     drawing_package, test_fixture_nre, other_nre, nre_in_price}; options {first_article, packaging_level, crate, freight_per_lot}.
     Returns price_breaks, a breakdown and section totals per quantity, counts, warnings and assumptions. Every rate is a
-    placeholder from the shop rates (config box_build): say so when reporting. Save it with save_part_quote and kind "box_build"."""
+    placeholder from the shop rates (config box_build): say so when reporting. If "incomplete" is not empty (ready is
+    false) some items need a manual price or a check (lines with needs_quote and no unit_price, or a check note): do not
+    report the price as a quote; list those items for the user to price by hand. Save it with save_part_quote and kind "box_build"."""
     from . import box_build
     with session() as db:
         overrides = quotes.get_overrides(db)
@@ -450,7 +452,10 @@ def quote_from_drawing(file_path: str, quantities: list[int] | None = None, mate
     confidence and assumptions with the price: the envelope is often a low-confidence guess. When the drawing is
     an assembly (enclosure, PCB, switches, several material notes) the result has "assembly" with a
     box_build_spec read from the notes: do not report the single-part price; price box_build_spec with
-    quote_box_build and tell the user what to check (assembly.assumptions)."""
+    quote_box_build and tell the user what to check (assembly.assumptions).
+    If review.manual_required is true the drawing was not understood well enough: do NOT report price_breaks as a
+    quote. Tell the user this part needs a manual quote and list review.reasons. Only if the user gives the
+    missing values (or says they checked every value) call again with those overrides (and confirmed=true)."""
     from . import drawing, drawing_quote
     pth = Path(file_path).expanduser()
     if not pth.is_file():
@@ -469,17 +474,17 @@ def quote_from_drawing(file_path: str, quantities: list[int] | None = None, mate
         o["material"] = material
     if process and process != "auto":
         o["process"] = process
-    with session() as db:
-        try:
-            r = drawing_quote.quote(read, geom, o, quotes.get_overrides(db))
-        except pricing.SpecError as exc:
-            return _err(exc)
     from . import drawing_assembly
     try:
         asm = drawing_assembly.analyze(pth, read)
     except Exception:  # noqa: BLE001
         asm = None
-    out = {"confidence": "low" if asm else r["confidence"], "process": r["spec"]["process"], "inputs": r["inputs"],
+    with session() as db:
+        try:
+            r = drawing_quote.quote(read, geom, o, quotes.get_overrides(db), assembly=bool(asm))
+        except pricing.SpecError as exc:
+            return _err(exc)
+    out = {"confidence": "low" if asm else r["confidence"], "review": r["review"], "process": r["spec"]["process"], "inputs": r["inputs"],
            "price_breaks": r["estimate"]["price_breaks"], "assumptions": r["assumptions"],
            "warnings": ([asm["message"]] if asm else []) + r["estimate"]["warnings"] + read.get("warnings", []),
            "evidence": geom["evidence"], "spec": r["spec"]}

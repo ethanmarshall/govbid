@@ -161,11 +161,21 @@ def prefill(read: dict, pages: list[str]) -> dict:
         colors = 1 + (1 if re.search(r"TWO\s*COLOR|2\s*COLOR", text, re.I) else 0)
         enclosure["silkscreen_colors"] = colors
         evidence.append(f"Silkscreen: {colors} color, one side.")
+    if enc_mat:  # a fabricated enclosure is not a catalog box: it needs its own quote or a price by hand
+        enclosure["source"] = "custom"
+        size = " x ".join(f"{v:g}" for v in (enclosure["length_in"], enclosure["width_in"], enclosure["height_in"]) if v)
+        enclosure["description"] = f"{enc_mat['name']}, {enc_mat['callout']}" + (f", about {size} in" if size else "")
+    if enclosure["length_in"]:
+        enclosure["check"] = "Size read from the reference dimensions on the drawing: confirm it, then mark it checked."
+    for f in fabricated:
+        if f is enc_mat:
+            continue
+        lines.append(blank_line(type="other", description=f"{f['name']}: custom part, {f['callout']}", qty=1, mount="panel" if re.search(r"PLATE|PANEL|COVER", f["name"], re.I) else "internal",
+                                terminations=0, needs_quote=True))
     if fabricated:
         names = ", ".join(f["name"].lower() for f in fabricated)
-        assumptions.append(f"Custom parts on this drawing ({names}) are not catalog items. The enclosure is priced from the catalog placeholder for a "
-                           "box of this type and size. For a real price, quote each part (DXF flat parts, or Instant quote from its STEP file), "
-                           "save it, and link it here, then set the enclosure to Custom.")
+        assumptions.append(f"Custom parts on this drawing ({names}) need their own price: quote each one (DXF flat parts, or Instant quote from its STEP file) "
+                           "and link it, or enter your price. The box build is not a quote until they are priced.")
 
     # ---- items from the notes
     on_panel_holes = 0
@@ -186,8 +196,8 @@ def prefill(read: dict, pages: list[str]) -> dict:
                 evidence.append(f"{n} sets of mounting hardware: {note}")
                 continue
             if re.search(r"INERT\s*COMPONENT", note, re.I):
-                lines.append(blank_line(type="other", description="Inert components next to circuit symbols (count not on the drawing: set the quantity)",
-                                        qty=qty or 1, mount="panel", terminations=0))
+                lines.append(blank_line(type="other", description="Inert components next to circuit symbols", qty=qty or 1, mount="panel", terminations=0,
+                                        needs_quote=True, check="" if qty else "The drawing does not give the quantity or the parts: set them, then mark it checked."))
                 assumptions.append("The drawing calls for inert components next to the circuit symbols but does not count them. Set that quantity.")
                 continue
             if re.search(r"CAM\s*LOCK|\bLATCH\b|\bLOCK\b", note, re.I):
@@ -203,7 +213,8 @@ def prefill(read: dict, pages: list[str]) -> dict:
             if is_pcb_page and (re.search(r"PC\s*PINS?|PCB|THT|THROUGH\s*HOLE", note, re.I) or ctype in ("terminal_block",)):
                 pins = _pins(desc)
                 pcb_lines.append({"ref": "", "mpn": mfr, "manufacturer": "", "description": desc, "qty": n, "tht": True, "unit_price": None,
-                                  "price_source": "", "distributor": "", "_pins": pins})
+                                  "price_source": "", "distributor": "", "_pins": pins,
+                                  "_assumed": not re.search(r"SP|DP|3P|4P|POS|PIN\b|\d+\s*P\b", desc.replace("PC PINS", ""), re.I)})
                 if ctype in ("toggle_switch", "rocker_switch", "pushbutton", "rotary_switch", "keyswitch", "led_indicator", "potentiometer"):
                     on_panel_holes += n  # PCB-mounted, but it still pokes through the panel
                 evidence.append(f"On the PCB: {n} x {desc[:70]} ({pins} pins each{'' if re.search(r'SP|DP|3P|4P|POS|PIN', desc, re.I) else ', assumed'}).")
@@ -232,9 +243,12 @@ def prefill(read: dict, pages: list[str]) -> dict:
         b["tht_parts"] = sum(x["qty"] for x in pcb_lines)
         b["tht_joints"] = sum(x["qty"] * x.pop("_pins") for x in pcb_lines)
         b["bom_lines"] = pcb_lines
+        guessed = [x["description"][:40] for x in pcb_lines if x.get("_assumed")]
+        b["check"] = ("The drawing does not give the layer count, SMT parts or the board BOM; priced as 2 layers, through-hole only"
+                      + (f", with pin counts assumed for {', '.join(guessed)}" if guessed else "") + ". Drop the Gerbers and BOM, or confirm and mark it checked.")
+        for x in pcb_lines:
+            x.pop("_assumed", None)
         pcbs.append(b)
-        assumptions.append("PCB: 2 layers and through-hole parts only, since the drawing shows no SMT parts or layer count. "
-                           "Drop the Gerbers and BOM on the board for an exact count.")
     if on_panel_holes:
         enclosure["mods"]["round_holes"] = on_panel_holes + sum(ln["qty"] for ln in lines if ln["type"] == "test_jack")
         evidence.append(f"{enclosure['mods']['round_holes']:g} round panel holes (jacks, PCB switches and the lock).")

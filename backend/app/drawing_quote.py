@@ -424,7 +424,8 @@ def ai_allowed(read: dict) -> str | None:
 OVERRIDE_KEYS = ("process", "length", "width", "height", "holes", "tapped_holes", "thru_holes", "bends", "thickness", "max_diameter",
                  "material", "finishes", "tolerance", "quantities", "name", "part_number", "nsn", "first_article", "material_certs",
                  "packaging", "cut_length", "setups", "weld_length_in", "inserts", "infill", "technology", "support",
-                 "reference_unit_price", "freight_per_lot", "approved_source_required", "cut_process", "fill_ratio")
+                 "reference_unit_price", "freight_per_lot", "approved_source_required", "cut_process", "fill_ratio",
+                 "confirmed")  # confirmed: the user checked every value against the drawing (see review())
 
 
 def _f(v, default=None):
@@ -642,15 +643,44 @@ def build_spec(read: dict, geom: dict, overrides: dict | None = None, config: di
     return spec, notes
 
 
-def quote(read: dict, geom: dict, overrides: dict | None = None, config: dict | None = None) -> dict:
+def quote(read: dict, geom: dict, overrides: dict | None = None, config: dict | None = None, assembly: bool = False) -> dict:
     """Build the spec and price it. Returns {geometry, inputs, spec, estimate, assumptions, confidence}."""
     spec, notes = build_spec(read, geom, overrides, config)
     est = pricing.estimate(spec, config)
     est["assumptions"] = notes + est["assumptions"]
     inp, _ = effective_inputs(read, geom, overrides, config)
-    est["warnings"] = sanity_warnings(inp, est) + est["warnings"]
+    sanity = sanity_warnings(inp, est)
+    est["warnings"] = sanity + est["warnings"]
+    rv = review(read, geom, overrides, sanity, assembly)
+    spec["review"] = rv  # saved with the quote: a customer quote is refused while the read is unconfirmed
     return {"geometry": geom, "inputs": inp, "spec": spec, "estimate": est, "assumptions": est["assumptions"],
-            "confidence": geom.get("confidence", "low")}
+            "confidence": geom.get("confidence", "low"), "review": rv}
+
+
+def review(read: dict, geom: dict, overrides: dict | None, sanity: list[str], assembly: bool = False) -> dict:
+    """Is the drawing understood well enough to price without a person checking it?
+
+    Not confident when: the drawing is an assembly; it has no text; the size is a low-confidence guess
+    and was not entered by hand; no material was found and none was chosen; or the size or material cost
+    is not believable. Any of those means a manual quote for this part (or the user checking every value
+    and saying so with confirmed=true). Returns {confident, confirmed, reasons, manual_required}."""
+    o = {k: v for k, v in (overrides or {}).items() if v not in (None, "")}
+    reasons: list[str] = []
+    if assembly:
+        reasons.append("It is an assembly drawing, not one part.")
+    if geom.get("confidence") == "none":
+        reasons.append("The drawing has no readable text (scanned), so nothing was measured.")
+    size_given = all(k in o for k in ("length", "width")) and any(k in o for k in ("height", "thickness", "max_diameter"))
+    if geom.get("confidence") == "low" and not size_given:
+        reasons.append("The overall size is a guess from the largest dimensions on the sheet.")
+    mat = (read.get("material") or {}).get("mapped")
+    if not mat and not o.get("material"):
+        reasons.append("No material was found on the drawing.")
+    if sanity:
+        reasons.append("The size or material cost is not believable for one part.")
+    confirmed = bool(o.get("confirmed")) and not assembly
+    confident = not reasons or confirmed
+    return {"confident": confident, "confirmed": confirmed, "reasons": reasons, "manual_required": not confident}
 
 
 def sanity_warnings(inp: dict, est: dict) -> list[str]:

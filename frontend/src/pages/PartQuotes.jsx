@@ -116,6 +116,17 @@ function QuoteBuilder({ meta, quoteId, oppId, onSaved }) {
       setQuote({ opportunity_id: q.opportunity_id, status: q.status, quoted_quantity: q.quoted_quantity ?? '', quoted_unit_price: q.quoted_unit_price ?? '', notes: q.notes || '' })
     })
   }, [quoteId])
+  const [fromDrawing, setFromDrawing] = useState(null)
+  useEffect(() => { // sent here because the drawing reader was not sure: start from what it read
+    if (quoteId) return
+    let pre = null
+    try { pre = JSON.parse(sessionStorage.getItem('govbid:manual-prefill') || 'null'); sessionStorage.removeItem('govbid:manual-prefill') } catch {}
+    if (!pre?.spec) return
+    setSpec({ ...blankSpec(), ...pre.spec })
+    setQtyText((pre.spec.quantities || [1]).join(', '))
+    setFromDrawing(pre)
+    setQuote((q) => ({ ...q, notes: q.notes || `Manual quote: the drawing reader was not sure (${(pre.reasons || []).join(' ')}) Values checked against ${pre.drawing || 'the drawing'}.` }))
+  }, [quoteId])
   useEffect(() => {
     if (!oppId || quoteId) return
     api.get(`/api/opportunities/${oppId}`).then((o) => setSpec((s) => ({ ...s, name: s.name || o.title, nsn: s.nsn || o.nsn || '', quantities: o.quantity && Number(o.quantity) ? [Number(o.quantity)] : s.quantities })))
@@ -162,6 +173,13 @@ function QuoteBuilder({ meta, quoteId, oppId, onSaved }) {
   return (
     <div className="builder quote-split">
       <div>
+        {fromDrawing && (
+          <div className="panel asm-notice">
+            <h2>Manual quote from the drawing</h2>
+            <p className="small">The drawing reader was not sure of this part, so you are pricing it by hand. It filled in what it read: check every field against {fromDrawing.drawing || 'the drawing'}.</p>
+            <ul className="clean small">{(fromDrawing.reasons || []).map((x, i) => <li key={i} className="due-soon">{x}</li>)}</ul>
+          </div>
+        )}
         <div className="panel">
           <div className="row spread"><h2 style={{ margin: 0 }}>Part</h2>
             <div className="row">
@@ -324,7 +342,8 @@ function SavedQuotes({ onOpen }) {
         <tbody>
           {rows.map((r) => (
             <tr key={r.id} className="click" onClick={() => onOpen(r)}>
-              <td><div className="t">{r.name}</div><div className="small mono muted">{[r.part_number, r.nsn, r.cad_file && `STEP: ${r.cad_file}`, r.kind && !['part', 'drawing'].includes(r.kind) && r.kind.replace('_', ' '), r.kind === 'drawing' && 'from drawing'].filter(Boolean).join(' · ')}</div></td>
+              <td><div className="t">{r.name}</div><div className="small mono muted">{[r.part_number, r.nsn, r.cad_file && `STEP: ${r.cad_file}`, r.kind && !['part', 'drawing'].includes(r.kind) && r.kind.replace('_', ' '), r.kind === 'drawing' && 'from drawing'].filter(Boolean).join(' · ')}</div>
+                {r.needs_manual && <span className="tag due-soon" title="The quote tool was not sure of part of this quote. Price or check those items by hand before it goes to a customer.">needs manual quote</span>}</td>
               <td className="small">{r.solicitation_number || r.opportunity_title || <span className="muted">none</span>}</td>
               <td><span className="tag">{r.status}</span></td>
               <td className="mono">{r.quoted_quantity ? `${r.quoted_quantity} @ ${usd(r.quoted_unit_price)}` : ''}</td>

@@ -135,6 +135,8 @@ def quote_dict(q: PartQuote, full: bool = True) -> dict:
         "price_breaks": (q.result or {}).get("price_breaks", []),
         "cad_file": ((q.spec or {}).get("cad") or {}).get("filename"),
         "kind": (q.spec or {}).get("kind") or ("drawing" if (q.spec or {}).get("drawing") and not (q.spec or {}).get("cad") else "part"),
+        # the quote tool was not sure of part of it: needs a manual price or a check before it goes to a customer
+        "needs_manual": bool(((q.spec or {}).get("review") or {}).get("manual_required") or (q.result or {}).get("incomplete")),
     }
     if full:
         d["spec"] = q.spec

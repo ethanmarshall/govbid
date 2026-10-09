@@ -97,7 +97,7 @@ def test_assembly_read_into_a_box_build(pdf):
     bb = a["box_build"]
     e = bb["enclosure"]
     assert (e["length_in"], e["width_in"], e["height_in"]) == (18.75, 14.0, 4.125)  # border zone numbers ignored
-    assert e["type"] == "sheet_steel" and e["finish"] == "powder_coat" and e["silkscreen_colors"] == 1
+    assert e["source"] == "custom" and e["finish"] == "powder_coat" and e["silkscreen_colors"] == 1  # fabricated: priced by hand or linked
     types = {(ln["type"], ln["qty"]) for ln in bb["lines"]}
     assert ("test_jack", 12) in types and ("hardware", 4) in types
     assert any(ln["description"].startswith("Cam lock") for ln in bb["lines"])
@@ -107,8 +107,21 @@ def test_assembly_read_into_a_box_build(pdf):
     assert any(x["mpn"] == "1-282837-2" for x in b["bom_lines"])
     assert e["mods"]["round_holes"] == 12 + 15 + 1
     assert {f["name"] for f in bb["fabricated"]} == {"Cover Plate", "Enclosure", "Switch Cover"}
-    price = box_build.price({**bb, "quantities": [1, 10]}, {})["price_breaks"]
-    assert 300 < price[1]["unit_price"] < price[0]["unit_price"] < 5000  # placeholder rates, but the right order of magnitude
+    r = box_build.price({**bb, "quantities": [1, 10]}, {})
+    # everything it was not sure of must be priced or checked by hand before this is a quote
+    assert not r["ready"] and "NOT READY" in r["warnings"][0]
+    reasons = " | ".join(f"{i['item']}: {i['reason']}" for i in r["incomplete"])
+    for want in ("Custom enclosure", "Cover Plate", "Switch Cover", "Inert components", "layer count"):
+        assert want in reasons, want
+    # price the custom parts, set the inert parts, confirm the rest: then it is ready
+    bb["enclosure"].update(unit_price=180.0, check="")
+    for ln in bb["lines"]:
+        if ln["needs_quote"]:
+            ln.update(unit_price=25.0, check="")
+    bb["pcbs"][0]["check"] = ""
+    r = box_build.price({**bb, "quantities": [1, 10]}, {})
+    assert r["ready"] and not r["incomplete"]
+    assert 300 < r["price_breaks"][1]["unit_price"] < r["price_breaks"][0]["unit_price"] < 5000
 
 
 def test_api_flags_assembly_and_hides_nothing_silently(pdf, tmp_path):
@@ -118,4 +131,53 @@ def test_api_flags_assembly_and_hides_nothing_silently(pdf, tmp_path):
         assert read["assembly"]["box_build"]["pcbs"]
         q = c.post(f"/api/drawings/{read['drawing_id']}/quote", json={"quantities": [1]}).json()
         assert q["assembly"] and q["confidence"] == "low" and "assembly drawing" in q["warnings"][0]
+        assert q["review"]["manual_required"] and not q["review"]["confirmed"]
         assert q["estimate"]["price_breaks"][0]["unit_price"] < 5000  # the single-part read is sane too
+        # an assembly cannot be "confirmed" as one part
+        q = c.post(f"/api/drawings/{read['drawing_id']}/quote", json={"quantities": [1], "overrides": {"confirmed": True}}).json()
+        assert q["review"]["manual_required"]
+
+
+# ---------------------------------------------------------------- not sure -> manual quote
+def test_unsure_single_part_needs_manual_quote_until_checked():
+    f = Path(__file__).parent / "fixtures" / "drawings" / "bracket_6061.pdf"
+    r = drawing.read_drawing(f)
+    text, _ = drawing.extract_pdf_text(f)
+    g = drawing_quote.extract_geometry(r, text)
+    q = drawing_quote.quote(r, g, {"quantities": [1]}, {})
+    assert q["review"]["manual_required"] and "guess" in q["review"]["reasons"][0]
+    sized = drawing_quote.quote(r, g, {"quantities": [1], "length": 4, "width": 3, "height": 0.5}, {})
+    assert not sized["review"]["manual_required"]  # the user entered the size: nothing left to guess
+    checked = drawing_quote.quote(r, g, {"quantities": [1], "confirmed": True}, {})
+    assert checked["review"]["confident"] and checked["review"]["confirmed"]
+    explicit = Path(__file__).parent / "fixtures" / "drawings" / "sheet_cover.pdf"
+    r2 = drawing.read_drawing(explicit)
+    t2, _ = drawing.extract_pdf_text(explicit)
+    assert not drawing_quote.quote(r2, drawing_quote.extract_geometry(r2, t2), {"quantities": [1]}, {})["review"]["manual_required"]
+
+
+def test_no_text_and_no_material_need_manual_quote():
+    rv = drawing_quote.review({"material": {"mapped": None}}, {"confidence": "none"}, {}, [])
+    assert rv["manual_required"] and len(rv["reasons"]) == 2
+    assert not drawing_quote.review({"material": {"mapped": None}}, {"confidence": "high"}, {"material": "6061-T6 aluminum"}, [])["manual_required"]
+
+
+def test_customer_quote_refused_until_manual_items_are_done(pdf):
+    f = Path(__file__).parent / "fixtures" / "drawings" / "bracket_6061.pdf"
+    r = drawing.read_drawing(f)
+    text, _ = drawing.extract_pdf_text(f)
+    g = drawing_quote.extract_geometry(r, text)
+    unsure = drawing_quote.quote(r, g, {"quantities": [5]}, {})["spec"]
+    checked = drawing_quote.quote(r, g, {"quantities": [5], "confirmed": True}, {})["spec"]
+    bb = drawing_assembly.analyze(pdf, drawing.read_drawing(pdf))["box_build"]
+    with TestClient(app) as c:
+        a = c.post("/api/pricing/quotes", json={"spec": unsure}).json()
+        assert a["needs_manual"]
+        res = c.get(f"/api/quote-tools/{a['id']}/customer-quote")
+        assert res.status_code == 400 and "not understood well enough" in res.json()["detail"]
+        b = c.post("/api/pricing/quotes", json={"spec": checked}).json()
+        assert not b["needs_manual"] and c.get(f"/api/quote-tools/{b['id']}/customer-quote").status_code == 200
+        box = c.post("/api/box-build/save", json={**{k: bb[k] for k in ("enclosure", "pcbs", "lines", "wiring", "labor", "options")}, "quantities": [1]}).json()
+        assert box["needs_manual"]
+        res = c.get(f"/api/quote-tools/{box['id']}/customer-quote")
+        assert res.status_code == 400 and "manual price or a check" in res.json()["detail"]

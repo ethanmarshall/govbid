@@ -59,8 +59,14 @@ export default function DrawingQuote({ drawing, cadOpts, statuses, oppId, onSave
     try { sessionStorage.setItem('govbid:box-prefill', JSON.stringify(r.assembly.box_build)) } catch {}
     navigate('/part-quotes?tab=box&from=drawing')
   }
+  const openManual = () => {
+    const { review, ...spec } = r.spec
+    try { sessionStorage.setItem('govbid:manual-prefill', JSON.stringify({ spec, reasons: r.review?.reasons || [], drawing: drawing.filename || '' })) } catch {}
+    navigate('/part-quotes?tab=quote&from=drawing')
+  }
   const asm = r?.assembly
-  const hidePrice = asm && !showSingle
+  const manual = !asm && r?.review?.manual_required
+  const hidePrice = (asm && !showSingle) || manual
   const process = v('process') || 'cnc_mill'
   const isPrint = process === '3d_print'
   const est = r?.estimate
@@ -146,6 +152,23 @@ export default function DrawingQuote({ drawing, cadOpts, statuses, oppId, onSave
               <button className="link" onClick={() => setShowSingle(!showSingle)}>{showSingle ? 'Hide' : 'Show'} the single-part price anyway</button>
             </div>
           </div>
+        )}
+        {manual && (
+          <div className="panel asm-notice">
+            <h2>Manual quote needed</h2>
+            <p className="small">The drawing was not understood well enough to price it on its own:</p>
+            <ul className="clean small">{r.review.reasons.map((x, i) => <li key={i} className="due-soon">{x}</li>)}</ul>
+            <p className="small muted">Enter the values from the drawing on the left (size, thickness, material, holes), then confirm them below. Or build the estimate by hand, starting from what was read.</p>
+            <label className="check small"><input type="checkbox" checked={!!inp.confirmed} onChange={(e) => set('confirmed', e.target.checked)} /> I checked every value on the left against the drawing</label>
+            <div className="row" style={{ marginTop: 10 }}>
+              <button className="primary" onClick={openManual}>Quote it manually</button>
+            </div>
+          </div>
+        )}
+        {r?.review?.confirmed && !asm && !manual && (
+          <label className="check small okline" style={{ marginBottom: 8 }}>
+            <input type="checkbox" checked={!!inp.confirmed} onChange={(e) => set('confirmed', e.target.checked)} /> I checked every value on the left against the drawing
+          </label>
         )}
         {!hidePrice && <div className="panel price-panel">
           {err && <div className="err">{err}</div>}

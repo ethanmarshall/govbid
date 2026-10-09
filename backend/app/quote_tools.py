@@ -190,6 +190,20 @@ def box_summary(spec: dict) -> str:
     return ("Assembled unit: " + ", ".join(parts)) if parts else "Assembled unit"
 
 
+def unconfirmed(pq: PartQuote) -> str:
+    """Why a saved quote may not go to a customer yet: parts the quote tool was not sure of. '' when ready."""
+    spec, result = pq.spec or {}, pq.result or {}
+    rv = spec.get("review") or {}
+    if rv.get("manual_required"):
+        return ("the drawing was not understood well enough (" + " ".join(rv.get("reasons") or []) + ") "
+                "Check every value against the drawing and confirm it, or quote the part manually.")
+    inc = result.get("incomplete") or []
+    if inc:
+        return f"{len(inc)} item(s) still need a manual price or a check: " + "; ".join(f"{i['item'][:50]} ({i['reason']})" for i in inc[:4]) + \
+            ("..." if len(inc) > 4 else "")
+    return ""
+
+
 # ---------------------------------------------------------------- customer quote
 def customer_quote_data(db: Session, quote_id: int, opts: dict | None = None, remember: bool = True) -> dict:
     """Everything the customer quote shows. `opts` overrides the saved defaults and is remembered for next time."""
@@ -198,6 +212,9 @@ def customer_quote_data(db: Session, quote_id: int, opts: dict | None = None, re
     breaks = (pq.result or {}).get("price_breaks") or []
     if not breaks:
         raise QuoteToolError("This quote has no prices yet. Save it with at least one quantity.")
+    blocked = unconfirmed(pq)
+    if blocked:
+        raise QuoteToolError("Not ready for a customer quote: " + blocked)
     s = get_settings(db)
     doc = ensure_number(db, pq)
     o = {**(doc.options or {}), **{k: v for k, v in (opts or {}).items() if v not in (None, "")}}

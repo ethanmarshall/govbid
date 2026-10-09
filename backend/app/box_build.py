@@ -130,7 +130,8 @@ def classify_component(part: str, desc: str, hint: str = "") -> str:
 # ================================================================ normalize
 def blank_line(**kw) -> dict:
     ln = {"ref": "", "type": "", "part_number": "", "manufacturer": "", "description": "", "qty": 1, "unit_price": None,
-          "price_source": "", "distributor": "", "terminations": None, "method": "", "mount": "panel", "customer_furnished": False, "notes": ""}
+          "price_source": "", "distributor": "", "terminations": None, "method": "", "mount": "panel", "customer_furnished": False, "notes": "",
+          "needs_quote": False, "check": ""}
     ln.update({k: v for k, v in kw.items() if k in ln})
     return ln
 
@@ -148,7 +149,7 @@ def blank_pcb(**kw) -> dict:
          "fab_price_each": None, "smt_placements": 0, "smt_unique": 0, "fine_pitch": 0, "bga": 0, "tht_parts": 0, "tht_joints": 0,
          "sides": 1, "aoi": True, "conformal": False, "conformal_masks": 0, "flying_probe": False, "program_minutes": 0, "test_minutes": 0,
          "bom_lines": [], "bom_cost_each": None, "consigned": False, "buy_prices": [], "buy_nre": 0, "buy_lead_days": None,
-         "cable_mates": 0, "wire_connections": 0, "source": {}}
+         "cable_mates": 0, "wire_connections": 0, "source": {}, "check": ""}
     b.update({k: v for k, v in kw.items() if k in b})
     return b
 
@@ -165,6 +166,8 @@ def normalize_lines(lines: list[dict]) -> list[dict]:
         if ln["method"] not in TERMINATION_METHODS:
             ln["method"] = ""
         ln["customer_furnished"] = bool(ln["customer_furnished"])
+        ln["needs_quote"] = bool(ln["needs_quote"])
+        ln["check"] = str(ln["check"] or "")
         out.append(ln)
     return out
 
@@ -200,6 +203,7 @@ def normalize_pcbs(boards: list[dict]) -> list[dict]:
             b[k] = _opt(b[k])
         for k in ("impedance", "via_in_pad", "blind_buried", "aoi", "conformal", "flying_probe", "consigned"):
             b[k] = bool(b[k])
+        b["check"] = str(b["check"] or "")
         b["bom_lines"] = [{"ref": str(x.get("ref") or ""), "mpn": str(x.get("mpn") or ""), "manufacturer": str(x.get("manufacturer") or ""),
                            "description": str(x.get("description") or ""), "qty": max(_f(x.get("qty"), 1), 0), "tht": bool(x.get("tht")),
                            "unit_price": _opt(x.get("unit_price")), "price_source": x.get("price_source") or "", "distributor": x.get("distributor") or ""}
@@ -231,7 +235,7 @@ def normalize_enclosure(e: dict | None) -> dict:
            "manufacturer": e.get("manufacturer") or "", "description": e.get("description") or "", "price_source": e.get("price_source") or "",
            "distributor": e.get("distributor") or "", "finish": e.get("finish") if e.get("finish") in ENCLOSURE_FINISH_KEYS else "none",
            "silkscreen_colors": int(_f(e.get("silkscreen_colors"), 0)), "silkscreen_sides": int(_f(e.get("silkscreen_sides"), 1)) or 1,
-           "child": None}
+           "child": None, "check": str(e.get("check") or "")}
     mods = e.get("mods") or {}
     out["mods"] = {k: max(_f(mods.get(k), 0), 0) for k in ("round_holes", "rect_cutouts", "connector_cutouts", "display_windows", "vent_patterns", "pem_inserts")}
     out["mods"]["gasket"] = bool(mods.get("gasket"))
@@ -512,8 +516,10 @@ def price(spec: dict, config: dict | None = None) -> dict:
         per.append(_line("enclosure", f"{et['label']}{pn}{size}", ep, note=note))
         bought += ep
         lead_parts = max(lead_parts, int(et["lead_days"]))
-    elif enc["source"] == "custom" and not enc["child"]:
-        warnings.append("Custom enclosure selected but no saved quote is linked. Link the enclosure's part quote.")
+    elif enc["source"] == "custom" and not enc["child"] and enc["unit_price"] is not None:
+        per.append(_line("enclosure", f"Custom enclosure{', ' + enc['description'] if enc['description'] else ''} (your price)", enc["unit_price"], note="entered by hand"))
+        bought += enc["unit_price"]
+        lead_parts = max(lead_parts, int(cfg["component_lead_days"]))
     elif enc["source"] == "customer":
         assumptions.append("The enclosure is customer furnished; only receiving and integration are priced.")
     mods = dict(enc["mods"])
@@ -560,7 +566,9 @@ def price(spec: dict, config: dict | None = None) -> dict:
         if ln["customer_furnished"]:
             per.append(_line("components", f"{label} x {ln['qty']:g} (customer furnished)", 0.0, section="components"))
         else:
-            if ln["unit_price"] is None:
+            if ln["unit_price"] is None and ln["needs_quote"]:
+                p, src = 0.0, "NEEDS A MANUAL PRICE (left out until priced)"
+            elif ln["unit_price"] is None:
                 p, src = cc["price"], "PLACEHOLDER price"
                 ph_count += 1
             else:
@@ -815,13 +823,37 @@ def price(spec: dict, config: dict | None = None) -> dict:
         assumptions.append("Linked quotes are rolled in at your cost (no G&A or profit, freight, packaging or CoC), so markup is applied once on the box build.")
     assumptions.append(f"Lead time: longest material lead + {labor_hours_unit:.1f} labor hours per unit at {ig['techs']:g} tech(s) x {ig['hours_per_day']:g} h/day"
                        + (", plus burn-in" if burn else "") + (", ESS" if ess_days else "") + (", outside lab" if lab_days else "") + (", first article" if fa_days else "") + ".")
+    incomplete = incomplete_items(enc, lines, pcbs)
+    if incomplete:
+        warnings.insert(0, f"NOT READY TO QUOTE: {len(incomplete)} item(s) need a manual price or a check (listed under incomplete). "
+                           "The prices shown leave them out.")
     first = breakdowns[str(qtys[0])]
-    return {"kind": "box_build", "part": {k: spec.get(k) for k in ("name", "part_number", "nsn") if spec.get(k)}, "material": "Box build",
+    return {"kind": "box_build", "incomplete": incomplete, "ready": not incomplete, "part": {k: spec.get(k) for k in ("name", "part_number", "nsn") if spec.get(k)}, "material": "Box build",
             "part_weight_lb": 0.0, "stock_volume_in3": 0.0,
             "per_part_lines": first["per_part_lines"], "per_lot_lines": first["per_lot_lines"], "per_part_cost": first["per_part_cost"],
             "per_lot_cost": first["per_lot_cost"], "breakdowns": breakdowns, "ga_rate": ga, "profit_rate": profit, "price_breaks": out_breaks,
             "counts": c, "auto_cutouts": auto, "nre_total": round(nre_total, 2), "labor_hours_per_unit": round(labor_hours_unit, 2),
             "assumptions": assumptions, "warnings": list(dict.fromkeys(warnings)), "config_note": cfg.get("note", "")}
+
+
+def incomplete_items(enc: dict, lines: list[dict], pcbs: list[dict]) -> list[dict]:
+    """Items the quote is not sure of: they must be priced or checked by hand before the price is a quote."""
+    out = []
+    if enc["source"] == "custom" and not enc["child"] and enc["unit_price"] is None:
+        out.append({"where": "enclosure", "item": enc["description"] or "Custom enclosure",
+                    "reason": "Custom enclosure: link its saved quote or enter its price."})
+    if enc["check"]:
+        out.append({"where": "enclosure", "item": "Enclosure", "reason": enc["check"]})
+    for i, ln in enumerate(lines):
+        label = ln["description"] or ln["part_number"] or "Part"
+        if ln["needs_quote"] and ln["unit_price"] is None and not ln["customer_furnished"]:
+            out.append({"where": "lines", "index": i, "item": label, "reason": "Price this part by hand (or quote it and link the quote)."})
+        if ln["check"]:
+            out.append({"where": "lines", "index": i, "item": label, "reason": ln["check"]})
+    for i, b in enumerate(pcbs):
+        if b["check"]:
+            out.append({"where": "pcbs", "index": i, "item": b["name"], "reason": b["check"]})
+    return out
 
 
 def estimate_spec(spec: dict, config: dict | None = None) -> dict:

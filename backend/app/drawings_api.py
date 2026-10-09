@@ -174,8 +174,11 @@ async def quote_from_drawing(drawing_id: str, body: DrawingQuoteIn, db: Session 
     overrides = dict(body.overrides or {})
     if body.quantities:
         overrides["quantities"] = body.quantities
+    if "assembly" not in meta:
+        meta["assembly"] = await run_in_threadpool(_assembly, pdf_path, read)
+        meta_path.write_text(json.dumps(meta))
     try:
-        r = drawing_quote.quote(read, geom, overrides, quotes.get_overrides(db))
+        r = drawing_quote.quote(read, geom, overrides, quotes.get_overrides(db), assembly=bool(meta.get("assembly")))
     except pricing.SpecError as exc:
         raise HTTPException(400, str(exc))
     r["assembly"] = meta.get("assembly")

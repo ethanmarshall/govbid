@@ -196,9 +196,26 @@ export default function BoxBuildQuote({ meta, quoteId, oppId, onSaved }) {
         </div>
 
         <div>
+          {p.est?.incomplete?.length > 0 && (
+            <div className="panel asm-notice">
+              <h2>Not ready to quote: {p.est.incomplete.length} item(s) need you</h2>
+              <p className="small muted">The quote tool was not sure of these. Price them by hand (or quote them and link the quote) and check them against the drawing. The price below leaves them out, and a customer quote is blocked until they are done.</p>
+              <ul className="clean small">
+                {p.est.incomplete.map((it, i) => (
+                  <li key={i}><b>{it.item.slice(0, 70)}</b>: {it.reason}{' '}
+                    {/mark it checked/i.test(it.reason) && <button className="link" onClick={() => {
+                      if (it.where === 'enclosure') setEnclosure((e) => ({ ...e, check: '' }))
+                      if (it.where === 'pcbs') setPcbs((bs) => bs.map((b, j) => (j === it.index ? { ...b, check: '' } : b)))
+                      if (it.where === 'lines') setLines((ls) => ls.map((l, j) => (j === it.index ? { ...l, check: '' } : l)))
+                    }}>Mark checked</button>}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
           {est && p.row ? (
             <PriceCard est={est} row={p.row} setPick={p.setPick} unitWord="unit"
-              summary={`Box build · ${pcbs.length} board design(s) · ${lines.length} parts · ${children.length} linked · breakdown at qty ${p.row.quantity}`}>
+              summary={`${p.est.incomplete?.length ? 'PARTIAL PRICE, not a quote yet · ' : ''}Box build · ${pcbs.length} board design(s) · ${lines.length} parts · ${children.length} linked · breakdown at qty ${p.row.quantity}`}>
               <Sections sections={bd.sections} total={p.row.unit_cost} />
               {p.est.nre_total > 0 && <p className="small muted">NRE ${p.est.nre_total.toLocaleString()} {labor.nre_in_price ? 'is spread over each lot' : 'is left out; quote it separately'}. About {p.est.labor_hours_per_unit} labor hours per unit.</p>}
               <div className="row" style={{ marginTop: 10 }}>
@@ -265,9 +282,17 @@ function EnclosurePanel({ cat, e, setE, auto, onLink }) {
                 <button className="link" onClick={onLink}>Link a different quote</button>
               </div>
             </div>
-          ) : <p className="small">Quote the enclosure first (Instant quote from its STEP file, DXF flat parts, or Extrusion builds), save it, then <button className="link" onClick={onLink}>link it here</button>.</p>}
+          ) : (
+            <>
+              {e.description && <p className="small"><b>{e.description}</b></p>}
+              <p className="small">Quote the enclosure (Instant quote from its STEP file, DXF flat parts, or Extrusion builds), save it, then <button className="link" onClick={onLink}>link it here</button>. Or enter your price for it:</p>
+              <div className="grid g3"><label className="f">Your price each ${e.unit_price == null && <span className="tag due-soon" style={{ marginLeft: 4 }}>needs manual price</span>}
+                <input type="number" min="0" step="0.01" value={e.unit_price ?? ''} onChange={(x) => set({ unit_price: numOrNull(x.target.value), price_source: x.target.value === '' ? '' : 'manual' })} /></label></div>
+            </>
+          )}
         </div>
       )}
+      {e.check && <p className="small due-soon" style={{ marginTop: 8 }}>{e.check} <button className="link" onClick={() => set({ check: '' })}>Mark checked</button></p>}
       {['catalog', 'custom', 'customer'].includes(e.source) && (
         <>
           <h3>Modifications</h3>
@@ -330,6 +355,7 @@ function BoardCard({ b, set, remove, cat, quantities, build, onError }) {
           <button className="link" onClick={remove}>remove</button>
         </span>
       </div>
+      {b.check && <p className="small due-soon" style={{ marginTop: 8 }}>{b.check} <button className="link" onClick={() => set({ check: '' })}>Mark checked</button></p>}
       <div className="grid g3" style={{ marginTop: 8 }}>
         <Num label="Boards per unit" step="1" value={b.qty_per} onChange={(v) => set({ qty_per: v || 1 })} />
         {n('cable_mates', 'Cables plugged into it')}
@@ -427,14 +453,15 @@ function PartsTable({ cat, lines, setLines }) {
         <tbody>{lines.map((l, i) => {
           const t = comp[l.type] || null
           return (
-            <tr key={i} className={!l.type ? 'ex-low' : l.type === 'other' && l.unit_price == null ? 'ex-unmatched' : ''}>
+            <tr key={i} className={(l.needs_quote && l.unit_price == null) || l.check ? 'ex-unmatched' : !l.type ? 'ex-low' : l.type === 'other' && l.unit_price == null ? 'ex-unmatched' : ''}>
               <td><input value={l.ref} onChange={(e) => setL(i, { ref: e.target.value.toUpperCase() })} style={{ width: 50 }} /></td>
               <td><select value={l.type} onChange={(e) => setL(i, { type: e.target.value })} style={{ maxWidth: 150 }}><option value="">Auto (from description)</option>{Object.entries(cat.component_types).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</select></td>
               <td><input value={l.part_number} onChange={(e) => setL(i, { part_number: e.target.value })} style={{ width: 130 }} /></td>
               <td><input value={l.manufacturer || ''} onChange={(e) => setL(i, { manufacturer: e.target.value })} style={{ width: 80 }} /></td>
-              <td><input value={l.description} onChange={(e) => setL(i, { description: e.target.value })} style={{ width: 180 }} /></td>
+              <td><input value={l.description} onChange={(e) => setL(i, { description: e.target.value })} style={{ width: 180 }} />
+                {l.check && <div className="small due-soon" style={{ maxWidth: 220 }}>{l.check} <button className="link" onClick={() => setL(i, { check: '' })}>Mark checked</button></div>}</td>
               <td><input type="number" min="0" step="any" value={l.qty} onChange={(e) => setL(i, { qty: e.target.value === '' ? 0 : Number(e.target.value) })} style={{ width: 50 }} /></td>
-              <td style={{ whiteSpace: 'nowrap' }}><input type="number" min="0" step="0.01" value={l.unit_price ?? ''} placeholder={t ? String(t.price) : ''} onChange={(e) => setL(i, { unit_price: numOrNull(e.target.value), price_source: e.target.value === '' ? '' : 'manual' })} style={{ width: 72 }} /> {!l.customer_furnished && <PriceSource l={l} />}</td>
+              <td style={{ whiteSpace: 'nowrap' }}><input type="number" min="0" step="0.01" value={l.unit_price ?? ''} placeholder={l.needs_quote ? 'enter' : t ? String(t.price) : ''} onChange={(e) => setL(i, { unit_price: numOrNull(e.target.value), price_source: e.target.value === '' ? '' : 'manual' })} style={{ width: 72 }} /> {!l.customer_furnished && (l.needs_quote && l.unit_price == null ? <span className="tag due-soon" title="The quote tool cannot price this part: enter your price or quote it and link it.">needs manual price</span> : <PriceSource l={l} />)}</td>
               <td><input type="number" min="0" step="1" value={l.terminations ?? ''} placeholder={t ? String(t.terminations) : ''} onChange={(e) => setL(i, { terminations: numOrNull(e.target.value) })} style={{ width: 46 }} /></td>
               <td><select value={l.method} onChange={(e) => setL(i, { method: e.target.value })}><option value="">{l.type ? `default (${(cat.default_methods[l.type] || '').replace('_', ' ')})` : 'default'}</option>{cat.termination_methods.map((m) => <option key={m} value={m}>{m.replace('_', ' ')}</option>)}</select></td>
               <td><select value={l.mount} onChange={(e) => setL(i, { mount: e.target.value })}><option value="panel">panel</option><option value="internal">internal</option></select></td>
