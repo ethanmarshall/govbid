@@ -1,0 +1,153 @@
+"""Customer quote portal: instant vs estimate vs manual, what customers can and cannot see, limits and the internal review."""
+import json
+from pathlib import Path
+
+import pytest
+from fastapi.testclient import TestClient
+
+from app import portal
+from app.main import app
+
+FIX = Path(__file__).parent / "fixtures"
+SECRET_WORDS = ("unit_cost", "margin", "placeholder", "rate", "per_part_lines", "internal", "spec")
+
+
+@pytest.fixture
+def client():
+    portal.QUOTE_LIMIT.clear()
+    portal.REPRICE_LIMIT.clear()
+    portal.SUBMIT_LIMIT.clear()
+    with TestClient(app) as c:
+        assert c.put("/api/portal/settings", json={"enabled": True, "review_days": 2}).status_code == 200
+        yield c
+        c.put("/api/portal/settings", json={"enabled": False})
+
+
+def _quote(c, files, **form):
+    data = {"quantity": "1", **{k: str(v) for k, v in form.items()}}
+    up = [("files", (p.name, p.read_bytes(), "application/octet-stream")) for p in files]
+    return c.post("/api/public/quote", data=data, files=up or None)
+
+
+def _no_secrets(payload: dict):
+    text = json.dumps(payload).lower()
+    for w in SECRET_WORDS:
+        assert f'"{w}' not in text, w
+
+
+def test_closed_until_enabled():
+    with TestClient(app) as c:
+        c.put("/api/portal/settings", json={"enabled": False})
+        portal.QUOTE_LIMIT.clear()
+        r = _quote(c, [FIX / "cad" / "machined_block.step"])
+        assert r.status_code == 400 and "not open" in r.json()["detail"]
+        assert c.get("/api/public/info").json()["enabled"] is False
+
+
+def test_step_part_is_an_instant_quote_and_reprices(client):
+    r = _quote(client, [FIX / "cad" / "machined_block.step"], quantity=1, material="6061-T6 aluminum")
+    assert r.status_code == 200, r.text
+    q = r.json()
+    res = q["result"]
+    assert q["ref"].startswith("RQ-") and q["token"] and res["kind"] == "instant"
+    assert res["unit_price"] > 0 and res["total"] == pytest.approx(res["unit_price"], abs=0.01) and res["lead_days"] > 0
+    _no_secrets(q)
+    r60 = client.post(f"/api/public/quote/{q['ref']}/options", json={"token": q["token"], "quantity": 60}).json()
+    assert r60["result"]["quantity"] == 60 and r60["result"]["unit_price"] < res["unit_price"]
+    assert r60["result"]["total"] == pytest.approx(r60["result"]["unit_price"] * 60, abs=0.6)
+    # a wrong token sees nothing
+    assert client.get(f"/api/public/quote/{q['ref']}?token=nope").status_code == 400
+
+
+def test_multi_body_step_is_an_estimate_range(client):
+    q = _quote(client, [FIX / "cad" / "weldment.step"], quantity=10).json()
+    res = q["result"]
+    assert res["kind"] == "estimate" and res["unit_low"] < res["unit_high"]
+    assert "engineer" in res["message"] and "confirm" in res["message"]
+    _no_secrets(q)
+
+
+def test_unsure_drawing_is_an_estimate_and_confident_drawing_instant(client):
+    unsure = _quote(client, [FIX / "drawings" / "shaft_304.pdf"]).json()
+    assert unsure["result"]["kind"] == "estimate" and "confirmed by an engineer" in unsure["result"]["items"][0]["note"]
+    sure = _quote(client, [FIX / "drawings" / "sheet_cover.pdf"]).json()
+    assert sure["result"]["kind"] == "instant"
+
+
+def test_dxf_needs_thickness_then_prices(client):
+    q = _quote(client, [FIX / "flat" / "plate_holes_slot.dxf"]).json()
+    assert q["result"]["kind"] == "needs_input"
+    r = client.post(f"/api/public/quote/{q['ref']}/options", json={"token": q["token"], "thickness": 0.125}).json()
+    assert r["result"]["kind"] == "instant" and r["result"]["unit_price"] > 0
+
+
+def test_pcb_files_are_an_estimate(client):
+    q = _quote(client, [FIX / "pcb" / "kicad_fab.zip"], quantity=25).json()
+    assert q["result"]["kind"] == "estimate" and "Circuit boards" in q["result"]["items"][0]["note"]
+
+
+def test_export_controlled_is_not_stored(client, tmp_path):
+    from reportlab.pdfgen import canvas
+
+    pdf = tmp_path / "itar.pdf"
+    c = canvas.Canvas(str(pdf))
+    for i, ln in enumerate(["BRACKET, MOUNTING", "MATERIAL: 6061-T6 ALUMINUM", "WARNING - This document contains technical data whose export is restricted",
+                            "by the Arms Export Control Act (Title 22, U.S.C., Sec 2751, et seq.)", "DISTRIBUTION STATEMENT D. Distribution authorized to DoD and U.S. DoD contractors only."]):
+        c.drawString(40, 700 - 16 * i, ln)
+    c.save()
+    q = _quote(client, [pdf]).json()
+    assert q["export_controlled"] and q["result"]["kind"] == "manual" and "deleted" in q["result"]["message"]
+    assert q["files"][0]["removed"]
+    req = client.get("/api/portal/requests?include_drafts=true").json()
+    rid = next(r["id"] for r in req if r["ref"] == q["ref"])
+    assert client.get(f"/api/portal/requests/{rid}/files/0").status_code == 404
+    flagged = _quote(client, [FIX / "cad" / "machined_block.step"], export_controlled="true").json()
+    assert flagged["files"] == [] and flagged["result"]["kind"] == "manual"
+
+
+def test_bad_files_and_honeypot(client, tmp_path):
+    exe = tmp_path / "virus.exe"
+    exe.write_bytes(b"MZ")
+    assert _quote(client, [exe]).status_code == 400
+    assert client.post("/api/public/quote", data={"quantity": "1", "website": "spam"}).status_code == 400
+    assert _quote(client, [FIX / "cad" / "machined_block.step"], quantity=0).status_code == 400
+
+
+def test_submit_review_and_internal_quotes(client):
+    q = _quote(client, [FIX / "cad" / "machined_block.step"], quantity=5).json()
+    bad = client.post(f"/api/public/quote/{q['ref']}/submit", json={"token": q["token"], "name": "Pat", "email": "nope", "accept_terms": True})
+    assert bad.status_code == 400
+    s = client.post(f"/api/public/quote/{q['ref']}/submit", json={"token": q["token"], "name": "Pat Buyer", "company": "Acme",
+                                                                  "email": "pat@example.com", "accept_terms": True, "needed_by": "2026-12-01"}).json()
+    assert s["submitted"] and s["status"] == "submitted"
+    again = client.post(f"/api/public/quote/{q['ref']}/options", json={"token": q["token"], "quantity": 9})
+    assert again.status_code == 400  # locked once submitted
+    lst = client.get("/api/portal/requests").json()
+    row = next(r for r in lst if r["ref"] == q["ref"])
+    full = client.get(f"/api/portal/requests/{row['id']}").json()
+    assert full["internal"]["items"][0]["unit_cost"] is not None  # you see cost and margin, the customer does not
+    made = client.post(f"/api/portal/requests/{row['id']}/to-quotes").json()
+    assert made["quote_ids"] and "instant" in made["tabs"]
+    pq = client.get(f"/api/pricing/quotes/{made['quote_ids'][0]}").json()
+    assert pq["quoted_quantity"] == 5 and q["ref"] in pq["notes"]
+    assert client.put(f"/api/portal/requests/{row['id']}", json={"status": "confirmed"}).json()["status"] == "confirmed"
+    assert client.get(f"/api/public/quote/{q['ref']}?token={q['token']}").json()["status_label"] == "Confirmed"
+
+
+def test_internal_routes_need_login(monkeypatch):
+    monkeypatch.setenv("APP_PASSWORD", "pw")
+    with TestClient(app) as c:
+        assert c.get("/api/portal/requests").status_code == 401
+        assert c.get("/api/portal/settings").status_code == 401
+        assert c.get("/api/public/info").status_code == 200  # the customer page works without a login
+
+
+def test_rate_limit(client):
+    portal.QUOTE_LIMIT.per_ip, old = 2, portal.QUOTE_LIMIT.per_ip
+    try:
+        portal.QUOTE_LIMIT.clear()
+        codes = [_quote(client, [], notes="hi").status_code for _ in range(3)]
+        assert codes[:2] == [200, 200] and codes[2] == 429
+    finally:
+        portal.QUOTE_LIMIT.per_ip = old
+        portal.QUOTE_LIMIT.clear()

@@ -99,7 +99,7 @@ def _too_many(ip: str) -> bool:
 def is_open_path(path: str, query: dict) -> bool:
     if not path.startswith("/api/"):
         return True  # the page itself and its assets; the app asks for login before showing data
-    if path in OPEN_PATHS:
+    if path in OPEN_PATHS or path.startswith("/api/public/"):  # the customer quote portal (app/portal_api.py)
         return True
     if path == "/api/calendar.ics":
         tok = settings()["calendar_token"]

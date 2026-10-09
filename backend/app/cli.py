@@ -35,9 +35,10 @@ def build_digest(db, hours: int) -> tuple[str, int]:
     return render_text(d), total_items(d)
 
 
-def send_email(subject: str, text_body: str, html_body: str | None = None) -> str:
-    """Send through the SMTP settings in .env (DIGEST_TO, SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASSWORD, SMTP_FROM)."""
-    to = os.getenv("DIGEST_TO")
+def send_email(subject: str, text_body: str, html_body: str | None = None, to: str | None = None) -> str:
+    """Send through the SMTP settings in .env (DIGEST_TO, SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASSWORD, SMTP_FROM).
+    `to` defaults to DIGEST_TO; it is only ever an address you set, never one typed by a website visitor."""
+    to = to or os.getenv("DIGEST_TO")
     host = os.getenv("SMTP_HOST")
     if not (to and host):
         raise RuntimeError("Set DIGEST_TO and SMTP_HOST in backend/.env to email the digest.")
