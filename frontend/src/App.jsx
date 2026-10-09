@@ -28,12 +28,54 @@ const MetaContext = createContext(null)
 export const useMeta = () => useContext(MetaContext)
 
 export default function App() {
+  const [auth, setAuth] = useState(null) // {login_required, signed_in, username, calendar_token}
+  const checkAuth = () => api.get('/api/auth/status').then(setAuth).catch(() => setAuth({ login_required: false, signed_in: true }))
+  useEffect(() => {
+    checkAuth()
+    const out = () => setAuth((a) => (a ? { ...a, signed_in: false } : a))
+    window.addEventListener('govbid:signed-out', out)
+    return () => window.removeEventListener('govbid:signed-out', out)
+  }, [])
+  if (!auth) return null
+  if (!auth.signed_in) return <Login onDone={checkAuth} />
+  return <Shell auth={auth} />
+}
+
+function Login({ onDone }) {
+  const [u, setU] = useState('')
+  const [p, setP] = useState('')
+  const [err, setErr] = useState('')
+  const [busy, setBusy] = useState(false)
+  const submit = async (e) => {
+    e.preventDefault(); setErr(''); setBusy(true)
+    try { await api.post('/api/auth/login', { username: u, password: p }); await onDone() } catch (x) { setErr(x.message) }
+    setBusy(false)
+  }
+  return (
+    <div className="login-wrap">
+      <form className="panel login-box" onSubmit={submit}>
+        <div className="brand-dark">GovBid<span>Pro</span></div>
+        <label className="f">Username<input autoFocus autoComplete="username" value={u} onChange={(e) => setU(e.target.value)} /></label>
+        <label className="f">Password<input type="password" autoComplete="current-password" value={p} onChange={(e) => setP(e.target.value)} /></label>
+        {err && <div className="err">{err}</div>}
+        <button className="primary" disabled={busy || !u || !p}>{busy ? 'Signing in…' : 'Sign in'}</button>
+      </form>
+    </div>
+  )
+}
+
+export const AuthContext = createContext(null)
+export const useAuth = () => useContext(AuthContext)
+
+function Shell({ auth }) {
   const [meta, setMeta] = useState(null)
   useEffect(() => {
     api.get('/api/meta').then(setMeta).catch(() => setMeta({ set_asides: {}, certifications: {}, pipeline_stages: [] }))
   }, [])
+  const logout = async () => { await api.post('/api/auth/logout', {}); window.location.reload() }
 
   return (
+    <AuthContext.Provider value={auth}>
     <MetaContext.Provider value={meta}>
       <div className="layout">
         <nav className="nav">
@@ -66,6 +108,7 @@ export default function App() {
             SAM.gov key: {meta?.sam_key_configured ? 'set' : 'missing'}
             <br />
             AI analysis: {meta?.ai_configured ? 'on' : 'rule-based'}
+            {auth.login_required && <><br /><button className="link navlink" onClick={logout}>Sign out ({auth.username})</button></>}
           </div>
         </nav>
         <main className="main">
@@ -96,6 +139,7 @@ export default function App() {
         </main>
       </div>
     </MetaContext.Provider>
+    </AuthContext.Provider>
   )
 }
 

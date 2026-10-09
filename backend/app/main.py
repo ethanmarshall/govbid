@@ -58,6 +58,20 @@ from .search_api import router as search_router  # noqa: E402
 for _r in (standards_router, crm_router, cmmc_router, past_performance_router, drawings_router, nsn_router, insights_router,
            jobs_router, quality_router, finance_router, workbook_router, flowdown_router, sar_router, search_router):
     app.include_router(_r)
+from . import auth as auth_mod  # noqa: E402
+
+app.include_router(auth_mod.router)
+from .backup import router as backup_router  # noqa: E402
+
+app.include_router(backup_router)
+app.middleware("http")(auth_mod.middleware)
+
+
+@app.get("/api/health", include_in_schema=False)
+def health():
+    return {"ok": True}
+
+
 app.add_middleware(CORSMiddleware, allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"], allow_methods=["*"], allow_headers=["*"])
 
 

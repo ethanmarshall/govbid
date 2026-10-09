@@ -99,6 +99,12 @@ def cmd_watch(args) -> None:
         print(f"Error: {e}")
 
 
+def cmd_backup(args) -> None:
+    from .backup import make_backup
+
+    print(f"Backup written: {make_backup(args.out)}")
+
+
 def main() -> None:
     init_db()
     ap = argparse.ArgumentParser(prog="govbid")
@@ -118,6 +124,9 @@ def main() -> None:
     w = sub.add_parser("watch", help="re-check tracked SAM.gov opportunities for amendments")
     w.add_argument("--max", type=int, default=20, help="most SAM.gov requests to use")
     w.set_defaults(func=cmd_watch)
+    bk = sub.add_parser("backup", help="zip the database and uploaded files")
+    bk.add_argument("--out", default="backups", help="folder for the zip (default backups/)")
+    bk.set_defaults(func=cmd_backup)
     args = ap.parse_args()
     args.func(args)
 

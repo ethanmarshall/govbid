@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { api } from '../api'
-import { DaysLeft, EligBadge } from '../App.jsx'
+import { DaysLeft, EligBadge, useAuth } from '../App.jsx'
 
 export default function Dashboard() {
   const [d, setD] = useState(null)
@@ -19,7 +19,9 @@ export default function Dashboard() {
       load()
     } catch (e) { setWatch(e.message) }
   }
-  const icsUrl = `${window.location.origin}/api/calendar.ics`
+  const auth = useAuth()
+  const icsUrl = `${window.location.origin}/api/calendar.ics${auth?.calendar_token ? `?token=${auth.calendar_token}` : ''}`
+  const icsBlocked = auth?.login_required && !auth?.calendar_token
   const copyIcs = async () => { try { await navigator.clipboard.writeText(icsUrl); setCopied(true); setTimeout(() => setCopied(false), 1500) } catch {} }
   if (err) return <div className="err">{err}</div>
   if (!d) return <p className="muted">Loading…</p>
@@ -134,8 +136,9 @@ export default function Dashboard() {
             </>
           )}
           <h3>Calendar</h3>
-          <p className="small" style={{ margin: 0 }}>Due dates, follow-ups and renewals as a calendar. In Apple Calendar choose File &gt; New Calendar Subscription and paste this address; it refreshes while GovBid Pro is running on this Mac. For Google Calendar, download the .ics and import it.</p>
+          <p className="small" style={{ margin: 0 }}>Due dates, follow-ups and renewals as a calendar. In Apple Calendar choose File &gt; New Calendar Subscription and paste this address; it refreshes on its own. Google Calendar can subscribe with this address too (Other calendars, From URL) when the site is online.</p>
           <div className="row" style={{ marginTop: 6 }}><span className="mono small">{icsUrl}</span><button className="link" onClick={copyIcs}>{copied ? 'Copied' : 'Copy'}</button><a className="small" href="/api/calendar.ics">Download .ics</a></div>
+          {icsBlocked && <p className="small due-soon">Set CALENDAR_TOKEN on the server to subscribe from a calendar app; the download link still works while you are signed in.</p>}
         </div>
       </div>
     </>

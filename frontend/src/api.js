@@ -8,6 +8,7 @@ async function request(method, url, body, isForm = false) {
     }
   }
   const res = await fetch(url, opts)
+  if (res.status === 401 && !url.startsWith('/api/auth/')) window.dispatchEvent(new Event('govbid:signed-out'))
   if (!res.ok) {
     let msg = `${res.status} ${res.statusText}`
     try {

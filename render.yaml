@@ -1,0 +1,34 @@
+# Render Blueprint: New > Blueprint in the Render dashboard, pick this repo.
+services:
+  - type: web
+    runtime: docker
+    name: govbid
+    plan: 1c-2g            # STEP reading (OpenCascade) needs about 1 GB or more of memory
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /api/health
+    autoDeployTrigger: commit
+    disk:
+      name: govbid-data
+      mountPath: /var/data
+      sizeGB: 5
+    envVars:
+      - key: DATABASE_URL
+        value: sqlite:////var/data/govbid.db
+      - key: UPLOAD_DIR
+        value: /var/data/uploads
+      - key: APP_USERNAME
+        sync: false
+      - key: APP_PASSWORD
+        sync: false
+      - key: SESSION_SECRET
+        generateValue: true
+      - key: CALENDAR_TOKEN
+        generateValue: true
+      - key: COOKIE_SECURE
+        value: "1"
+      - key: SAM_API_KEY
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: APP_URL
+        sync: false

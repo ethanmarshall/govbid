@@ -44,6 +44,26 @@ Built for a service-disabled veteran-owned small business that is still finishin
 | **Search everything** | One search across package sections, the content library, past performance, opportunities and analyses, part quotes, standards notes, contacts and SARs, with copy and insert-into-package. |
 | **Daily digest** | `python -m app.cli digest --days 1 --watch --email` sends new matches with bid scores, due dates, amendments, follow-ups and alerts from every module. Preview it at `/api/search/digest-preview`. |
 
+## Run it as a website (Render)
+
+The repo includes a `Dockerfile` and a Render Blueprint (`render.yaml`). Render builds the app from GitHub and redeploys on every push.
+
+1. Sign up at render.com with your GitHub account and allow it to read the `govbid` repo.
+2. In the Render dashboard choose **New > Blueprint**, pick the repo, and confirm.
+3. Fill in the values it asks for:
+   - `APP_USERNAME` and `APP_PASSWORD`: your login. Use a long password; the site is on the public internet.
+   - `SAM_API_KEY`, `ANTHROPIC_API_KEY`: your keys (leave blank to add later).
+   - `APP_URL`: the site address Render gives you, for links in the digest email.
+   `SESSION_SECRET` and `CALENDAR_TOKEN` are generated for you.
+4. Wait for the first build (several minutes; the CAD library is large), then open the URL and sign in.
+
+Notes:
+- The database and uploads live on a 5 GB persistent disk mounted at `/var/data`. A disk needs a paid instance type, and the service runs as a single instance. Check Render's current pricing.
+- The container refuses to start without `APP_PASSWORD`, so the site is never open by accident.
+- Download a full backup any time at `/api/admin/backup` while signed in (database plus every uploaded file).
+- The calendar subscription address on the Dashboard includes its own token, because calendar apps cannot sign in. Keep that link private.
+- The MCP server for agents runs on your own computer against a local database; it does not talk to the hosted site.
+
 ## Setup
 
 Requires Python 3.11+ and Node 18+. STEP reading uses `cadquery-ocp` (OpenCascade), which pip installs as a prebuilt wheel on Windows, macOS and Linux.
@@ -182,6 +202,7 @@ python -m app.cli sync --days 3
 python -m app.cli digest --days 1            # prints to the console
 python -m app.cli digest --days 1 --email    # sends via SMTP settings in .env
 python -m app.cli watch                      # re-check pipeline opportunities for amendments
+python -m app.cli backup                     # zip the database and uploads into backups/
 ```
 
 Add those to cron (Linux/macOS) or Task Scheduler (Windows) to run each morning.
