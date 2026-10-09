@@ -75,7 +75,7 @@ class QuoteIn(BaseModel):
     wires: list[dict] = Field(default_factory=list)  # harness
     bom: list[dict] = Field(default_factory=list)  # harness connectors, contacts, backshells, accessories
     lines: list[dict] = Field(default_factory=list)  # panel BOM or label lines
-    quantities: list[int] = Field(default_factory=lambda: [1, 5, 10])
+    quantities: list[int] = Field(default_factory=lambda: [1])
     options: dict = Field(default_factory=dict)
     name: str = ""
     part_number: str = ""

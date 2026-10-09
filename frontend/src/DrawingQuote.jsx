@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { api } from './api'
+import { BuildQtyInput, buildList, toBuild } from './qty'
 
 const usd = (n) => (n == null ? '' : `$${Number(n).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`)
 const PROC = { cnc_mill: 'CNC milling', cnc_lathe: 'CNC turning', sheet_metal: 'Sheet metal', '3d_print': '3D printing' }
@@ -8,7 +9,7 @@ const PROC = { cnc_mill: 'CNC milling', cnc_lathe: 'CNC turning', sheet_metal: '
 // Price a part from its PDF drawing alone (no STEP model). The user confirms the sizes the reader found.
 export default function DrawingQuote({ drawing, cadOpts, statuses, oppId, onSaved }) {
   const [inp, setInp] = useState({}) // user overrides
-  const [qtyText, setQtyText] = useState('1, 10, 50')
+  const [qtyText, setQtyText] = useState('1') // units to build
   const [r, setR] = useState(null)
   const [err, setErr] = useState('')
   const [pick, setPick] = useState(null)
@@ -25,7 +26,7 @@ export default function DrawingQuote({ drawing, cadOpts, statuses, oppId, onSave
     api.get('/api/opportunities?' + new URLSearchParams({ my_naics_only: 'false', limit: 200 })).then((x) => setOpps(x.results)).catch(() => {})
   }, [])
 
-  const quantities = [...new Set(qtyText.split(/[ ,]+/).map(Number).filter((n) => n > 0 && Number.isInteger(n)))].sort((a, b) => a - b)
+  const quantities = buildList(qtyText)
 
   useEffect(() => {
     clearTimeout(timer.current)
@@ -33,7 +34,7 @@ export default function DrawingQuote({ drawing, cadOpts, statuses, oppId, onSave
       try {
         const x = await api.post(`/api/drawings/${drawing.drawing_id}/quote`, { overrides: inp, quantities, use_ai: useAi })
         setR(x); setErr('')
-        setPick((p) => (x.estimate.price_breaks.some((b) => b.quantity === p) ? p : x.estimate.price_breaks[0]?.quantity))
+        setPick(toBuild(qtyText))
       } catch (e) { setErr(e.message); if (useAi) setUseAi(false) }
     }, 350)
     return () => clearTimeout(timer.current)
@@ -115,7 +116,7 @@ export default function DrawingQuote({ drawing, cadOpts, statuses, oppId, onSave
             <label className="f">Tolerance
               <select value={v('tolerance') || 'standard'} onChange={(e) => set('tolerance', e.target.value)}>{cadOpts.tolerances.map((t) => <option key={t}>{t}</option>)}</select>
             </label>
-            <label className="f">Quantities<input value={qtyText} onChange={(e) => setQtyText(e.target.value)} /></label>
+            <BuildQtyInput value={qtyText} onChange={setQtyText} label="Parts to build" />
           </div>
           <div className="row" style={{ gap: 6, marginTop: 8 }}>
             {(isPrint ? cadOpts.print_finishes : cadOpts.finishes).map((f) => {

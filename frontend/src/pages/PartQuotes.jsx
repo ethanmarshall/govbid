@@ -11,6 +11,7 @@ import FlatQuote from './FlatQuote'
 import BoxBuildQuote from './BoxBuildQuote'
 import QuoteInsights from './QuoteInsights'
 import QuoteActions from '../QuoteActions'
+import { BuildQtyInput, buildFromSaved, buildList, toBuild } from '../qty'
 
 const usd = (n) => (n == null ? '' : `$${Number(n).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`)
 
@@ -51,7 +52,7 @@ const setPath = (o, p, v) => {
 }
 
 const blankSpec = () => ({
-  name: '', part_number: '', nsn: '', quantities: [10, 50, 100], material: '6061-T6 aluminum',
+  name: '', part_number: '', nsn: '', quantities: [1], material: '6061-T6 aluminum',
   stock: { shape: 'plate', dims: {} }, tolerance: 'standard', operations: [], finishes: [],
   inspection: { first_article: false }, packaging: { level: 'commercial' }, approved_source_required: true,
 })
@@ -98,7 +99,7 @@ export default function PartQuotes() {
 // ------------------------------------------------------------------ builder
 function QuoteBuilder({ meta, quoteId, oppId, onSaved }) {
   const [spec, setSpec] = useState(blankSpec)
-  const [qtyText, setQtyText] = useState('10, 50, 100')
+  const [qtyText, setQtyText] = useState('1') // units to build
   const [result, setResult] = useState(null)
   const [err, setErr] = useState('')
   const [quote, setQuote] = useState({ opportunity_id: oppId ? Number(oppId) : null, status: 'draft', quoted_quantity: '', quoted_unit_price: '', notes: '' })
@@ -112,7 +113,7 @@ function QuoteBuilder({ meta, quoteId, oppId, onSaved }) {
   useEffect(() => {
     if (!quoteId) return
     api.get(`/api/pricing/quotes/${quoteId}`).then((q) => {
-      setSpec(q.spec); setQtyText((q.spec.quantities || []).join(', ')); setResult(q.result)
+      setSpec(q.spec); setQtyText(String(buildFromSaved(q.spec.quantities, q.quoted_quantity))); setResult(q.result)
       setQuote({ opportunity_id: q.opportunity_id, status: q.status, quoted_quantity: q.quoted_quantity ?? '', quoted_unit_price: q.quoted_unit_price ?? '', notes: q.notes || '' })
     })
   }, [quoteId])
@@ -123,13 +124,17 @@ function QuoteBuilder({ meta, quoteId, oppId, onSaved }) {
     try { pre = JSON.parse(sessionStorage.getItem('govbid:manual-prefill') || 'null'); sessionStorage.removeItem('govbid:manual-prefill') } catch {}
     if (!pre?.spec) return
     setSpec({ ...blankSpec(), ...pre.spec })
-    setQtyText((pre.spec.quantities || [1]).join(', '))
+    setQtyText(String(buildFromSaved(pre.spec.quantities)))
     setFromDrawing(pre)
     setQuote((q) => ({ ...q, notes: q.notes || `Manual quote: the drawing reader was not sure (${(pre.reasons || []).join(' ')}) Values checked against ${pre.drawing || 'the drawing'}.` }))
   }, [quoteId])
   useEffect(() => {
     if (!oppId || quoteId) return
-    api.get(`/api/opportunities/${oppId}`).then((o) => setSpec((s) => ({ ...s, name: s.name || o.title, nsn: s.nsn || o.nsn || '', quantities: o.quantity && Number(o.quantity) ? [Number(o.quantity)] : s.quantities })))
+    api.get(`/api/opportunities/${oppId}`).then((o) => {
+      const n = o.quantity && Number(o.quantity) ? toBuild(o.quantity) : null
+      if (n) { setQtyText(String(n)); setQuote((x) => ({ ...x, quoted_quantity: n })) }
+      setSpec((s) => ({ ...s, name: s.name || o.title, nsn: s.nsn || o.nsn || '', quantities: n ? buildList(n) : s.quantities }))
+    })
       .then(() => {}).catch(() => {})
   }, [oppId, quoteId])
 
@@ -148,8 +153,8 @@ function QuoteBuilder({ meta, quoteId, oppId, onSaved }) {
   const num = (v) => (v === '' ? '' : Number(v))
   const setQty = (t) => {
     setQtyText(t)
-    const q = t.split(/[ ,]+/).map(Number).filter((n) => n > 0)
-    if (q.length) upd('quantities', q)
+    upd('quantities', buildList(t))
+    setQuote((x) => ({ ...x, quoted_quantity: toBuild(t) }))
   }
   const addOp = (type) => setSpec((s) => ({ ...s, operations: [...s.operations, { type, ...(type === 'cnc_mill' || type === 'cnc_lathe' ? { setups: 1 } : {}), ...(type === 'weld' ? { process: 'mig', fixture: true } : {}) }] }))
   const updOp = (i, path, v) => setSpec((s) => ({ ...s, operations: s.operations.map((o, j) => (j === i ? setPath(o, path, v) : o)) }))
@@ -183,15 +188,15 @@ function QuoteBuilder({ meta, quoteId, oppId, onSaved }) {
         <div className="panel">
           <div className="row spread"><h2 style={{ margin: 0 }}>Part</h2>
             <div className="row">
-              <button className="link" onClick={() => { setSpec(meta.example_spec); setQtyText(meta.example_spec.quantities.join(', ')) }}>Load example</button>
-              <button className="link" onClick={() => { setSpec(blankSpec()); setQtyText('10, 50, 100'); setResult(null) }}>Clear</button>
+              <button className="link" onClick={() => { setSpec({ ...meta.example_spec, quantities: buildList(Math.max(...meta.example_spec.quantities)) }); setQtyText(String(Math.max(...meta.example_spec.quantities))) }}>Load example</button>
+              <button className="link" onClick={() => { setSpec(blankSpec()); setQtyText('1'); setResult(null) }}>Clear</button>
             </div>
           </div>
           <div className="grid g3" style={{ marginTop: 10 }}>
             <label className="f" style={{ gridColumn: 'span 3' }}>Name<input value={spec.name || ''} onChange={(e) => upd('name', e.target.value)} placeholder="Bracket, mounting" /></label>
             <label className="f">Part number<input value={spec.part_number || ''} onChange={(e) => upd('part_number', e.target.value)} /></label>
             <label className="f">NSN<input value={spec.nsn || ''} onChange={(e) => upd('nsn', e.target.value)} placeholder="5340-01-…" /></label>
-            <label className="f">Quantities to price<input value={qtyText} onChange={(e) => setQty(e.target.value)} placeholder="10, 50, 100" /></label>
+            <BuildQtyInput value={qtyText} onChange={setQty} label="Parts to build" />
             <label className="f">Material
               <select value={spec.material} onChange={(e) => upd('material', e.target.value)}>{meta.materials.map((m) => <option key={m}>{m}</option>)}</select>
             </label>

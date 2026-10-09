@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { BuildQtyInput, buildFromSaved, buildList, toBuild } from '../qty'
 import { Link } from 'react-router-dom'
 import { api } from '../api'
 import QuoteActions from '../QuoteActions'
@@ -31,7 +32,7 @@ async function download(url, body, filename) {
 export default function ExtrusionQuote({ meta, quoteId, oppId, onSaved }) {
   const [cat, setCat] = useState(null)
   const [lines, setLines] = useState([])
-  const [qtyText, setQtyText] = useState('1, 5, 10')
+  const [qtyText, setQtyText] = useState('1') // units to build
   const [opts, setOpts] = useState({ pricing_mode: '', packaging_level: 'commercial', first_article: false, joints: '', freight_per_lot: '' })
   const [head, setHead] = useState({ name: '', part_number: '', nsn: '' })
   const [source, setSource] = useState({})
@@ -58,7 +59,7 @@ export default function ExtrusionQuote({ meta, quoteId, oppId, onSaved }) {
     api.get(`/api/extrusion/quotes/${quoteId}`).then((q) => {
       const s = q.spec
       setLines(s.lines || [])
-      setQtyText((s.quantities || [1]).join(', '))
+      setQtyText(String(buildFromSaved(s.quantities, q.quoted_quantity)))
       setOpts((o) => ({ ...o, ...(s.options || {}) }))
       setHead({ name: s.name || '', part_number: s.part_number || '', nsn: s.nsn || '' })
       setSource(s.source || {})
@@ -71,7 +72,8 @@ export default function ExtrusionQuote({ meta, quoteId, oppId, onSaved }) {
     api.get(`/api/opportunities/${oppId}`).then((o) => setHead((h) => ({ ...h, name: h.name || o.title, nsn: h.nsn || o.nsn || '' }))).catch(() => {})
   }, [oppId])
 
-  const quantities = useMemo(() => [...new Set(qtyText.split(/[\s,]+/).map(Number).filter((n) => Number.isInteger(n) && n > 0))].sort((a, b) => a - b), [qtyText])
+  const quantities = useMemo(() => buildList(qtyText), [qtyText])
+  useEffect(() => { setPick(toBuild(qtyText)) }, [qtyText])
   const cleanOpts = useMemo(() => {
     const o = { ...opts, name: head.name, part_number: head.part_number, nsn: head.nsn }
     Object.keys(o).forEach((k) => { if (o[k] === '' || o[k] == null) delete o[k] })
@@ -189,7 +191,7 @@ export default function ExtrusionQuote({ meta, quoteId, oppId, onSaved }) {
                 <label className="f">Name<input value={head.name} onChange={(e) => setHead({ ...head, name: e.target.value })} /></label>
                 <label className="f">Part / drawing number<input value={head.part_number} onChange={(e) => setHead({ ...head, part_number: e.target.value })} /></label>
                 <label className="f">NSN<input value={head.nsn} onChange={(e) => setHead({ ...head, nsn: e.target.value })} /></label>
-                <label className="f">Build quantities<input value={qtyText} onChange={(e) => setQtyText(e.target.value)} placeholder="1, 5, 10" /></label>
+                <BuildQtyInput value={qtyText} onChange={setQtyText} label="Builds to make" />
                 <label className="f">Profile pricing<select value={opts.pricing_mode} onChange={(e) => setOpts({ ...opts, pricing_mode: e.target.value })}>
                   <option value="">Rates default ({cat.config.pricing_mode === 'stock' ? 'full sticks' : 'cut to length'})</option>
                   <option value="cut_to_length">Supplier cuts to length</option>

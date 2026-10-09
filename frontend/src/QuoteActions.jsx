@@ -45,7 +45,7 @@ function CustomerQuote({ quoteId }) {
       inspection_acceptance: pick('inspection_acceptance', s.inspection_acceptance),
       packaging: o.packaging ?? '',
       notes: o.notes ?? '',
-      quantities: (o.quantities && o.quantities.length ? o.quantities : d.available_quantities),
+      quantities: (o.quantities && o.quantities.length ? o.quantities : (d.default_quantities || d.available_quantities)),
     })
   }).catch((e) => setErr(e.message))
   useEffect(() => { load() }, [quoteId])

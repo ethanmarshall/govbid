@@ -67,7 +67,7 @@ async def parse(file: UploadFile = File(...), use_ai: bool = Form(False), force:
 
 class QuoteIn(BaseModel):
     lines: list[dict] = Field(default_factory=list)
-    quantities: list[int] = Field(default_factory=lambda: [1, 5, 10])
+    quantities: list[int] = Field(default_factory=lambda: [1])
     options: dict = Field(default_factory=dict)
 
 

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { BuildQtyInput, buildFromSaved, buildList, toBuild } from '../qty'
 import { Link } from 'react-router-dom'
 import { api } from '../api'
 import QuoteActions from '../QuoteActions'
@@ -25,7 +26,7 @@ export default function FlatQuote({ meta, quoteId, oppId, onSaved }) {
   const [parts, setParts] = useState([])
   const [opts, setOpts] = useState(defaultOpts)
   const [read, setRead] = useState({ units: 'auto', ignore_layers: '', tolerance_in: '' })
-  const [qtyText, setQtyText] = useState('1, 10, 50')
+  const [qtyText, setQtyText] = useState('1') // units to build
   const [head, setHead] = useState({ name: '', part_number: '', nsn: '' })
   const [est, setEst] = useState(null)
   const [pick, setPick] = useState(null)
@@ -50,7 +51,7 @@ export default function FlatQuote({ meta, quoteId, oppId, onSaved }) {
       setParts(s.parts || [])
       setFiles((s.source?.files) || [])
       setOpts({ ...defaultOpts(), ...(s.options || {}) })
-      setQtyText((s.quantities || [1]).join(', '))
+      setQtyText(String(buildFromSaved(s.quantities, q.quoted_quantity)))
       setHead({ name: s.name || '', part_number: s.part_number || '', nsn: s.nsn || '' })
       setSave({ opportunity_id: q.opportunity_id, status: q.status, notes: q.notes || '' })
       if (q.quoted_quantity) setPick(q.quoted_quantity)
@@ -61,7 +62,8 @@ export default function FlatQuote({ meta, quoteId, oppId, onSaved }) {
     api.get(`/api/opportunities/${oppId}`).then((x) => setHead((h) => ({ ...h, name: h.name || x.title, nsn: h.nsn || x.nsn || '' }))).catch(() => {})
   }, [oppId])
 
-  const quantities = useMemo(() => [...new Set(qtyText.split(/[\s,]+/).map(Number).filter((n) => Number.isInteger(n) && n > 0))].sort((a, b) => a - b), [qtyText])
+  const quantities = useMemo(() => buildList(qtyText), [qtyText])
+  useEffect(() => { setPick(toBuild(qtyText)) }, [qtyText])
   const cleanOpts = useMemo(() => {
     const c = { ...opts }
     Object.keys(c).forEach((k) => { if (c[k] === '' || c[k] == null) delete c[k] })
@@ -235,7 +237,7 @@ export default function FlatQuote({ meta, quoteId, oppId, onSaved }) {
                   </select>
                   {!thicknessKnown && <input type="number" min="0" step="0.001" value={opts.thickness} onChange={(e) => set('thickness', e.target.value === '' ? '' : Number(e.target.value))} placeholder="inches" style={{ marginTop: 4 }} />}
                 </label>
-                <label className="f">Quantities (sets)<input value={qtyText} onChange={(e) => setQtyText(e.target.value)} placeholder="1, 10, 50" /></label>
+                <BuildQtyInput value={qtyText} onChange={setQtyText} label="Sets to make" />
               </div>
 
               <h3>Sheet and nesting</h3>

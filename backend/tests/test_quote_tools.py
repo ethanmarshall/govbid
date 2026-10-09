@@ -269,3 +269,17 @@ def test_deleted_quote_does_not_pass_its_number_to_a_new_quote():
         b = c.post("/api/pricing/quotes", json={"spec": pricing.EXAMPLE_SPEC}).json()
         nb = c.get(f"/api/quote-tools/{b['id']}/customer-quote").json()["number"]
         assert int(nb[-4:]) == int(na[-4:]) + 1  # never reissued, even when SQLite reuses the quote id
+
+
+def test_customer_quote_defaults_to_the_build_quantity():
+    from fastapi.testclient import TestClient
+    from app.main import app
+    from app import pricing
+    with TestClient(app) as c:
+        q = c.post("/api/pricing/quotes", json={"spec": {**pricing.EXAMPLE_SPEC, "quantities": [1, 60]}, "quoted_quantity": 60}).json()
+        prev = c.get(f"/api/quote-tools/{q['id']}/customer-quote").json()
+        assert prev["available_quantities"] == [1, 60] and prev["default_quantities"] == [60]
+        r = c.get(f"/api/quote-tools/{q['id']}/customer-quote.pdf")
+        assert r.status_code == 200
+        lines = c.get(f"/api/quote-tools/{q['id']}/customer-quote").json()["lines"]
+        assert [ln["quantity"] for ln in lines] == [1, 60]  # the preview still lists both for the form

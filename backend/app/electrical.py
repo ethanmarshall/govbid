@@ -1290,7 +1290,7 @@ def price(kind: str, spec: dict, config: dict | None = None) -> dict:
     for k in ("name", "part_number", "nsn"):
         if spec.get(k):
             opts.setdefault(k, spec[k])
-    q = spec.get("quantities") or [1, 5, 10]
+    q = spec.get("quantities") or [1]
     if kind == "harness":
         return price_harness(spec.get("wires") or [], spec.get("bom") or [], config, q, opts)
     if kind == "panel":

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { api } from '../api'
 import QuoteActions from '../QuoteActions'
+import { BuildQtyInput, buildFromSaved, buildList, toBuild } from '../qty'
 
 // ------------------------------------------------------------ shared by HarnessQuote, PanelQuote and LabelQuote
 export const usd = (n) => (n == null ? '' : `$${Number(n).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`)
@@ -210,7 +211,7 @@ export function RatesPanel({ cfgKey, config, title, labels = {}, onSaved }) {
 export function useQuotePage({ kind, quoteId, oppId, onSaved, payload, restore, defaultName, apiBase, catalogUrl = '/api/electrical/catalog', ready }) {
   const base = apiBase || `/api/electrical/${kind}`
   const [cat, setCat] = useState(null)
-  const [qtyText, setQtyText] = useState('1, 5, 10')
+  const [qtyText, setQtyText] = useState('1') // units to build; priced at 1 unit and at this quantity
   const [head, setHead] = useState({ name: '', part_number: '', nsn: '' })
   const [source, setSource] = useState({})
   const [est, setEst] = useState(null)
@@ -227,7 +228,7 @@ export function useQuotePage({ kind, quoteId, oppId, onSaved, payload, restore, 
     api.get(`${base}/quotes/${quoteId}`).then((q) => {
       const s = q.spec
       restore(s)
-      setQtyText((s.quantities || [1]).join(', '))
+      setQtyText(String(buildFromSaved(s.quantities, q.quoted_quantity)))
       setHead({ name: s.name || '', part_number: s.part_number || '', nsn: s.nsn || '' })
       setSource(s.source || {})
       setSave({ opportunity_id: q.opportunity_id, status: q.status, notes: q.notes || '' })
@@ -236,9 +237,13 @@ export function useQuotePage({ kind, quoteId, oppId, onSaved, payload, restore, 
   }, [quoteId])
   useEffect(() => {
     if (!oppId || quoteId) return
-    api.get(`/api/opportunities/${oppId}`).then((o) => setHead((h) => ({ ...h, name: h.name || o.title, nsn: h.nsn || o.nsn || '' }))).catch(() => {})
+    api.get(`/api/opportunities/${oppId}`).then((o) => {
+      setHead((h) => ({ ...h, name: h.name || o.title, nsn: h.nsn || o.nsn || '' }))
+      if (o.quantity && Number(o.quantity) > 0) setQtyText(String(toBuild(o.quantity))) // build what the RFQ asks for
+    }).catch(() => {})
   }, [oppId])
-  const quantities = useMemo(() => parseQtys(qtyText), [qtyText])
+  const quantities = useMemo(() => buildList(qtyText), [qtyText])
+  useEffect(() => { setPick(toBuild(qtyText)) }, [qtyText])
   const body = { ...payload, quantities, name: head.name, part_number: head.part_number, nsn: head.nsn }
   const hasLines = ready ?? ((payload.lines?.length || 0) + (payload.wires?.length || 0) + (payload.bom?.length || 0) > 0)
   useEffect(() => {
@@ -272,7 +277,7 @@ export function HeadFields({ p, unitLabel, children }) {
       <label className="f">Name<input value={p.head.name} onChange={(e) => p.setHead({ ...p.head, name: e.target.value })} /></label>
       <label className="f">Part / drawing number<input value={p.head.part_number} onChange={(e) => p.setHead({ ...p.head, part_number: e.target.value })} /></label>
       <label className="f">NSN<input value={p.head.nsn} onChange={(e) => p.setHead({ ...p.head, nsn: e.target.value })} /></label>
-      <label className="f">{unitLabel} quantities<input value={p.qtyText} onChange={(e) => p.setQtyText(e.target.value)} placeholder="1, 5, 10" /></label>
+      <BuildQtyInput label={`${/s$/.test(unitLabel) ? unitLabel + 'es' : unitLabel + 's'} to build`} value={p.qtyText} onChange={p.setQtyText} />
       {children}
     </div>
   )

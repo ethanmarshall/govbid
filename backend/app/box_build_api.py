@@ -97,7 +97,7 @@ class QuoteIn(BaseModel):
     children: list[dict] = Field(default_factory=list)
     wiring: dict = Field(default_factory=dict)
     labor: dict = Field(default_factory=dict)
-    quantities: list[int] = Field(default_factory=lambda: [1, 5, 10])
+    quantities: list[int] = Field(default_factory=lambda: [1])
     options: dict = Field(default_factory=dict)
     name: str = ""
     part_number: str = ""

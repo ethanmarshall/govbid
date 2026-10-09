@@ -229,7 +229,8 @@ def customer_quote_data(db: Session, quote_id: int, opts: dict | None = None, re
         wanted = {int(x) for x in wanted}
     except (TypeError, ValueError):
         raise QuoteToolError("quantities must be whole numbers")
-    rows = [b for b in breaks if not wanted or b["quantity"] in wanted]
+    default_qty = [pq.quoted_quantity] if pq.quoted_quantity in {b["quantity"] for b in breaks} else [b["quantity"] for b in breaks]
+    rows = [b for b in breaks if (b["quantity"] in wanted if wanted else b["quantity"] in default_qty)]  # default: the quantity you are building
     if not rows:
         raise QuoteToolError(f"None of those quantities are in the quote. Available: {', '.join(str(b['quantity']) for b in breaks)}")
     if remember:

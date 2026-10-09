@@ -182,6 +182,7 @@ def customer_quote_preview(quote_id: int, db: Session = Depends(get_db)):
     avail = [b["quantity"] for b in (pq.result or {}).get("price_breaks") or []]
     d = _guard(quote_tools.customer_quote_data, db, quote_id, {"quantities": avail}, False)  # every line; options unchanged
     d["available_quantities"] = avail
+    d["default_quantities"] = [pq.quoted_quantity] if pq.quoted_quantity in avail else avail  # the quantity being built
     d["settings"] = quote_tools.settings_dict(quote_tools.get_settings(db))
     return d
 

@@ -6,6 +6,7 @@ import QuoteActions from '../QuoteActions'
 import DfmPanel from '../DfmPanel'
 import AssemblyPanel from '../AssemblyPanel'
 import DrawingQuote from '../DrawingQuote'
+import { BuildQtyInput, buildFromSaved, buildList, toBuild } from '../qty'
 import HeatSetInserts from '../HeatSetInserts'
 import StepViewer from '../StepViewer'
 
@@ -24,9 +25,9 @@ export default function InstantQuote({ meta, quoteId, oppId, onSaved, onOpenManu
   const [busy, setBusy] = useState(false)
   const [drag, setDrag] = useState(false)
   const [opts, setOpts] = useState(defaultOpts)
-  const [qtyText, setQtyText] = useState('1, 10, 50, 100')
-  const [qty, setQtyList] = useState([1, 10, 50, 100])
-  const [pick, setPick] = useState(10)
+  const [qtyText, setQtyText] = useState('1') // units to build; priced at 1 unit and at this quantity
+  const [qty, setQtyList] = useState([1])
+  const [pick, setPick] = useState(1)
   const [res, setRes] = useState(null)
   const [err, setErr] = useState('')
   const [showDetail, setShowDetail] = useState(false)
@@ -61,7 +62,8 @@ export default function InstantQuote({ meta, quoteId, oppId, onSaved, onOpenManu
       if (!cad) { onOpenManual(quoteId); return }
       setOpts({ ...defaultOpts(), ...(cad.options || {}), name: q.spec.name || '', part_number: q.spec.part_number || '', nsn: q.spec.nsn || '' })
       const qs = q.spec.quantities || [1]
-      setQtyText(qs.join(', ')); setQtyList(qs); setPick(q.quoted_quantity || qs[0])
+      const n = buildFromSaved(qs, q.quoted_quantity)
+      setQtyText(String(n)); setQtyList(buildList(n)); setPick(n)
       setSave({ opportunity_id: q.opportunity_id, status: q.status, notes: q.notes || '' })
       try { setFile(await api.get(`/api/cad/${cad.file_id}`)) } catch (e) { setErr(`${e.message} (${cad.filename})`) }
       if (cad.options?.drawing_id) api.get(`/api/drawings/${cad.options.drawing_id}`).then(setDrawing).catch(() => {})
@@ -121,8 +123,7 @@ export default function InstantQuote({ meta, quoteId, oppId, onSaved, onOpenManu
 
   const setQty = (t) => {
     setQtyText(t)
-    const q = [...new Set(t.split(/[ ,]+/).map(Number).filter((n) => n > 0 && Number.isInteger(n)))].sort((a, b) => a - b)
-    if (q.length) { setQtyList(q); setPick((p) => (q.includes(p) ? p : q[0])) }
+    setQtyList(buildList(t)); setPick(toBuild(t))
   }
 
   const upload = async (f) => {
@@ -291,7 +292,7 @@ export default function InstantQuote({ meta, quoteId, oppId, onSaved, onOpenManu
                 {cadOpts.tolerances.map((t) => <option key={t} value={t}>{t === 'standard' ? 'Standard (±.005)' : t === 'tight' ? 'Tight (±.002)' : 'Precision (±.0005)'}</option>)}
               </select>
             </label>
-            <label className="f">Quantities<input value={qtyText} onChange={(e) => setQty(e.target.value)} placeholder="1, 10, 50" /></label>
+            <BuildQtyInput value={qtyText} onChange={setQty} label="Parts to build" />
           </div>
 
           <h3>Finish</h3>

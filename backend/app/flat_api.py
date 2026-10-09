@@ -70,7 +70,7 @@ async def parse(files: list[UploadFile] = File(...), units: str = Form("auto"), 
 
 class QuoteIn(BaseModel):
     parts: list[dict] = Field(default_factory=list)
-    quantities: list[int] = Field(default_factory=lambda: [1, 10, 50])
+    quantities: list[int] = Field(default_factory=lambda: [1])
     options: dict = Field(default_factory=dict)
 
 

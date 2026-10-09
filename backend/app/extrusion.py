@@ -912,7 +912,7 @@ def price_build(lines: list[dict], config: dict | None = None, quantities: list[
     mach_price = {m["id"]: m["price"] for m in cat["machining"]}
     lines = normalize_lines(lines)
     try:
-        qtys = sorted({int(q) for q in (quantities or [1, 5, 10]) if int(q) > 0})
+        qtys = sorted({int(q) for q in (quantities or [1]) if int(q) > 0})
     except (TypeError, ValueError):
         raise ExtrusionError("Build quantities must be positive whole numbers")
     if not qtys:
@@ -1137,7 +1137,7 @@ def estimate_spec(spec: dict, config: dict | None = None) -> dict:
         if spec.get(k):
             opts.setdefault(k, spec[k])
     try:
-        return price_build(spec.get("lines") or [], config, spec.get("quantities") or [1, 5, 10], opts)
+        return price_build(spec.get("lines") or [], config, spec.get("quantities") or [1], opts)
     except ExtrusionError as exc:
         raise pricing.SpecError(str(exc)) from exc
 

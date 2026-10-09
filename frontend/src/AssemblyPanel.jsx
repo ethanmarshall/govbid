@@ -44,7 +44,7 @@ export default function AssemblyPanel({ file, cadOpts, quantities, statuses, opp
   const upd = (i, patch) => setRows((rs) => rs.map((r, j) => (j === i ? { ...r, ...patch } : r)))
   const doSave = async () => {
     try {
-      const q = await api.post('/api/pricing/quotes', { spec: res.spec, opportunity_id: oppId ? Number(oppId) : null, status: save.status, notes: save.notes, quoted_quantity: res.price_breaks[0]?.quantity })
+      const q = await api.post('/api/pricing/quotes', { spec: res.spec, opportunity_id: oppId ? Number(oppId) : null, status: save.status, notes: save.notes, quoted_quantity: res.price_breaks.at(-1)?.quantity })
       setMsg(`Saved quote #${q.id}.`); onSaved?.(q.id)
     } catch (e) { setErr(e.message) }
   }
