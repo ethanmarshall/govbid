@@ -458,3 +458,7 @@ ul.checklist li.acc { background: #fdecea; }
   * { -webkit-tap-highlight-color: rgba(181, 70, 44, .12); }
   button, a, label, select, input { touch-action: manipulation; }
 }
+
+/* Assembly drawing found in the drawing quoter */
+.asm-notice { border-left: 3px solid var(--accent); background: #fffaf3; }
+.asm-notice h2 { margin-bottom: 6px; }

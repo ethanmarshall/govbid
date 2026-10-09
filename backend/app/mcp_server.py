@@ -447,7 +447,10 @@ def quote_from_drawing(file_path: str, quantities: list[int] | None = None, mate
     cnc_lathe | sheet_metal | 3d_print. overrides correct what the drawing read got wrong or missed: length,
     width, height (inches), holes, tapped_holes, bends, thickness, max_diameter, finishes, tolerance, name,
     part_number, nsn, first_article, material_certs, packaging, weld_length_in, fill_ratio. Report the
-    confidence and assumptions with the price: the envelope is often a low-confidence guess."""
+    confidence and assumptions with the price: the envelope is often a low-confidence guess. When the drawing is
+    an assembly (enclosure, PCB, switches, several material notes) the result has "assembly" with a
+    box_build_spec read from the notes: do not report the single-part price; price box_build_spec with
+    quote_box_build and tell the user what to check (assembly.assumptions)."""
     from . import drawing, drawing_quote
     pth = Path(file_path).expanduser()
     if not pth.is_file():
@@ -471,9 +474,19 @@ def quote_from_drawing(file_path: str, quantities: list[int] | None = None, mate
             r = drawing_quote.quote(read, geom, o, quotes.get_overrides(db))
         except pricing.SpecError as exc:
             return _err(exc)
-    return {"confidence": r["confidence"], "process": r["spec"]["process"], "inputs": r["inputs"],
-            "price_breaks": r["estimate"]["price_breaks"], "assumptions": r["assumptions"], "warnings": r["estimate"]["warnings"] + read.get("warnings", []),
-            "evidence": geom["evidence"], "spec": r["spec"]}
+    from . import drawing_assembly
+    try:
+        asm = drawing_assembly.analyze(pth, read)
+    except Exception:  # noqa: BLE001
+        asm = None
+    out = {"confidence": "low" if asm else r["confidence"], "process": r["spec"]["process"], "inputs": r["inputs"],
+           "price_breaks": r["estimate"]["price_breaks"], "assumptions": r["assumptions"],
+           "warnings": ([asm["message"]] if asm else []) + r["estimate"]["warnings"] + read.get("warnings", []),
+           "evidence": geom["evidence"], "spec": r["spec"]}
+    if asm:  # an assembly: the single-part price is not meaningful; price box_build with quote_box_build instead
+        out["assembly"] = {"reasons": asm["reasons"], "box_build_spec": {k: v for k, v in asm["box_build"].items() if k not in ("evidence", "assumptions", "fabricated")},
+                           "evidence": asm["box_build"]["evidence"], "assumptions": asm["box_build"]["assumptions"], "custom_parts": asm["box_build"]["fabricated"]}
+    return out
 
 
 @mcp.tool(annotations=READ)

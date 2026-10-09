@@ -24,7 +24,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from . import drawing, drawing_quote, pricing, quotes
+from . import drawing, drawing_assembly, drawing_quote, pricing, quotes
 from .config import UPLOAD_DIR
 from .db import get_db
 
@@ -69,19 +69,28 @@ async def read(file: UploadFile = File(...), use_ai: bool = Form(False), db: Ses
     if filename not in names:
         names.append(filename)
 
-    cached = meta.get("read")
-    # Re-read when there is no cached read, or the caller now asks for the AI pass on a scanned drawing
+    cached = meta.get("read") if meta.get("parser_version") == drawing.PARSER_VERSION else None
+    # Re-read when there is no current cached read, or the caller now asks for the AI pass on a scanned drawing
     if not cached or (use_ai and not cached.get("text_found") and not cached.get("ai_used")):
         try:
             cached = await run_in_threadpool(drawing.read_drawing, pdf_path, use_ai)
         except drawing.DrawingError as exc:
             raise HTTPException(400, str(exc))
-    meta = {"filenames": names, "read": cached}
+    meta = {"filenames": names, "read": cached, "parser_version": drawing.PARSER_VERSION}
+    meta["assembly"] = await run_in_threadpool(_assembly, pdf_path, cached)
     meta_path.write_text(json.dumps(meta))
 
     cfg = quotes.get_config(db)
     opts = drawing.quote_options(cached, materials=list(cfg["materials"]), finishes=list(cfg["finishes"]))
-    return {**cached, "drawing_id": did, "filename": filename, "quote_options": opts}
+    return {**cached, "drawing_id": did, "filename": filename, "quote_options": opts, "assembly": meta["assembly"]}
+
+
+def _assembly(pdf_path, read: dict) -> dict | None:
+    """Assembly drawings are quoted as box builds; None for a single part. Never fails the read."""
+    try:
+        return drawing_assembly.analyze(pdf_path, read)
+    except Exception:  # noqa: BLE001
+        return None
 
 
 @router.get("/{drawing_id}")
@@ -145,6 +154,8 @@ async def quote_from_drawing(drawing_id: str, body: DrawingQuoteIn, db: Session 
     if not pdf_path.exists():
         raise HTTPException(404, "Drawing not found. Upload it again.")
     meta = _meta(meta_path)
+    if meta.get("parser_version") != drawing.PARSER_VERSION:  # read with older rules: start over
+        meta = {"filenames": meta.get("filenames") or [], "parser_version": drawing.PARSER_VERSION}
     read = meta.get("read")
     if not read:
         try:
@@ -157,6 +168,8 @@ async def quote_from_drawing(drawing_id: str, body: DrawingQuoteIn, db: Session 
         geom, warnings = await run_in_threadpool(_geometry, pdf_path, meta, read, body.use_ai, body.force)
     except drawing.DrawingError as exc:
         raise HTTPException(400, str(exc))
+    if "assembly" not in meta:
+        meta["assembly"] = await run_in_threadpool(_assembly, pdf_path, read)
     meta_path.write_text(json.dumps(meta))
     overrides = dict(body.overrides or {})
     if body.quantities:
@@ -165,6 +178,10 @@ async def quote_from_drawing(drawing_id: str, body: DrawingQuoteIn, db: Session 
         r = drawing_quote.quote(read, geom, overrides, quotes.get_overrides(db))
     except pricing.SpecError as exc:
         raise HTTPException(400, str(exc))
+    r["assembly"] = meta.get("assembly")
+    if r["assembly"]:
+        warnings.insert(0, r["assembly"]["message"])
+        r["confidence"] = "low"
     r["warnings"] = warnings
     r["export_controlled"] = bool(read.get("export_controlled"))
     r["distribution"] = (read.get("distribution") or {}).get("letter") or ""

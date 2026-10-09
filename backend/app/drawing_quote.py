@@ -37,7 +37,11 @@ DIA_VALUE = re.compile(DIA + r"\s*" + NUM, re.I)
 DRILL_ONLY = re.compile(r"(?:#\d{1,2}|[A-Z]|\d*\.\d+)\s*DRILL\b|\bDRILL\s*(?:#\d{1,2}|\d*\.\d+)", re.I)
 BEND_LINE = re.compile(r"\bBEND\s*(?:UP|DOWN|DN)\b|\b(?:UP|DOWN|DN)\s*\d{1,3}\s*(?:°|DEG)", re.I)
 BEND_COUNT = re.compile(r"\b(\d{1,2})\s*BENDS\b|\bBENDS?\s*[:=]\s*(\d{1,2})\b", re.I)
-THICK = re.compile(r"(?:\bTHK\.?|\bTHICK(?:NESS)?\.?)\s*[:=]?\s*" + NUM + r"|" + NUM + r"\s*(?:THK|THICK)\b", re.I)
+# '0.125" THK', '.125 IN THICK', 'THK: .125', 'THICKNESS = 3 MM'. A number AFTER the keyword needs ':' or '=' or a
+# decimal point, so 'THK. 5052 ALUMINUM' does not read the alloy number as the thickness.
+THICK = re.compile(NUM + r"\s*(?:\"|''|IN\.?|INCH(?:ES)?|MM)?\s*(?:THK|THICK)\b"
+                   r"|(?:\bTHK\.?|\bTHICK(?:NESS)?\.?)\s*(?:[:=]\s*" + NUM + r"|(\d*\.\d+))", re.I)
+ALLOY_NUMBER = re.compile(r"^(?:1008|1010|1011|1018|1020|1045|2024|3003|4130|4140|5052|5083|6061|6063|7075|8620|303|304|316|410|416|17-4)$")
 GAUGE = re.compile(r"\b(\d{1,2})\s*(?:GA\b\.?|GAUGE\b|GA\.)", re.I)
 SHEET_WORDS = re.compile(r"\bSHEET\s*(?:METAL|STOCK)?\b(?!\s*\d+\s*OF)|FLAT\s*PATTERN|K-?\s*FACTOR|PRESS\s*BRAKE|BEND\s*RADIUS|\bFORMED\b|\bBRAKE\b", re.I)
 LATHE_WORDS = re.compile(r"\bT\.?I\.?R\.?\b|RUNOUT|CONCENTRIC|\bKNURL|UNDERCUT|\bGROOVE|CENTER\s*DRILL|\bTURN(?:ED)?\b|\bCHAMFER\b", re.I)
@@ -184,15 +188,24 @@ def extract_geometry(read: dict, text: str) -> dict:
         bends = n or None
     thickness = None
     for ln in lines:
-        tm = THICK.search(ln)
-        if tm:
-            thickness = round(float(tm.group(1) or tm.group(2)) * k, 4)
+        for tm in THICK.finditer(ln):
+            raw = next(g for g in tm.groups() if g)
+            unit_k = 1 / 25.4 if re.search(r"\bMM\b", tm.group(0) + ln[tm.end(): tm.end() + 4], re.I) else k
+            val = round(float(raw) * unit_k, 4)
+            if ALLOY_NUMBER.match(raw) or not 0.005 <= val <= 6.0:  # an alloy number or not a believable thickness
+                evidence.append(f"{ln}: ignored {raw} as a thickness")
+                continue
+            thickness = val
             evidence.append(f"{ln}: thickness {thickness} in")
+            break
+        if thickness is not None:
             break
     if thickness is None:
         gm = GAUGE.search(t)
         if gm:
-            mat = ((read.get("material") or {}).get("mapped") or (read.get("material") or {}).get("raw") or "").lower()
+            gauge_line = _clean_line(t, gm).lower()  # the gauge's own note says which material it is
+            mat = gauge_line if re.search(r"alum|copper|brass|stainless|cres|steel|\bcrs\b|a1008|a1011", gauge_line) else \
+                ((read.get("material") or {}).get("mapped") or (read.get("material") or {}).get("raw") or "").lower()
             table = GAUGE_ALUMINUM if ("alum" in mat or "copper" in mat or "brass" in mat) else GAUGE_STAINLESS if ("stainless" in mat or "cres" in mat) else GAUGE_STEEL
             g = int(gm.group(1))
             if g in table:
@@ -635,5 +648,20 @@ def quote(read: dict, geom: dict, overrides: dict | None = None, config: dict | 
     est = pricing.estimate(spec, config)
     est["assumptions"] = notes + est["assumptions"]
     inp, _ = effective_inputs(read, geom, overrides, config)
+    est["warnings"] = sanity_warnings(inp, est) + est["warnings"]
     return {"geometry": geom, "inputs": inp, "spec": spec, "estimate": est, "assumptions": est["assumptions"],
             "confidence": geom.get("confidence", "low")}
+
+
+def sanity_warnings(inp: dict, est: dict) -> list[str]:
+    """Catch a misread before it becomes a quote: sizes or material costs no drawing-only part should have."""
+    out = []
+    dims = {k: inp.get(k) for k in ("length", "width", "height", "thickness", "max_diameter") if isinstance(inp.get(k), (int, float))}
+    big = {k: v for k, v in dims.items() if v > (6 if k == "thickness" else 120)}
+    if big:
+        out.append("CHECK THE SIZE: " + ", ".join(f"{k} {v:g} in" for k, v in big.items()) + " is not believable for one part. "
+                   "Correct it below before using this price.")
+    mat = sum(l["cost"] for l in est.get("per_part_lines") or [] if l.get("category") == "material")
+    if mat > 2000:
+        out.append(f"CHECK THE SIZE AND MATERIAL: raw material alone is ${mat:,.0f} per part. That usually means a dimension or thickness was misread.")
+    return out

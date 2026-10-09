@@ -40,10 +40,12 @@ EXCLUDE_CHILD = ("freight", "packaging")  # charged once on the box build, not o
 MAX_DEPTH = 3
 
 COMPONENT_PATTERNS = [  # checked in order against "type hint, description, part number"
+    ("terminal_block", r"TERMINAL\s*(?:BLOCK|STRIP)|BARRIER\s*STRIP"),
     ("hardware", r"\bSCREW|\bNUT\b|\bNUTS\b|WASHER|STANDOFF|SPACER|\bRIVET|\bBOLT|LOCKWASHER|\bPEM\b|CAPTIVE|THREADED INSERT|GROMMET|CABLE TIE|ZIP TIE|HEAT ?SHRINK"),
     ("cable_assembly", r"CABLE ASS|CABLE,|\bCABLE\b|PATCH CORD|JUMPER CABLE|RIBBON|FFC\b|FPC\b"),
     ("circular_connector", r"D?38999|MIL-?DTL-?26482|MIL-?DTL-?5015|MS3\d{3}|MS27\d{3}|PT0\d|CIRCULAR|BAYONET"),
     ("dsub_connector", r"D-?SUB|\bD[ABCDE]-?\d{1,2}[PS]?\b|\bDB-?\d|MICRO-?D|M24308|M83513|HD-?15"),
+    ("test_jack", r"TEST\s*JACK|BANANA|BINDING\s*POST|TIP\s*JACK|\b[24]\s*MM\s*(?:PANEL\s*)?JACK|PIN\s*JACK"),
     ("panel_port", r"\bUSB\b|RJ-?45|ETHERNET JACK|\bBNC\b|\bSMA\b|N-?TYPE|\bTNC\b|FEED-?THRU|FEEDTHROUGH|BULKHEAD|HDMI|DISPLAYPORT"),
     ("power_entry", r"POWER ENTRY|IEC|\bINLET\b|C14|C20|POWER INLET|EMI FILTER|LINE FILTER"),
     ("terminal_block", r"TERMINAL (?:BLOCK|STRIP)|TERM(?:INAL)? BLK|BARRIER STRIP|\bTB\b"),
@@ -451,7 +453,7 @@ def _auto_cutouts(lines: list[dict]) -> dict:
         if ln["mount"] != "panel":
             continue
         t = ln["type"]
-        if t in ("toggle_switch", "pushbutton", "rotary_switch", "keyswitch", "led_indicator", "panel_lamp", "potentiometer", "fuse_holder", "buzzer"):
+        if t in ("toggle_switch", "pushbutton", "rotary_switch", "keyswitch", "led_indicator", "panel_lamp", "potentiometer", "fuse_holder", "buzzer", "test_jack"):
             out["round_holes"] += ln["qty"]
         elif t in ("circular_connector", "dsub_connector", "panel_port"):
             out["connector_cutouts"] += ln["qty"]

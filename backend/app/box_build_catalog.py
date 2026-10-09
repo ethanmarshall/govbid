@@ -15,6 +15,7 @@ COMPONENT_TYPES: dict[str, tuple[str, str]] = {
     "circular_connector": ("Circular connector (MIL-DTL-38999, MIL-DTL-26482, MS)", "crimp"),
     "dsub_connector": ("D-sub or Micro-D connector", "crimp"),
     "panel_port": ("Panel feed-through (USB, Ethernet, BNC, SMA)", "none"),
+    "test_jack": ("Test jack, banana jack or binding post", "quick_connect"),
     "power_entry": ("Power entry module or IEC inlet", "quick_connect"),
     "terminal_block": ("Terminal block or terminal strip", "screw"),
     "led_indicator": ("LED indicator", "solder"),
@@ -44,7 +45,7 @@ def default_config() -> dict:
     comp = {  # placeholder price, mount minutes, wire terminations and cable mates per item
         "toggle_switch": (12.0, 4.0, 3, 0), "rocker_switch": (4.0, 3.0, 2, 0), "pushbutton": (8.0, 4.0, 2, 0),
         "rotary_switch": (15.0, 6.0, 6, 0), "keyswitch": (25.0, 6.0, 2, 0), "circular_connector": (60.0, 10.0, 8, 0),
-        "dsub_connector": (6.0, 6.0, 9, 0), "panel_port": (15.0, 5.0, 0, 2), "power_entry": (20.0, 6.0, 3, 0),
+        "dsub_connector": (6.0, 6.0, 9, 0), "panel_port": (15.0, 5.0, 0, 2), "test_jack": (3.0, 3.0, 1, 0), "power_entry": (20.0, 6.0, 3, 0),
         "terminal_block": (3.0, 2.0, 2, 0), "led_indicator": (2.0, 3.0, 2, 0), "panel_lamp": (8.0, 4.0, 2, 0),
         "display": (60.0, 20.0, 0, 2), "knob": (3.0, 1.0, 0, 0), "potentiometer": (5.0, 4.0, 3, 0),
         "fuse_holder": (4.0, 4.0, 2, 0), "circuit_breaker": (25.0, 5.0, 2, 0), "fan": (15.0, 8.0, 2, 0),

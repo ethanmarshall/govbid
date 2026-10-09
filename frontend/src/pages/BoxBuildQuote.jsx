@@ -56,6 +56,18 @@ export default function BoxBuildQuote({ meta, quoteId, oppId, onSaved }) {
       setWiring({ mark_wires: true, ...(s.wiring || {}) }); setLabor((l) => ({ ...l, ...(s.labor || {}) })); setOpts((o) => ({ ...o, ...(s.options || {}) }))
     } })
 
+  useEffect(() => { // opened from an assembly drawing: start from what was read on it
+    if (quoteId) return
+    let pre = null
+    try { pre = JSON.parse(sessionStorage.getItem('govbid:box-prefill') || 'null'); sessionStorage.removeItem('govbid:box-prefill') } catch {}
+    if (!pre) return
+    setEnclosure({ ...blankEnclosure, ...(pre.enclosure || {}), mods: { auto_cutouts: true, ...(pre.enclosure?.mods || {}) } })
+    setPcbs(pre.pcbs || []); setLines(pre.lines || []); setPeripherals(pre.peripherals || []); setChildren(pre.children || [])
+    setWiring((w) => ({ ...w, ...(pre.wiring || {}) })); setLabor((l) => ({ ...l, ...(pre.labor || {}) })); setOpts((o) => ({ ...o, ...(pre.options || {}) }))
+    p.setHead((h) => ({ ...h, name: pre.name || h.name, part_number: pre.part_number || h.part_number }))
+    setParseInfo({ warnings: pre.assumptions || [], evidence: pre.evidence || [], fromDrawing: true })
+  }, [quoteId])
+
   const uploadBom = async (file) => {
     if (!file) return
     setBusy(true); p.setErr(''); p.setMsg('')
@@ -100,7 +112,9 @@ export default function BoxBuildQuote({ meta, quoteId, oppId, onSaved }) {
           smallText="Drop another assembly BOM to add its lines"
           hint="CSV, XLSX or PDF with Part number or Description and Qty columns. Lines are sorted into enclosure, circuit boards, panel parts and peripherals. Or start empty with the buttons below." />
         {p.err && <div className="err" style={{ marginTop: 10 }}>{p.err}</div>}
+        {parseInfo?.fromDrawing && <p className="small" style={{ marginTop: 10 }}><b>Started from the assembly drawing.</b> Check each section against the drawing: the values below were read from its notes and dimensions.</p>}
         {parseInfo?.warnings?.length > 0 && <ul className="clean small" style={{ marginTop: 10 }}>{parseInfo.warnings.map((w, i) => <li key={i} className="due-soon">{w}</li>)}</ul>}
+        {parseInfo?.evidence?.length > 0 && <details className="small muted" style={{ marginTop: 6 }}><summary>What was read from the drawing ({parseInfo.evidence.length})</summary><ul className="clean">{parseInfo.evidence.map((x, i) => <li key={i}>{x}</li>)}</ul></details>}
         <div className="row" style={{ marginTop: 10, flexWrap: 'wrap' }}>
           <button onClick={() => setPcbs((b) => [...b, blankPcb(b.length + 1)])}>+ Circuit board</button>
           <button onClick={() => setLines((l) => [...l, blankLine()])}>+ Part</button>

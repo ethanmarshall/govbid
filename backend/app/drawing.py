@@ -26,9 +26,14 @@ MATERIAL_STRONG: list[tuple[str, str]] = [
     (r"QQ-A-250/12|AMS\s*-?\s*4078|\b7075\s*-?\s*T\d+|\bAL(?:UM(?:INUM)?)?\.?\s*7075|ASTM\s*B\s*-?\s*209\D{0,30}7075|ASTM\s*B\s*-?\s*211\D{0,30}7075|ASTM\s*B\s*-?\s*221\D{0,30}7075", "7075-T6 aluminum"),
     (r"QQ-A-250/11|AMS\s*-?\s*4027|\b6061\s*-?\s*T\d+|\bAL(?:UM(?:INUM)?)?\.?\s*6061|ASTM\s*B\s*-?\s*(?:209|211|221|308)\D{0,30}6061", "6061-T6 aluminum"),
     (r"QQ-A-250/8|\b5052\s*-?\s*H\d+|\bAL(?:UM(?:INUM)?)?\.?\s*5052|ASTM\s*B\s*-?\s*209\D{0,30}5052", "5052-H32 aluminum"),
+    (r"\b7075\s*(?:-?\s*T\d+)?\s*AL(?:UM(?:INUM)?)?\b", "7075-T6 aluminum"),
+    (r"\b6061\s*(?:-?\s*T\d+)?\s*AL(?:UM(?:INUM)?)?\b", "6061-T6 aluminum"),
+    (r"\b5052\s*(?:-?\s*H\d+)?\s*AL(?:UM(?:INUM)?)?\b", "5052-H32 aluminum"),
     (r"\b316L?\s*(?:CRES|SS|STAINLESS)|CRES\s*316|AISI\s*316|UNS\s*S3160\d|ASTM\s*A\s*-?\s*(?:240|276|479)\D{0,30}316", "316 stainless"),
     (r"\b304L?\s*(?:CRES|SS|STAINLESS)|CRES\s*304|AISI\s*304|UNS\s*S3040\d|ASTM\s*A\s*-?\s*(?:240|276|479)\D{0,30}304", "304 stainless"),
     (r"\b4140\s*(?:STEEL|ALLOY|HT|Q&T|ANNEALED)|AISI\s*4140|SAE\s*4140|UNS\s*G41400", "4140 steel"),
+    # Mild / low-carbon sheet and plate (A1008 cold rolled, A1011 hot rolled, 1008-1020, CRS, HRS): priced as the app's mild steel
+    (r"\bA\s*-?\s*10(?:08|11|18)\b|\b10(?:08|10|20)\s*(?:STEEL|CRS|HRS|CR\b|HR\b)|MILD\s*(?:CARBON\s*)?STEEL|LOW\s*CARBON\s*STEEL|COLD\s*ROLLED\s*STEEL|HOT\s*ROLLED\s*STEEL|\bCRS\b|\bHRS\b|\bHRPO\b", "A36 / 1018 steel"),
     (r"ASTM\s*A\s*-?\s*36\b|\b1018\s*(?:STEEL|CRS|HRS|CF)|AISI\s*1018|SAE\s*1018|UNS\s*G10180|ASTM\s*A\s*-?\s*108\D{0,30}1018", "A36 / 1018 steel"),
     (r"\bC\s*36000\b|\b360\s*BRASS|BRASS\s*,?\s*(?:ALLOY\s*)?360|FREE[- ]CUTTING\s*BRASS|ASTM\s*B\s*-?\s*16\b", "brass 360"),
     (r"\bC\s*11000\b|COPPER\s*,?\s*(?:ALLOY\s*)?110\b|\bCU\s*110\b|\bETP\s*COPPER", "copper 110"),
@@ -77,8 +82,10 @@ PART_NUMBER = re.compile(r"\b(?:PART\s*(?:NO|NUMBER|NUM)\.?|P\s*/\s*N|PN)\s*[:#.
 DRAWING_NUMBER = re.compile(r"\b(?:DWG|DRAWING)\s*(?:NO|NUMBER|NUM)?\.?\s*[:#.]?\s*([A-Z0-9][A-Z0-9\-./]{2,30})", re.I)
 CAGE = re.compile(r"\bCAGE\s*(?:CODE|NO\.?)?\s*[:#]?\s*([0-9A-HJ-NP-Z]{5})\b", re.I)
 REVISION = re.compile(r"\bREV(?:ISION)?\.?\s*(?:LEVEL)?\s*[:#]?\s*([A-HJ-NPR-Y]{1,2}|\d{1,3})\b(?!\s*(?:DESCRIPTION|DATE|APPROVED|ZONE))")
-TITLE = re.compile(r"^\s*(?:TITLE|NOMENCLATURE|DESCRIPTION)\s*[:.]?\s*(.{3,80})$", re.I | re.M)
-MATERIAL_LINE = re.compile(r"\bMAT(?:ERIA)?L\.?\s*[:\-]\s*(.{3,160})|\bMATERIAL\s+(?!CERT|TRACE|SHALL|TO\b|IS\b|AND\b)(.{3,160})", re.I)
+TITLE = re.compile(r"^[ \t]*(?:TITLE|NOMENCLATURE|DESCRIPTION)[ \t]*[:.]?[ \t]*(\S.{2,79})$", re.I | re.M)
+TITLE_BLOCK_WORDS = {"SCALE", "SHEET", "SHEETCAGE", "CAGE", "CODE", "SIZE", "DWG", "NO", "NO.", "REV", "DATE", "DRAWN", "APPROVED", "CHECKED",
+                     "TITLE", "OF", "WEIGHT", "FSCM", "CONTRACT", "ENG", "QA", "MFG", "APPROVALS", "DO", "NOT", "SCALE.", "DRAWING", "BY"}
+MATERIAL_LINE = re.compile(r"\bMAT(?:ERIA)?L\.?\s*[:\-,]\s*(.{3,160})|\bMATERIAL\s+(?!CERT|TRACE|SHALL|TO\b|IS\b|AND\b)(.{3,160})", re.I)
 DISTRIBUTION = re.compile(r"DISTRIBUTION\s+STATEMENT\s+([A-F])\b[\s.:\-]*([^\n]{0,300})", re.I)
 EXPORT_PATTERNS = [
     r"WARNING\s*[-:]?\s*THIS\s+DOCUMENT\s+CONTAINS\s+TECHNICAL\s+DATA\s+WHOSE\s+EXPORT\s+IS\s+RESTRICTED",
@@ -106,6 +113,10 @@ DISTRIBUTION_MEANING = {
     "E": "DoD components only.",
     "F": "Further dissemination only as directed by the controlling office.",
 }
+
+
+# Bump when the reading rules change, so drawings uploaded earlier are read again instead of reusing a stale cached read.
+PARSER_VERSION = 2
 
 
 class DrawingError(ValueError):
@@ -288,6 +299,50 @@ def _title_grid(text: str) -> dict:
     return {}
 
 
+def nice_title(title: str) -> str:
+    """'RESISTANCE CHECK TRAINER ASSEMBLY, FMP' -> 'Resistance Check Trainer Assembly, FMP' (short all-caps words stay acronyms)."""
+    if not title or not title.isupper():
+        return title or ""
+    return re.sub(r"[A-Z][A-Z0-9'-]*", lambda m: m.group(0) if (len(m.group(0)) <= 3 and m.group(0) not in ("THE", "AND", "FOR", "BOX", "KIT", "CAP", "NUT", "PIN", "ROD", "TOP", "LID")) else m.group(0).capitalize(), title)
+
+
+def _title(text: str, drawing_number: str = "") -> str:
+    v = _first(TITLE, text)
+    if v and not set(w.upper().strip(".") for w in re.findall(r"[A-Za-z.]+", v)) <= TITLE_BLOCK_WORDS:
+        return v
+    return _title_near_label(text, drawing_number)
+
+
+def _title_near_label(text: str, drawing_number: str = "") -> str:
+    """CAD exports often put the title text a few lines before or after a bare TITLE label.
+    Take the longest run of plain words next to the label that is not another title-block label."""
+    lines = [ln.strip() for ln in text.splitlines()]
+    best = ""
+    for i, ln in enumerate(lines):
+        if ln.upper() != "TITLE":
+            continue
+        run: list[str] = []
+        runs: list[list[str]] = []
+        for cand in lines[max(0, i - 8): i + 5]:
+            words = re.findall(r"[A-Za-z][A-Za-z.&/'-]*", cand)
+            ok = (cand and cand.upper() != "TITLE" and len(words) >= 1 and sum(len(w) for w in words) >= max(4, 0.6 * len(cand.replace(" ", "")))
+                  and not set(w.upper().strip(".") for w in words) <= TITLE_BLOCK_WORDS and (not drawing_number or drawing_number not in cand)
+                  and len(cand) <= 60 and not re.match(r"^\s*\d+\.\s", cand)  # numbered notes are not titles
+                  and not re.search(r"UNLESS|TOLERANC|INTERPRET|DIMENSIONS|PROJECTION|NOTES?:|\d+\s*OF\s*\d+", cand, re.I))
+            if ok:
+                run.append(cand)
+            elif run:
+                runs.append(run)
+                run = []
+        if run:
+            runs.append(run)
+        for r in runs:
+            joined = _clean(" ".join(r))
+            if len(joined) > len(best) and len(joined) <= 100:
+                best = joined
+    return best
+
+
 def _revision(text: str) -> str:
     vals = [m.group(1).upper() for m in REVISION.finditer(text)]
     if not vals:
@@ -355,7 +410,7 @@ def parse_text(text: str) -> dict:
         "drawing_number": drawing_number,
         "cage": grid.get("cage") or _first(CAGE, t).upper(),
         "revision": grid.get("revision") or _revision(t),
-        "title": _first(TITLE, t),
+        "title": _title(t, drawing_number),
         "material": material,
         "finishes": finishes,
         "tolerance": tolerance,
@@ -487,7 +542,7 @@ def quote_options(read: dict, materials: list[str] | None = None, finishes: list
     if read.get("part_number"):
         o["part_number"] = read["part_number"]
     if read.get("title"):
-        o["name"] = read["title"].title() if read["title"].isupper() else read["title"]
+        o["name"] = nice_title(read["title"])
     insp = read.get("inspection") or {}
     if insp.get("material_certs"):
         o["material_certs"] = True

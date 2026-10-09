@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { api } from './api'
 
 const usd = (n) => (n == null ? '' : `$${Number(n).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`)
@@ -17,6 +17,8 @@ export default function DrawingQuote({ drawing, cadOpts, statuses, oppId, onSave
   const [msg, setMsg] = useState('')
   const [useAi, setUseAi] = useState(false)
   const [showWhy, setShowWhy] = useState(false)
+  const [showSingle, setShowSingle] = useState(false)
+  const navigate = useNavigate()
   const timer = useRef()
 
   useEffect(() => {
@@ -53,6 +55,12 @@ export default function DrawingQuote({ drawing, cadOpts, statuses, oppId, onSave
     } catch (e) { setErr(e.message) }
   }
 
+  const openBox = () => {
+    try { sessionStorage.setItem('govbid:box-prefill', JSON.stringify(r.assembly.box_build)) } catch {}
+    navigate('/part-quotes?tab=box&from=drawing')
+  }
+  const asm = r?.assembly
+  const hidePrice = asm && !showSingle
   const process = v('process') || 'cnc_mill'
   const isPrint = process === '3d_print'
   const est = r?.estimate
@@ -128,7 +136,18 @@ export default function DrawingQuote({ drawing, cadOpts, statuses, oppId, onSave
       </div>
 
       <div>
-        <div className="panel price-panel">
+        {asm && (
+          <div className="panel asm-notice">
+            <h2>This is an assembly drawing</h2>
+            <p className="small">{asm.message}</p>
+            <ul className="clean small muted">{asm.box_build.evidence.slice(0, 12).map((x, i) => <li key={i}>{x}</li>)}</ul>
+            <div className="row" style={{ marginTop: 10 }}>
+              <button className="primary" onClick={openBox}>Open as a box build</button>
+              <button className="link" onClick={() => setShowSingle(!showSingle)}>{showSingle ? 'Hide' : 'Show'} the single-part price anyway</button>
+            </div>
+          </div>
+        )}
+        {!hidePrice && <div className="panel price-panel">
           {err && <div className="err">{err}</div>}
           {!est ? <p className="muted">Pricing…</p> : (
             <>
@@ -149,8 +168,8 @@ export default function DrawingQuote({ drawing, cadOpts, statuses, oppId, onSave
               </ul>
             </>
           )}
-        </div>
-        {est && (
+        </div>}
+        {est && !hidePrice && (
           <div className="panel">
             <h2>Save quote</h2>
             <div className="grid g2">
