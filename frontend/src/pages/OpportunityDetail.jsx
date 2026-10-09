@@ -3,6 +3,7 @@ import { Link, useNavigate, useParams } from 'react-router-dom'
 import { api, fmtDue, money } from '../api'
 import { DaysLeft, EligBadge, useMeta } from '../App.jsx'
 import { ASSIST, resourcesForClauses } from '../resources'
+import SourcesSoughtDraft from '../SourcesSoughtDraft'
 
 const STATUS_OPTIONS = ['open', 'in progress', 'done', 'n/a']
 
@@ -128,6 +129,8 @@ export default function OpportunityDetail() {
       <PipelineBar o={o} stages={meta?.pipeline_stages || []} onSave={savePipeline} busy={busy === 'pipeline'} />
 
       <PackagesBar oppId={o.id} hasAnalysis={!!o.analysis} />
+
+      <SourcesSoughtDraft opp={o} />
 
       <div className="tabs">
         {['overview', 'documents', 'breakdown', 'matrix'].map((t) => (

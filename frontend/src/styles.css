@@ -267,3 +267,57 @@ mark.search-hit { background: #fbf0d9; color: #6b4e0f; padding: 0 1px; border-ra
 .brand-dark { font-weight: 700; font-size: 22px; margin-bottom: 6px; }
 .brand-dark span { color: var(--accent); }
 .nav .navlink { color: #9aa6b2; padding: 0; font-size: 11.5px; }
+
+/* Writing tools: evaluator review, sources sought draft, capability statement */
+.badge.rating { font-weight: 600; }
+.r-out { background: #dcefe3; color: #1d5e37; }
+.r-good { background: var(--ok-bg); color: var(--ok); }
+.r-acc { background: #e6edf6; color: #2b4a72; }
+.r-marg { background: var(--wait-bg); color: var(--wait); }
+.r-unacc { background: #fdecea; color: #8c2a1c; }
+.badge.pri { background: var(--no-bg); color: var(--ink-2); min-width: 72px; text-align: center; }
+ul.fixes { list-style: none; margin: 0; padding: 0; }
+li.fix { display: flex; gap: 10px; align-items: baseline; padding: 7px 0; border-bottom: 1px solid var(--line); font-size: 13.5px; }
+li.fix:last-child { border-bottom: 0; }
+li.fix .fix-text { flex: 1; }
+li.fix.p1 .badge.pri { background: #fdecea; color: #8c2a1c; }
+li.fix.p2 .badge.pri { background: var(--wait-bg); color: var(--wait); }
+.finding { margin-top: 10px; }
+.finding .flabel { font-size: 11.5px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; margin-bottom: 2px; }
+.f-str .flabel { color: var(--ok); }
+.f-weak .flabel { color: var(--wait); }
+.f-def .flabel { color: #8c2a1c; }
+.f-risk .flabel { color: var(--ink-3); }
+.ss-body { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 18px; align-items: start; }
+.ss-preview { max-height: 640px; }
+ul.checklist { list-style: none; margin: 0; padding: 0; }
+ul.checklist li { display: flex; gap: 8px; align-items: baseline; padding: 5px 0; border-bottom: 1px solid var(--line); }
+ul.checklist li .badge { min-width: 78px; text-align: center; }
+ul.checklist li.acc { background: #fdecea; }
+.cap-layout { display: grid; grid-template-columns: minmax(340px, 460px) minmax(0, 1fr); gap: 18px; align-items: start; }
+.cap-preview { position: sticky; top: 16px; }
+.cap-frame { width: 100%; height: calc(100vh - 120px); min-height: 640px; border: 1px solid var(--line); border-radius: var(--radius); background: #fff; }
+.cap-pp { padding: 5px 0; border-bottom: 1px solid var(--line); }
+.cap-pp.sel { background: #f6f3ee; padding: 5px 6px; }
+@media (max-width: 1000px) {
+  .cap-layout, .ss-body { grid-template-columns: 1fr; }
+  .cap-preview { position: static; }
+}
+
+/* Recompetes and buyers */
+.mkt-bar { height: 8px; background: var(--no-bg); border-radius: 4px; overflow: hidden; min-width: 40px; }
+.mkt-bar i { display: block; height: 100%; background: var(--accent); }
+.mkt-big { font-size: 22px; font-weight: 600; margin-top: 4px; font-family: var(--mono); }
+
+/* Extrusion builds (Part quotes tab) */
+.ex-lines td { vertical-align: top; }
+.ex-lines input, .ex-lines select { font-size: 12.5px; }
+.ex-lines tr.ex-unmatched td { background: rgba(181, 70, 44, .09); }
+.ex-lines tr.ex-unmatched td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
+.ex-lines tr.ex-low td:first-child { box-shadow: inset 3px 0 0 var(--warn); }
+@media (max-width: 900px) {
+  .cap-layout { display: block !important; }
+  .cap-preview { position: static !important; margin-top: 16px; }
+  .cap-frame { width: 100% !important; min-width: 0 !important; height: 70vh; }
+  .main > .row.spread { flex-wrap: wrap; gap: 8px; }
+}

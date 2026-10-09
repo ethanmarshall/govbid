@@ -19,7 +19,7 @@ from .eligibility import evaluate
 from .models import Opportunity, OpportunityChange, PipelineEntry
 from .services import get_profile
 
-ALERT_MODULES = ["jobs_api", "quality_api", "finance_api", "sar_api", "workbook_api"]
+ALERT_MODULES = ["jobs_api", "quality_api", "finance_api", "sar_api", "workbook_api", "market_api"]
 DUE_WITHIN_DAYS = 7
 ELIGIBILITY_LABELS = {"eligible_now": "Eligible now", "eligible_once_certified": "Eligible once certified"}
 

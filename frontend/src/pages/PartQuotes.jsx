@@ -3,6 +3,7 @@ import { Link, useSearchParams } from 'react-router-dom'
 import { api } from '../api'
 import MakeOrBuy from '../MakeOrBuy'
 const InstantQuote = lazy(() => import('./InstantQuote')) // three.js loads only on this tab
+import ExtrusionQuote from './ExtrusionQuote'
 
 const usd = (n) => (n == null ? '' : `$${Number(n).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`)
 
@@ -61,13 +62,15 @@ export default function PartQuotes() {
       <p className="sub">Drop in a STEP file for an instant price, or build an estimate by hand. The same engine is available to AI agents through the GovBid Pro MCP server.</p>
       <div className="tabs">
         <button className={tab === 'instant' ? 'on' : ''} onClick={() => go('instant')}>Instant quote</button>
+        <button className={tab === 'extrusion' ? 'on' : ''} onClick={() => go('extrusion')}>Extrusion builds</button>
         <button className={tab === 'quote' ? 'on' : ''} onClick={() => go('quote')}>Manual estimate</button>
         <button className={tab === 'saved' ? 'on' : ''} onClick={() => go('saved')}>Saved quotes</button>
         <button className={tab === 'rates' ? 'on' : ''} onClick={() => go('rates')}>Shop rates</button>
       </div>
       {tab === 'quote' && <QuoteBuilder meta={meta} quoteId={params.get('id')} oppId={params.get('opportunity')} onSaved={(id) => go('quote', { id })} />}
       {tab === 'instant' && <Suspense fallback={<p className="muted">Loading…</p>}><InstantQuote key={params.get('id') || 'new'} meta={meta} quoteId={params.get('id')} oppId={params.get('opportunity')} onSaved={(id) => go('instant', { id })} onOpenManual={(id) => go('quote', id ? { id } : {})} /></Suspense>}
-      {tab === 'saved' && <SavedQuotes onOpen={(r) => go(r.cad_file ? 'instant' : 'quote', { id: r.id })} />}
+      {tab === 'extrusion' && <ExtrusionQuote meta={meta} quoteId={params.get('id')} oppId={params.get('opportunity')} onSaved={(id) => go('extrusion', { id })} />}
+      {tab === 'saved' && <SavedQuotes onOpen={(r) => go(r.kind === 'extrusion_build' ? 'extrusion' : r.cad_file ? 'instant' : 'quote', { id: r.id })} />}
       {tab === 'rates' && <ShopRates onChanged={() => api.get('/api/pricing/meta').then(setMeta)} />}
     </>
   )
@@ -301,7 +304,7 @@ function SavedQuotes({ onOpen }) {
         <tbody>
           {rows.map((r) => (
             <tr key={r.id} className="click" onClick={() => onOpen(r)}>
-              <td><div className="t">{r.name}</div><div className="small mono muted">{[r.part_number, r.nsn, r.cad_file && `STEP: ${r.cad_file}`].filter(Boolean).join(' · ')}</div></td>
+              <td><div className="t">{r.name}</div><div className="small mono muted">{[r.part_number, r.nsn, r.cad_file && `STEP: ${r.cad_file}`, r.kind === 'extrusion_build' && 'extrusion build', r.kind === 'drawing' && 'from drawing'].filter(Boolean).join(' · ')}</div></td>
               <td className="small">{r.solicitation_number || r.opportunity_title || <span className="muted">none</span>}</td>
               <td><span className="tag">{r.status}</span></td>
               <td className="mono">{r.quoted_quantity ? `${r.quoted_quantity} @ ${usd(r.quoted_unit_price)}` : ''}</td>

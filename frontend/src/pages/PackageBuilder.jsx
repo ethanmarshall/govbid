@@ -3,6 +3,7 @@ import { Link, useNavigate, useParams } from 'react-router-dom'
 import { api, fmtDue } from '../api'
 import { countWords, renderMarkdown } from '../markdown'
 import { KIND_LABEL, Progress } from './Packages.jsx'
+import ProposalReview from '../ProposalReview'
 
 const SECTION_STATUS = { not_started: 'Not started', drafting: 'Drafting', review: 'In review', done: 'Done' }
 const ITEM_STATUS = { not_started: 'Not started', in_progress: 'In progress', ready: 'Ready', delivered: 'Delivered', accepted: 'Accepted' }
@@ -73,6 +74,7 @@ export default function PackageBuilder() {
       <div className="tabs">
         <button className={tab === 'write' ? 'on' : ''} onClick={() => setTab('write')}>Write</button>
         <button className={tab === 'items' ? 'on' : ''} onClick={() => setTab('items')}>{isTdp ? 'Deliverables (CDRLs)' : 'Attachments and forms'} ({pkg.items.length})</button>
+        {!isTdp && <button className={tab === 'review' ? 'on' : ''} onClick={() => setTab('review')}>Evaluator review</button>}
         {pkg.matrix.length > 0 && <button className={tab === 'matrix' ? 'on' : ''} onClick={() => setTab('matrix')}>Compliance ({covered.size}/{pkg.matrix.length})</button>}
         <button className={tab === 'settings' ? 'on' : ''} onClick={() => setTab('settings')}>Cover and settings</button>
       </div>
@@ -88,6 +90,7 @@ export default function PackageBuilder() {
         </div>
       )}
       {tab === 'items' && <Items pkg={pkg} setPkg={setPkg} meta={meta} />}
+      {tab === 'review' && <ProposalReview pkg={pkg} onOpenSection={(sid) => { setSel(sid); setTab('write') }} />}
       {tab === 'matrix' && <MatrixView pkg={pkg} onJump={(sid) => { setSel(sid); setTab('write') }} />}
       {tab === 'settings' && <Settings pkg={pkg} updatePkg={updatePkg} onDelete={async () => { if (confirm('Delete this package and its uploaded files?')) { await api.del(`/api/packages/${id}`); nav('/packages') } }} />}
     </>

@@ -23,6 +23,8 @@ import PricingWorkbook from './pages/PricingWorkbook.jsx'
 import Flowdown from './pages/Flowdown.jsx'
 import SourceApprovals from './pages/SourceApprovals.jsx'
 import Search from './pages/Search.jsx'
+import Market from './pages/Market.jsx'
+import CapabilityStatement from './pages/CapabilityStatement.jsx'
 
 const MetaContext = createContext(null)
 export const useMeta = () => useContext(MetaContext)
@@ -86,6 +88,7 @@ function Shell({ auth }) {
           <NavLink to="/opportunities">Opportunities</NavLink>
           <NavLink to="/pipeline">Pipeline</NavLink>
           <NavLink to="/competitors">Competitor intel</NavLink>
+          <NavLink to="/market">Recompetes and buyers</NavLink>
           <NavLink to="/import">Import (DIBBS, forecasts)</NavLink>
           <div className="navgroup">Bid</div>
           <NavLink to="/packages">Packages</NavLink>
@@ -102,6 +105,7 @@ function Shell({ auth }) {
           <div className="navgroup">Business</div>
           <NavLink to="/contacts">Contacts and teaming</NavLink>
           <NavLink to="/past-performance">Past performance</NavLink>
+          <NavLink to="/capability">Capability statement</NavLink>
           <NavLink to="/compliance">CMMC compliance</NavLink>
           <NavLink to="/profile">Company profile</NavLink>
           <div className="foot">
@@ -135,6 +139,8 @@ function Shell({ auth }) {
             <Route path="/flowdown" element={<Flowdown />} />
             <Route path="/source-approvals" element={<SourceApprovals />} />
             <Route path="/search" element={<Search />} />
+            <Route path="/market" element={<Market />} />
+            <Route path="/capability" element={<CapabilityStatement />} />
           </Routes>
         </main>
       </div>

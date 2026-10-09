@@ -70,6 +70,10 @@ def _validate_numbers(cfg: dict, path: str = "") -> None:
             if not isinstance(v, str) or (k == "tech" and not v):
                 raise pricing.SpecError(f"{here} must be text")
             continue
+        elif k == "pricing_mode":  # extrusion builds
+            if v not in ("cut_to_length", "stock"):
+                raise pricing.SpecError(f"{here} must be cut_to_length or stock")
+            continue
         elif k == "packs_build":
             if not isinstance(v, bool):
                 raise pricing.SpecError(f"{here} must be true or false")
@@ -108,6 +112,7 @@ def quote_dict(q: PartQuote, full: bool = True) -> dict:
         "updated_at": q.updated_at.isoformat() if q.updated_at else None,
         "price_breaks": (q.result or {}).get("price_breaks", []),
         "cad_file": ((q.spec or {}).get("cad") or {}).get("filename"),
+        "kind": (q.spec or {}).get("kind") or ("drawing" if (q.spec or {}).get("drawing") and not (q.spec or {}).get("cad") else "part"),
     }
     if full:
         d["spec"] = q.spec
@@ -122,7 +127,11 @@ def save_quote(db: Session, spec: dict, *, opportunity_id: int | None = None, st
         raise pricing.SpecError(f"status must be one of {QUOTE_STATUSES}")
     if opportunity_id is not None and not db.get(Opportunity, opportunity_id):
         raise pricing.SpecError(f"Opportunity {opportunity_id} not found")
-    result = run_estimate(db, spec)
+    if spec.get("kind") == "extrusion_build":  # T-slot builds price with their own model
+        from .extrusion import estimate_spec
+        result = estimate_spec(spec, get_config(db))
+    else:
+        result = run_estimate(db, spec)
     cad_notes = (spec.get("cad") or {}).get("notes") or []
     if cad_notes:  # keep the geometry-based assumptions from an instant quote
         result["assumptions"] = list(cad_notes) + result["assumptions"]

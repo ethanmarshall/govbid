@@ -365,7 +365,7 @@ def calendar_events(db: Session, profile) -> list[dict]:
             ev.append({"uid": f"renew60-{label}", "date": d - timedelta(days=lead), "summary": f"Start renewal: {label.lower()}",
                        "description": f"{label} on {d.isoformat()}.", "url": ""})
     import importlib
-    for mod in ("jobs_api", "quality_api", "finance_api", "sar_api"):
+    for mod in ("jobs_api", "quality_api", "finance_api", "sar_api", "market_api"):
         try:  # each module adds its own dated items; one failing never breaks the feed
             for e in importlib.import_module(f"{__package__}.{mod}").calendar_items(db):
                 if isinstance(e.get("date"), date):

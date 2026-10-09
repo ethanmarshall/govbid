@@ -16,6 +16,7 @@ import copy
 import math
 from typing import Any
 
+from .extrusion_catalog import default_config as _extrusion_default
 from .inserts import DEFAULT_CONFIG as _INSERTS_DEFAULT
 
 DEFAULT_CONFIG: dict[str, Any] = {
@@ -145,6 +146,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "profit_rate": 0.15,
     "min_lot_charge": 250.0,
     "lead_time": {"base_days": 10, "first_article_days": 10, "parts_per_day": 25},
+    # T-slot extrusion builds (app/extrusion.py). Prices in it are placeholders until you enter your distributor's.
+    "extrusion": _extrusion_default(),
 }
 
 OPERATION_TYPES = {
