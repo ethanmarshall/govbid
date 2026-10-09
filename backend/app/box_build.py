@@ -30,6 +30,7 @@ from __future__ import annotations
 import copy
 import math
 import re
+from datetime import date
 from collections import Counter
 from pathlib import Path
 
@@ -149,9 +150,55 @@ def blank_pcb(**kw) -> dict:
          "fab_price_each": None, "smt_placements": 0, "smt_unique": 0, "fine_pitch": 0, "bga": 0, "tht_parts": 0, "tht_joints": 0,
          "sides": 1, "aoi": True, "conformal": False, "conformal_masks": 0, "flying_probe": False, "program_minutes": 0, "test_minutes": 0,
          "bom_lines": [], "bom_cost_each": None, "consigned": False, "buy_prices": [], "buy_nre": 0, "buy_lead_days": None,
-         "cable_mates": 0, "wire_connections": 0, "source": {}, "check": ""}
+         "cable_mates": 0, "wire_connections": 0, "source": {}, "check": "",
+         "outside_quotes": [], "use": "estimate"}  # use: "estimate", "lowest", or "q<index>" (one of outside_quotes)
     b.update({k: v for k, v in kw.items() if k in b})
     return b
+
+
+# Board houses whose boards are made in a covered nation under 10 U.S.C. 4873 (China, Russia, Iran, North Korea).
+COVERED_NATIONS = {"china": "China", "cn": "China", "prc": "China", "russia": "Russia", "ru": "Russia", "iran": "Iran", "ir": "Iran",
+                   "north korea": "North Korea", "kp": "North Korea", "dprk": "North Korea", "hong kong": "China"}
+VENDOR_COUNTRY = {"jlcpcb": "China", "jlc": "China", "pcbway": "China", "allpcb": "China", "nextpcb": "China", "seeed": "China",
+                  "elecrow": "China", "pcbgogo": "China", "osh park": "USA", "oshpark": "USA", "advanced circuits": "USA", "4pcb": "USA",
+                  "sierra circuits": "USA", "protoexpress": "USA", "macrofab": "USA", "bay area circuits": "USA", "sunstone": "USA",
+                  "screaming circuits": "USA", "aisler": "Germany", "eurocircuits": "Belgium"}
+PCB_4873_NOTE = ("10 U.S.C. 4873 (FY2021 NDAA sec. 841): from January 1, 2027 DoD may not acquire covered printed circuit boards made in "
+                 "China, Russia, Iran or North Korea. It reaches PCBs in non-commercial items, and in commercial items that are part of a "
+                 "defense security system or a system the contract calls national security sensitive, and it flows down to subcontractors. "
+                 "The DFARS rule is not final yet (advance notice July 2026). Check the solicitation before using a board made there.")
+
+
+def normalize_outside_quote(x: dict) -> dict:
+    vendor = str(x.get("vendor") or "").strip()
+    country = str(x.get("country") or "").strip() or next((c for k, c in VENDOR_COUNTRY.items() if k in vendor.lower()), "")
+    prices = sorted([{"quantity": int(_f(r.get("quantity"))), "unit_price": _f(r.get("unit_price"))}
+                     for r in (x.get("prices") or []) if isinstance(r, dict) and _f(r.get("quantity")) >= 1 and _f(r.get("unit_price")) > 0],
+                    key=lambda r: r["quantity"])
+    return {"vendor": vendor or "Outside quote", "country": country, "url": str(x.get("url") or "").strip(), "quote_ref": str(x.get("quote_ref") or ""),
+            "quote_date": str(x.get("quote_date") or ""), "valid_until": str(x.get("valid_until") or ""),
+            "scope": "assembled" if x.get("scope") == "assembled" else "bare", "prices": prices,
+            "setup": max(_f(x.get("setup")), 0), "shipping": max(_f(x.get("shipping")), 0), "duty_pct": max(_f(x.get("duty_pct")), 0),
+            "lead_days": _opt(x.get("lead_days")), "notes": str(x.get("notes") or "")}
+
+
+def outside_quote_cost(oq: dict, need: int) -> dict:
+    """Landed cost of an outside quote for `need` boards: the break at or below the need (or the vendor minimum, buying extra),
+    plus setup fees and shipping, plus import duty."""
+    if not oq["prices"]:
+        return {"error": "no prices entered"}
+    brk = [r for r in oq["prices"] if r["quantity"] <= need]
+    note = ""
+    if brk:
+        r = brk[-1]
+        buy = need
+    else:
+        r = oq["prices"][0]
+        buy = r["quantity"]
+        note = f"buying {buy} (their lowest quantity) for {need} needed"
+    goods = r["unit_price"] * buy + oq["setup"] + oq["shipping"]
+    total = goods * (1 + oq["duty_pct"] / 100)
+    return {"need": need, "buy": buy, "unit_price": r["unit_price"], "break": r["quantity"], "total": round(total, 2), "note": note}
 
 
 def normalize_lines(lines: list[dict]) -> list[dict]:
@@ -208,6 +255,9 @@ def normalize_pcbs(boards: list[dict]) -> list[dict]:
                            "description": str(x.get("description") or ""), "qty": max(_f(x.get("qty"), 1), 0), "tht": bool(x.get("tht")),
                            "unit_price": _opt(x.get("unit_price")), "price_source": x.get("price_source") or "", "distributor": x.get("distributor") or ""}
                           for x in (b["bom_lines"] or []) if isinstance(x, dict)]
+        b["outside_quotes"] = [normalize_outside_quote(x) for x in (b["outside_quotes"] or []) if isinstance(x, dict)]
+        b["use"] = b["use"] if b["use"] in ("estimate", "lowest") or (str(b["use"]).startswith("q") and str(b["use"])[1:].isdigit()
+                                                                       and int(str(b["use"])[1:]) < len(b["outside_quotes"])) else "estimate"
         b["buy_prices"] = sorted([{"quantity": int(_f(x.get("quantity"))), "unit_price": _f(x.get("unit_price"))}
                                   for x in (b["buy_prices"] or []) if isinstance(x, dict) and _f(x.get("quantity")) >= 1 and _f(x.get("unit_price")) > 0],
                                  key=lambda x: x["quantity"])
@@ -408,6 +458,73 @@ def pcb_lines(b: dict, cfg: dict, boards: int, unit_count: int) -> tuple[list[di
                          b["sides"] * (a["setup_per_side"] + a["stencil_per_side"]) + b["smt_unique"] * a["feeder_per_unique"], basis="per_lot", section=sec))
     lead = f["lead_days"] + (f["class3_lead_days"] if cls3 else 0) + a["lead_days"]
     return per, lot, int(lead), warn
+
+
+def _pcb_tag(item: str) -> str:
+    """Which part of our board estimate a line is, so an outside quote can replace just that part."""
+    i = item.lower()
+    if "bare board" in i or "fab tooling" in i or "fab lot minimum" in i:
+        return "fab"
+    if ": components" in i:
+        return "parts"
+    if any(k in i for k in ("smt assembly", "through-hole", "conformal", "smt setup", "flying probe")):
+        return "assembly"
+    if any(k in i for k in ("program", "board functional test", "board test setup")):
+        return "test"
+    return "inspect"
+
+
+QUOTE_REPLACES = {"bare": {"fab"}, "assembled": {"fab", "parts", "assembly"}}
+
+
+def pcb_choice(b: dict, cfg: dict, q: int) -> tuple[list[dict], list[dict], int, list[str], dict | None]:
+    """Our estimate for a board, every outside quote costed at the same quantity, and the one the build uses.
+    Returns per-unit lines, per-lot lines, lead days, warnings and the comparison (None when there are no outside quotes)."""
+    boards = int(math.ceil(b["qty_per"] * q))
+    per, lot, lead, warn = pcb_lines(b, cfg, boards, q)
+    if b["mode"] != "estimate" or not b["outside_quotes"]:
+        return per, lot, lead, warn, None
+    for l in per + lot:
+        l["pcb_part"] = _pcb_tag(l["item"])
+    name = b["name"] or "PCB assembly"
+    options = [{"key": "estimate", "label": "Our estimate", "total": round(sum(l["cost"] for l in per) * q + sum(l["cost"] for l in lot), 2),
+                "per": per, "lot": lot, "lead": lead, "note": "fab, parts and assembly from your rates"}]
+    for i, oq in enumerate(b["outside_quotes"]):
+        c = outside_quote_cost(oq, boards)
+        if c.get("error"):
+            options.append({"key": f"q{i}", "label": oq["vendor"], "error": c["error"]})
+            continue
+        drop = QUOTE_REPLACES[oq["scope"]]
+        kp = [l for l in per if l["pcb_part"] not in drop]
+        kl = [l for l in lot if l["pcb_part"] not in drop]
+        what = "assembled boards" if oq["scope"] == "assembled" else "bare boards"
+        extras = ", ".join(x for x in (f"${oq['setup']:,.2f} setup" if oq["setup"] else "", f"${oq['shipping']:,.2f} shipping" if oq["shipping"] else "",
+                                       f"{oq['duty_pct']:g}% duty" if oq["duty_pct"] else "") if x)
+        qline = _line("pcb", f"{name}: {oq['vendor']} quote, {what}, {c['buy']} x ${c['unit_price']:,.2f}" + (f" + {extras}" if extras else ""),
+                      c["total"] / q, section="pcbs", note=" · ".join(x for x in (f"quote {oq['quote_ref']}" if oq["quote_ref"] else "", oq["quote_date"],
+                                                                                    c["note"], f"lot cost spread over {q}") if x))
+        qline["pcb_part"] = "quote"
+        qline["bought"] = True
+        olead = int(oq["lead_days"]) if oq["lead_days"] is not None else lead
+        options.append({"key": f"q{i}", "label": oq["vendor"], "country": oq["country"], "scope": oq["scope"], "url": oq["url"],
+                        "total": round(sum(l["cost"] for l in kp) * q + sum(l["cost"] for l in kl) + c["total"], 2),
+                        "per": kp + [qline], "lot": kl, "lead": olead, "note": c["note"]})
+    valid = [o for o in options if "error" not in o]
+    if b["use"] == "lowest":
+        chosen = min(valid, key=lambda o: o["total"])
+    else:
+        chosen = next((o for o in valid if o["key"] == b["use"]), options[0])
+    cheapest = min(valid, key=lambda o: o["total"])
+    for o in options:
+        if (o.get("country") or "").lower() in COVERED_NATIONS:
+            warn.append(f"{name}: {o['label']} makes boards in {COVERED_NATIONS[o['country'].lower()]}. " + PCB_4873_NOTE)
+            break
+    for oq in b["outside_quotes"]:
+        if oq["valid_until"] and oq["valid_until"] < date.today().isoformat():
+            warn.append(f"{name}: the {oq['vendor']} quote expired {oq['valid_until']}. Get a fresh one.")
+    comp = {"board": name, "quantity": q, "boards": boards, "use": b["use"], "chosen": chosen["key"], "cheapest": cheapest["key"],
+            "options": [{k: v for k, v in o.items() if k not in ("per", "lot")} | ({"unit": round(o["total"] / q, 2)} if "total" in o else {}) for o in options]}
+    return chosen["per"], chosen["lot"], chosen["lead"], warn, comp
 
 
 # ================================================================ main estimate
@@ -729,20 +846,23 @@ def price(spec: dict, config: dict | None = None) -> dict:
     profit = _f(opts.get("profit_rate"), cfg_all["profit_rate"])
     burden = _f(opts.get("material_burden"), cfg["material_burden"])
     pcb_warn: list[str] = []
+    pcb_compare: list[dict] = []
     labor_hours_unit = sum(l["hours"] or 0 for l in per if l["category"] in ("integration", "wiring", "enclosure", "test"))
     for q in qtys:
         pq = list(per)
         lq = list(lot)
         bought_q = bought
         leads = [lead_parts]
-        for b in pcbs:
-            bp, bl, blead, bw = pcb_lines(b, cfg, int(math.ceil(b["qty_per"] * q)), q)
+        for bi, b in enumerate(pcbs):
+            bp, bl, blead, bw, comp = pcb_choice(b, cfg, q)
             pq += bp
             lq += bl
             leads.append(blead)
             if q == qtys[0]:
                 pcb_warn += bw
-            bought_q += sum(l["cost"] for l in bp if l["category"] == "pcb" and ("components" in l["item"] or "CM price" in l["item"] or "bare board" in l["item"]))
+            if comp:
+                pcb_compare.append({**comp, "index": bi})
+            bought_q += sum(l["cost"] for l in bp if l.get("bought") or (l["category"] == "pcb" and ("components" in l["item"] or "CM price" in l["item"] or "bare board" in l["item"])))
         for ch, res in zip(children, child_res):
             sec = "wiring" if ch["kind"] == "harness" else ch["section"] or "linked"
             if res is None:
@@ -832,7 +952,7 @@ def price(spec: dict, config: dict | None = None) -> dict:
             "part_weight_lb": 0.0, "stock_volume_in3": 0.0,
             "per_part_lines": first["per_part_lines"], "per_lot_lines": first["per_lot_lines"], "per_part_cost": first["per_part_cost"],
             "per_lot_cost": first["per_lot_cost"], "breakdowns": breakdowns, "ga_rate": ga, "profit_rate": profit, "price_breaks": out_breaks,
-            "counts": c, "auto_cutouts": auto, "nre_total": round(nre_total, 2), "labor_hours_per_unit": round(labor_hours_unit, 2),
+            "counts": c, "auto_cutouts": auto, "pcb_compare": pcb_compare, "nre_total": round(nre_total, 2), "labor_hours_per_unit": round(labor_hours_unit, 2),
             "assumptions": assumptions, "warnings": list(dict.fromkeys(warnings)), "config_note": cfg.get("note", "")}
 
 
@@ -987,7 +1107,15 @@ def purchase_rows(spec: dict, builds: int, config: dict | None = None) -> list[l
         if b["mode"] == "buy":
             rows.append(["PCB assembly (CM)", "", "", b["name"], b["qty_per"], math.ceil(b["qty_per"] * builds), None, ""])
         elif b["mode"] == "estimate":
-            rows.append(["Bare PCB", "", "", f"{b['name']} ({b['layers']} layer)", b["qty_per"], math.ceil(b["qty_per"] * builds), b["fab_price_each"], ""])
+            oq = b["outside_quotes"][int(b["use"][1:])] if str(b["use"]).startswith("q") else None
+            if oq:
+                c = outside_quote_cost(oq, math.ceil(b["qty_per"] * builds))
+                rows.append([f"PCB from {oq['vendor']} ({'assembled' if oq['scope'] == 'assembled' else 'bare'})", oq["quote_ref"], oq["vendor"], b["name"],
+                             b["qty_per"], c.get("buy") or math.ceil(b["qty_per"] * builds), c.get("unit_price"), oq["url"]])
+                if oq["scope"] == "assembled":
+                    continue
+            else:
+                rows.append(["Bare PCB", "", "", f"{b['name']} ({b['layers']} layer)", b["qty_per"], math.ceil(b["qty_per"] * builds), b["fab_price_each"], ""])
             if not b["consigned"]:
                 for x in b["bom_lines"]:
                     need = x["qty"] * b["qty_per"] * builds

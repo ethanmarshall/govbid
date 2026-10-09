@@ -153,6 +153,7 @@ export default function BoxBuildQuote({ meta, quoteId, oppId, onSaved }) {
             {!pcbs.length && <p className="small muted">Add a board and drop its Gerbers (or the fab zip), pick-and-place file and BOM. Layers, size, placements and parts are read from the files.</p>}
             {pcbs.map((b, i) => (
               <BoardCard key={i} b={b} cat={cat} quantities={p.quantities} build={p.row?.quantity || 1}
+                compare={(p.est?.pcb_compare || []).filter((c) => c.index === i)} pick={p.row?.quantity}
                 set={(patch) => setPcbs((bs) => bs.map((x, j) => (j === i ? { ...x, ...patch } : x)))}
                 remove={() => setPcbs((bs) => bs.filter((_, j) => j !== i))} onError={p.setErr} />
             ))}
@@ -317,7 +318,7 @@ function EnclosurePanel({ cat, e, setE, auto, onLink }) {
   )
 }
 
-function BoardCard({ b, set, remove, cat, quantities, build, onError }) {
+function BoardCard({ b, set, remove, cat, quantities, build, onError, compare, pick }) {
   const [busy, setBusy] = useState(false)
   const [info, setInfo] = useState(null)
   const [showBom, setShowBom] = useState(false)
@@ -351,7 +352,7 @@ function BoardCard({ b, set, remove, cat, quantities, build, onError }) {
       <div className="row spread" style={{ flexWrap: 'wrap', gap: 8 }}>
         <input value={b.name} onChange={(e) => set({ name: e.target.value })} style={{ fontWeight: 600, minWidth: 180 }} />
         <span className="row" style={{ gap: 6 }}>
-          {[['estimate', 'Estimate'], ['buy', 'Buy from a CM'], ['customer', 'Customer furnished']].map(([k, label]) => <button key={k} className={`chip ${b.mode === k ? 'on' : ''}`} onClick={() => set({ mode: k })}>{label}</button>)}
+          {[['estimate', 'Estimate'], ...(b.mode === 'buy' ? [['buy', 'CM price only']] : []), ['customer', 'Customer furnished']].map(([k, label]) => <button key={k} className={`chip ${b.mode === k ? 'on' : ''}`} onClick={() => set({ mode: k })}>{label}</button>)}
           <button className="link" onClick={remove}>remove</button>
         </span>
       </div>
@@ -437,9 +438,98 @@ function BoardCard({ b, set, remove, cat, quantities, build, onError }) {
               )}
             </div>
           )}
+          <OutsideQuotes b={b} set={set} compare={compare} pick={pick} />
         </>
       )}
     </div>
+  )
+}
+
+const VENDORS = [
+  ['JLCPCB', 'China', 'https://jlcpcb.com/quote'], ['PCBWay', 'China', 'https://www.pcbway.com/orderonline.aspx'], ['OSH Park', 'USA', 'https://oshpark.com/'],
+  ['Advanced Circuits', 'USA', 'https://www.4pcb.com/'], ['Sierra Circuits', 'USA', 'https://www.protoexpress.com/'], ['MacroFab', 'USA', 'https://macrofab.com/'],
+]
+const COVERED = ['china', 'cn', 'prc', 'hong kong', 'russia', 'iran', 'north korea', 'dprk']
+const blankQuote = (vendor = '', country = '', url = '') => ({ vendor, country, url, quote_ref: '', quote_date: new Date().toISOString().slice(0, 10), valid_until: '', scope: 'assembled', prices: [], setup: 0, shipping: 0, duty_pct: 0, lead_days: null, notes: '' })
+
+// Outside board quotes (JLCPCB, PCBWay, a US shop) next to our estimate; pick which one the build uses
+function OutsideQuotes({ b, set, compare, pick }) {
+  const quotes = b.outside_quotes || []
+  const [texts, setTexts] = useState(() => quotes.map((q) => breaksText(q.prices)))
+  useEffect(() => { setTexts(quotes.map((q) => breaksText(q.prices))) }, [quotes.length])
+  const setQ = (i, patch) => set({ outside_quotes: quotes.map((q, j) => (j === i ? { ...q, ...patch } : q)) })
+  const add = (v) => { set({ outside_quotes: [...quotes, blankQuote(...v)] }); setTexts((t) => [...t, '']) }
+  const remove = (i) => set({ outside_quotes: quotes.filter((_, j) => j !== i), use: b.use === `q${i}` ? 'estimate' : b.use?.startsWith('q') && Number(b.use.slice(1)) > i ? `q${Number(b.use.slice(1)) - 1}` : b.use })
+  const cmp = compare?.find((c) => c.quantity === pick) || compare?.[0]
+  return (
+    <>
+      <h3>Outside quotes</h3>
+      <p className="small muted" style={{ marginTop: 0 }}>Get a quote on the board house's site (upload the Gerbers, BOM and pick-and-place there), then enter it here with the link. It is compared with your estimate at every quantity, with setup, shipping and duty included.</p>
+      <div className="row" style={{ gap: 6, flexWrap: 'wrap' }}>
+        {VENDORS.map((v) => <button key={v[0]} className="chip" onClick={() => add(v)}>+ {v[0]}</button>)}
+        <button className="chip" onClick={() => add(['', '', ''])}>+ Other</button>
+      </div>
+      {quotes.map((q, i) => {
+        const covered = COVERED.includes((q.country || '').trim().toLowerCase())
+        return (
+          <div key={i} className="opcard" style={{ marginTop: 8, background: '#fff' }}>
+            <div className="row spread" style={{ flexWrap: 'wrap', gap: 6 }}>
+              <span className="row" style={{ gap: 6 }}>
+                <input value={q.vendor} placeholder="Vendor" onChange={(e) => setQ(i, { vendor: e.target.value })} style={{ fontWeight: 600, width: 150 }} />
+                {q.url && /^https?:\/\//.test(q.url) && <a className="small" href={q.url} target="_blank" rel="noreferrer noopener">open quote ↗</a>}
+                {covered && <span className="tag due-soon" title="10 U.S.C. 4873: DoD may not acquire covered PCBs from China, Russia, Iran or North Korea from January 1, 2027.">covered nation</span>}
+              </span>
+              <button className="link" onClick={() => remove(i)}>remove</button>
+            </div>
+            <div className="grid g3" style={{ marginTop: 6 }}>
+              <label className="f">What it covers<select value={q.scope} onChange={(e) => setQ(i, { scope: e.target.value })}>
+                <option value="assembled">Assembled boards (fab, parts, assembly)</option><option value="bare">Bare boards only (you assemble)</option></select></label>
+              <label className="f" style={{ gridColumn: 'span 2' }}>Prices (qty: unit price)
+                <input value={texts[i] ?? ''} placeholder="5: 28.40, 30: 19.10, 100: 12.75" onChange={(e) => { const t = [...texts]; t[i] = e.target.value; setTexts(t); setQ(i, { prices: parseBreaks(e.target.value) }) }} /></label>
+              <Num label="Setup / engineering / stencil $" value={q.setup || null} placeholder="0" onChange={(v) => setQ(i, { setup: v || 0 })} />
+              <Num label="Shipping $" value={q.shipping || null} placeholder="0" onChange={(v) => setQ(i, { shipping: v || 0 })} />
+              <Num label="Import duty %" value={q.duty_pct || null} placeholder="0" onChange={(v) => setQ(i, { duty_pct: v || 0 })} />
+              <Num label="Lead time incl. shipping (days)" step="1" value={q.lead_days} onChange={(v) => setQ(i, { lead_days: v })} />
+              <label className="f">Made in<input value={q.country} placeholder="Country" onChange={(e) => setQ(i, { country: e.target.value })} /></label>
+              <label className="f">Quote # / order #<input value={q.quote_ref} onChange={(e) => setQ(i, { quote_ref: e.target.value })} /></label>
+              <label className="f" style={{ gridColumn: 'span 2' }}>Link to the quote<input value={q.url} placeholder="https://" onChange={(e) => setQ(i, { url: e.target.value })} /></label>
+              <label className="f">Valid until<input type="date" value={q.valid_until} onChange={(e) => setQ(i, { valid_until: e.target.value })} /></label>
+            </div>
+            {covered && <p className="small due-soon" style={{ margin: '6px 0 0' }}>Made in a covered nation: from January 1, 2027 DoD may not acquire covered PCBs from China, Russia, Iran or North Korea (10 U.S.C. 4873), and the rule flows down to subcontractors. Check the solicitation before using this board on DoD work.</p>}
+            {!q.duty_pct && q.country && !/^(usa|us|united states)$/i.test(q.country.trim()) && <p className="small muted" style={{ margin: '6px 0 0' }}>Imported boards: enter the current import duty for {q.country} so the comparison is fair.</p>}
+          </div>
+        )
+      })}
+      {quotes.length > 0 && (
+        <>
+          <div className="row" style={{ gap: 8, marginTop: 10, flexWrap: 'wrap' }}>
+            <span className="small">Price the build with:</span>
+            {[['estimate', 'Our estimate'], ...quotes.map((q, i) => [`q${i}`, q.vendor || `Quote ${i + 1}`]), ['lowest', 'Lowest at each quantity']].map(([k, label]) => (
+              <button key={k} className={`chip ${b.use === k ? 'on' : ''}`} onClick={() => set({ use: k })}>{label}</button>
+            ))}
+          </div>
+          {compare?.length > 0 && (
+            <div style={{ overflowX: 'auto', marginTop: 8 }}>
+              <table className="small">
+                <thead><tr><th>Board cost per unit</th>{compare.map((c) => <th key={c.quantity} className="mono" style={{ textAlign: 'right' }} title={`${c.boards} boards`}>qty {c.quantity}</th>)}</tr></thead>
+                <tbody>{compare[0].options.map((o, oi) => (
+                  <tr key={o.key}>
+                    <td>{o.label}{o.scope ? <span className="muted"> · {o.scope}</span> : ''}</td>
+                    {compare.map((c) => {
+                      const x = c.options[oi]
+                      return <td key={c.quantity} className="mono" style={{ textAlign: 'right', fontWeight: c.chosen === x.key ? 700 : 400 }} title={x.note || ''}>
+                        {x.error ? <span className="muted">{x.error}</span> : <>{usd(x.unit)}{c.cheapest === x.key && <span className="okline"> ✓</span>}{c.chosen === x.key && <span className="tag" style={{ marginLeft: 4 }}>used</span>}</>}
+                      </td>
+                    })}
+                  </tr>
+                ))}</tbody>
+              </table>
+              <p className="small muted">Per unit of the box build, landed (setup, shipping and duty spread over the lot). ✓ marks the lowest at each quantity. {cmp?.options.some((o) => o.note) ? 'Hover a price for notes such as vendor minimums.' : ''}</p>
+            </div>
+          )}
+        </>
+      )}
+    </>
   )
 }
 

@@ -234,3 +234,59 @@ def test_api_round_trip(client):
     pdf = client.get(f"/api/quote-tools/{saved['id']}/customer-quote.pdf")
     assert pdf.status_code == 200 and pdf.content[:4] == b"%PDF"
     assert client.get(f"/api/box-build/quotes/{part['id']}").status_code == 400
+
+
+# ---------------------------------------------------------------- outside PCB quotes (JLCPCB and the like)
+def _board(**kw):
+    b = {"name": "Main", "layers": 4, "width_in": 4, "height_in": 3, "smt_placements": 200, "smt_unique": 30, "bom_cost_each": 40, "program_minutes": 3,
+         "outside_quotes": [{"vendor": "JLCPCB", "scope": "assembled", "prices": [{"quantity": 5, "unit_price": 28}, {"quantity": 30, "unit_price": 19}],
+                             "setup": 25, "shipping": 22, "duty_pct": 25, "lead_days": 14, "url": "https://jlcpcb.com/quote", "quote_ref": "Q123"},
+                            {"vendor": "OSH Park", "scope": "bare", "prices": [{"quantity": 3, "unit_price": 12}], "lead_days": 12}]}
+    b.update(kw)
+    return b
+
+
+def test_outside_quote_landed_cost_and_vendor_minimum():
+    oq = box_build.normalize_outside_quote({"vendor": "JLCPCB", "prices": [{"quantity": 5, "unit_price": 28}], "setup": 25, "shipping": 22, "duty_pct": 25})
+    assert oq["country"] == "China"  # known board house
+    c = box_build.outside_quote_cost(oq, 2)
+    assert c["buy"] == 5 and c["total"] == pytest.approx((28 * 5 + 25 + 22) * 1.25) and "lowest quantity" in c["note"]
+
+
+def test_estimate_is_kept_and_quotes_compared_at_every_quantity():
+    r = box_build.price({"quantities": [1, 10, 50], "enclosure": {"source": "none"}, "pcbs": [_board()]}, {})
+    assert [c["quantity"] for c in r["pcb_compare"]] == [1, 10, 50]
+    c10 = next(c for c in r["pcb_compare"] if c["quantity"] == 10)
+    labels = [o["label"] for o in c10["options"]]
+    assert labels == ["Our estimate", "JLCPCB", "OSH Park"] and c10["chosen"] == "estimate"  # default: our estimate
+    jlc = c10["options"][1]
+    assert jlc["unit"] == pytest.approx((28 * 10 + 25 + 22) * 1.25 / 10 + 3.75 + 3.75 + 37.5 / 10, abs=0.5)  # + kept test, inspection, programming setup
+    assert any("10 U.S.C. 4873" in w for w in r["warnings"])
+
+
+def test_use_a_quote_or_the_lowest():
+    use_q = box_build.price({"quantities": [10], "enclosure": {"source": "none"}, "pcbs": [_board(use="q0")]}, {})
+    lines = use_q["breakdowns"]["10"]["per_part_lines"]
+    assert any("JLCPCB quote, assembled boards" in l["item"] for l in lines)
+    assert not any(": components" in l["item"] or "SMT assembly" in l["item"] for l in lines)  # replaced by the assembled quote
+    bare = box_build.price({"quantities": [10], "enclosure": {"source": "none"}, "pcbs": [_board(use="q1")]}, {})
+    bl = bare["breakdowns"]["10"]["per_part_lines"]
+    assert any("OSH Park quote, bare boards" in l["item"] for l in bl) and any(": components" in l["item"] for l in bl)
+    assert not any("bare board, 4 layer" in l["item"] for l in bl)  # our fab replaced, our assembly kept
+    low = box_build.price({"quantities": [1, 50], "enclosure": {"source": "none"}, "pcbs": [_board(use="lowest")]}, {})
+    for c in low["pcb_compare"]:
+        assert c["chosen"] == c["cheapest"]
+
+
+def test_bad_use_falls_back_to_estimate_and_expired_quote_warns():
+    b = box_build.normalize_pcbs([_board(use="q9")])[0]
+    assert b["use"] == "estimate"
+    old = _board()
+    old["outside_quotes"][0]["valid_until"] = "2020-01-01"
+    r = box_build.price({"quantities": [5], "enclosure": {"source": "none"}, "pcbs": [old]}, {})
+    assert any("expired 2020-01-01" in w for w in r["warnings"])
+
+
+def test_purchase_list_names_the_quote_used():
+    rows = box_build.purchase_rows({"enclosure": {"source": "none"}, "pcbs": [_board(use="q0")]}, 10, {})
+    assert rows[0][0] == "PCB from JLCPCB (assembled)" and rows[0][-1] == "https://jlcpcb.com/quote"

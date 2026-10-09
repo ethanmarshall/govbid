@@ -419,7 +419,9 @@ def quote_box_build(spec: dict[str, Any]) -> dict[str, Any]:
     display_windows, vent_patterns, pem_inserts, gasket, emi_gasket}, child (a linked quote, see children) when source=custom};
     pcbs [{name, qty_per, mode: estimate|buy|customer, layers, width_in, height_in, finish, ipc_class, smt_placements, smt_unique,
     fine_pitch, bga, tht_parts, tht_joints, sides, conformal, flying_probe, program_minutes, test_minutes, bom_lines or bom_cost_each,
-    buy_prices [{quantity, unit_price}] and buy_nre for mode buy}];
+    buy_prices [{quantity, unit_price}] and buy_nre for mode buy, outside_quotes [{vendor, country, url, quote_ref, valid_until,
+    scope: assembled|bare, prices [{quantity, unit_price}], setup, shipping, duty_pct, lead_days}] compared with the estimate,
+    use: estimate|lowest|q<index>}]; pcb_compare in the result shows each option's landed cost per unit at every quantity;
     lines [{type, part_number, manufacturer, description, qty, unit_price, terminations, method, mount: panel|internal}] for switches,
     connectors, indicators, displays, power supplies, fans and other parts (type is guessed from the description when blank);
     peripherals [{description, qty, unit_price, installed}]; wiring {wires, avg_length_in, mates};
