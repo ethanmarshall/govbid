@@ -57,10 +57,13 @@ from .search_api import router as search_router  # noqa: E402
 from .market_api import router as market_router  # noqa: E402
 from .writing_api import router as writing_router  # noqa: E402
 from .extrusion_api import router as extrusion_router  # noqa: E402
+from .electrical_api import router as electrical_router  # noqa: E402
+from .quote_tools_api import router as quote_tools_router  # noqa: E402
+from .flat_api import router as flat_router  # noqa: E402
 
 for _r in (standards_router, crm_router, cmmc_router, past_performance_router, drawings_router, nsn_router, insights_router,
            jobs_router, quality_router, finance_router, workbook_router, flowdown_router, sar_router, search_router,
-           market_router, writing_router, extrusion_router):
+           market_router, writing_router, extrusion_router, electrical_router, quote_tools_router, flat_router):
     app.include_router(_r)
 from . import auth as auth_mod  # noqa: E402
 

@@ -16,6 +16,7 @@ import copy
 import math
 from typing import Any
 
+from .electrical_catalog import harness_default as _harness_default, labels_default as _labels_default, panel_default as _panel_default
 from .extrusion_catalog import default_config as _extrusion_default
 from .inserts import DEFAULT_CONFIG as _INSERTS_DEFAULT
 
@@ -148,6 +149,39 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "lead_time": {"base_days": 10, "first_article_days": 10, "parts_per_day": 25},
     # T-slot extrusion builds (app/extrusion.py). Prices in it are placeholders until you enter your distributor's.
     "extrusion": _extrusion_default(),
+    # Electrical quoters (app/electrical.py): cable harnesses, control panels, labels and nameplates. Placeholder prices.
+    "harness": _harness_default(),
+    "panel": _panel_default(),
+    "labels": _labels_default(),
+    # DXF flat parts (app/flat.py). Laser and waterjet use the rates, speeds and setups above; everything here is a placeholder.
+    "flat": {
+        "note": "Plasma and router rates and speeds, deburr minutes, PEM prices and the sheet-goods prices are placeholders. Replace them with your own.",
+        "rates": {"plasma": 90.0, "router": 75.0},
+        "setup_hours": {"plasma": 0.25, "router": 0.5},
+        "programming_hours": {"plasma": 0.25, "router": 0.5},
+        "plasma_ipm_at_0125": 150.0,  # scaled by (0.125 / thickness)^0.8 and cut factor, like laser and waterjet
+        "router_ipm": 60.0,
+        "router_max_depth_per_pass_in": 0.25,
+        "pierce_minutes": {"plasma": 0.03, "router": 0.05},
+        "spacing_in": 0.25,
+        "edge_margin_in": 0.5,
+        "deburr": {"hand_minutes_base": 0.5, "hand_minutes_per_inch": 0.02, "tumble_minutes_per_part": 0.25, "tumble_lot_hours": 0.5},
+        "pem": {"unit_cost": 0.30, "minutes_each": 0.2},
+        "inspection_minutes_per_part": 0.5,
+        "min_hole_to_thickness": {"laser_cut": 1.0, "waterjet": 0.5, "plasma": 1.5, "router": 1.0},
+        "sheet_sizes": {"48 x 96": {"width": 48, "length": 96}, "48 x 120": {"width": 48, "length": 120},
+                        "60 x 120": {"width": 60, "length": 120}, "24 x 48": {"width": 24, "length": 48}, "12 x 24": {"width": 12, "length": 24}},
+        # Sheet goods for the router and waterjet: density lb/in^3, price per lb (placeholder), cut factor (feed divisor)
+        "materials": {
+            "HDPE": {"density": 0.0350, "price_per_lb": 3.00, "cut_factor": 0.8},
+            "UHMW": {"density": 0.0336, "price_per_lb": 4.00, "cut_factor": 0.9},
+            "acrylic (PMMA)": {"density": 0.0430, "price_per_lb": 5.00, "cut_factor": 0.9},
+            "polycarbonate": {"density": 0.0434, "price_per_lb": 6.00, "cut_factor": 1.0},
+            "ABS sheet": {"density": 0.0379, "price_per_lb": 4.00, "cut_factor": 0.8},
+            "plywood (Baltic birch)": {"density": 0.0246, "price_per_lb": 2.50, "cut_factor": 0.7},
+            "MDF": {"density": 0.0271, "price_per_lb": 1.00, "cut_factor": 0.7},
+        },
+    },
 }
 
 OPERATION_TYPES = {

@@ -106,3 +106,78 @@ async def convert_inserts(file_id: str, body: InsertsIn, db: Session = Depends(g
         return await run_in_threadpool(inserts.convert_file, file_id, body.selections, body.auto, cfg)
     except cad.CadError as exc:
         raise HTTPException(400, str(exc))
+
+
+# ---------------------------------------------------------------- manufacturability
+@router.get("/{file_id}/dfm")
+async def dfm_check(file_id: str, process: str = "auto", material: str = "", db: Session = Depends(get_db)):
+    """Manufacturability findings for the chosen process (auto = the detected one). See app/dfm.py for the rules and sources."""
+    from . import dfm
+
+    cfg = quotes.get_config(db)
+    try:
+        cad_quote.load(file_id)
+    except cad.CadError as exc:
+        raise HTTPException(404, str(exc))
+    try:
+        return await run_in_threadpool(dfm.check_file, file_id, process, material, cfg)
+    except cad.CadError as exc:
+        raise HTTPException(400, str(exc))
+
+
+# ---------------------------------------------------------------- assemblies and weldments
+@router.get("/{file_id}/bodies")
+async def list_bodies(file_id: str, mesh: bool = True):
+    """Each solid with its own analysis and thumbnail mesh, groups of identical bodies, and contact joints."""
+    from . import assembly
+
+    try:
+        cad_quote.load(file_id)
+    except cad.CadError as exc:
+        raise HTTPException(404, str(exc))
+    try:
+        return await run_in_threadpool(assembly.bodies, file_id, mesh)
+    except cad.CadError as exc:
+        raise HTTPException(400, str(exc))
+
+
+@router.post("/{file_id}/split")
+async def split_bodies(file_id: str):
+    """Store each distinct body as its own CAD file. Returns the groups with file_id and quantity per assembly."""
+    from . import assembly
+
+    try:
+        cad_quote.load(file_id)
+    except cad.CadError as exc:
+        raise HTTPException(404, str(exc))
+    try:
+        return await run_in_threadpool(assembly.split, file_id)
+    except cad.CadError as exc:
+        raise HTTPException(400, str(exc))
+
+
+class AssemblyIn(BaseModel):
+    bodies: list[dict] = Field(default_factory=list)  # [{file_id, name, qty, process, material, finishes, options, skip, buy, buy_unit_price}]
+    joining: dict = Field(default_factory=dict)  # {weld_process, weld_length_in, weld_joints, fasteners, fastener_unit_cost, assembly_minutes, inspection_minutes, first_article}
+    quantities: list[int] = Field(default_factory=lambda: [1, 10])
+    packaging: str = "commercial"
+    freight_per_lot: float | None = None
+    name: str = ""
+    part_number: str = ""
+    nsn: str = ""
+
+
+@router.post("/{file_id}/assembly-quote")
+async def assembly_quote(file_id: str, body: AssemblyIn, db: Session = Depends(get_db)):
+    """Combined price breaks: every body at its quantity per assembly, plus joining, assembly labor and inspection.
+    Returns per-body lines and a spec (kind "assembly") to save with POST /api/pricing/quotes."""
+    from . import assembly
+
+    try:
+        cad_quote.load(file_id)
+    except cad.CadError as exc:
+        raise HTTPException(404, str(exc))
+    try:
+        return await run_in_threadpool(assembly.quote_file, file_id, body.model_dump(), quotes.get_overrides(db))
+    except (cad.CadError, pricing.SpecError) as exc:
+        raise HTTPException(400, str(exc))

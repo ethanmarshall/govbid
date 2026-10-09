@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { api } from '../api'
+import QuoteActions from '../QuoteActions'
 
 const usd = (n) => (n == null ? '' : `$${Number(n).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`)
 const KINDS = [['profile', 'Profile'], ['hardware', 'Hardware'], ['panel', 'Panel'], ['custom', 'Custom (priced by hand)'], ['unmatched', 'Unmatched']]
@@ -264,6 +265,7 @@ export default function ExtrusionQuote({ meta, quoteId, oppId, onSaved }) {
                 </div>
               </div>
             )}
+            {quoteId && <QuoteActions quoteId={quoteId} refreshKey={msg} />}
           </div>
         </div>
       )}

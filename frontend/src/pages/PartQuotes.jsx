@@ -4,6 +4,12 @@ import { api } from '../api'
 import MakeOrBuy from '../MakeOrBuy'
 const InstantQuote = lazy(() => import('./InstantQuote')) // three.js loads only on this tab
 import ExtrusionQuote from './ExtrusionQuote'
+import HarnessQuote from './HarnessQuote'
+import PanelQuote from './PanelQuote'
+import LabelQuote from './LabelQuote'
+import FlatQuote from './FlatQuote'
+import QuoteInsights from './QuoteInsights'
+import QuoteActions from '../QuoteActions'
 
 const usd = (n) => (n == null ? '' : `$${Number(n).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`)
 
@@ -62,15 +68,25 @@ export default function PartQuotes() {
       <p className="sub">Drop in a STEP file for an instant price, or build an estimate by hand. The same engine is available to AI agents through the GovBid Pro MCP server.</p>
       <div className="tabs">
         <button className={tab === 'instant' ? 'on' : ''} onClick={() => go('instant')}>Instant quote</button>
+        <button className={tab === 'flat' ? 'on' : ''} onClick={() => go('flat')}>DXF flat parts</button>
         <button className={tab === 'extrusion' ? 'on' : ''} onClick={() => go('extrusion')}>Extrusion builds</button>
+        <button className={tab === 'harness' ? 'on' : ''} onClick={() => go('harness')}>Cable harness</button>
+        <button className={tab === 'panel' ? 'on' : ''} onClick={() => go('panel')}>Control panel</button>
+        <button className={tab === 'labels' ? 'on' : ''} onClick={() => go('labels')}>Labels and plates</button>
         <button className={tab === 'quote' ? 'on' : ''} onClick={() => go('quote')}>Manual estimate</button>
         <button className={tab === 'saved' ? 'on' : ''} onClick={() => go('saved')}>Saved quotes</button>
+        <button className={tab === 'insights' ? 'on' : ''} onClick={() => go('insights')}>Win/loss</button>
         <button className={tab === 'rates' ? 'on' : ''} onClick={() => go('rates')}>Shop rates</button>
       </div>
       {tab === 'quote' && <QuoteBuilder meta={meta} quoteId={params.get('id')} oppId={params.get('opportunity')} onSaved={(id) => go('quote', { id })} />}
       {tab === 'instant' && <Suspense fallback={<p className="muted">Loading…</p>}><InstantQuote key={params.get('id') || 'new'} meta={meta} quoteId={params.get('id')} oppId={params.get('opportunity')} onSaved={(id) => go('instant', { id })} onOpenManual={(id) => go('quote', id ? { id } : {})} /></Suspense>}
+      {tab === 'flat' && <FlatQuote meta={meta} quoteId={params.get('id')} oppId={params.get('opportunity')} onSaved={(id) => go('flat', { id })} />}
+      {tab === 'harness' && <HarnessQuote meta={meta} quoteId={params.get('id')} oppId={params.get('opportunity')} onSaved={(id) => go('harness', { id })} />}
+      {tab === 'panel' && <PanelQuote meta={meta} quoteId={params.get('id')} oppId={params.get('opportunity')} onSaved={(id) => go('panel', { id })} />}
+      {tab === 'labels' && <LabelQuote meta={meta} quoteId={params.get('id')} oppId={params.get('opportunity')} onSaved={(id) => go('labels', { id })} />}
+      {tab === 'insights' && <QuoteInsights />}
       {tab === 'extrusion' && <ExtrusionQuote meta={meta} quoteId={params.get('id')} oppId={params.get('opportunity')} onSaved={(id) => go('extrusion', { id })} />}
-      {tab === 'saved' && <SavedQuotes onOpen={(r) => go(r.kind === 'extrusion_build' ? 'extrusion' : r.cad_file ? 'instant' : 'quote', { id: r.id })} />}
+      {tab === 'saved' && <SavedQuotes onOpen={(r) => go({ extrusion_build: 'extrusion', harness: 'harness', panel: 'panel', labels: 'labels', flat_dxf: 'flat' }[r.kind] || (r.cad_file ? 'instant' : 'quote'), { id: r.id })} />}
       {tab === 'rates' && <ShopRates onChanged={() => api.get('/api/pricing/meta').then(setMeta)} />}
     </>
   )
@@ -240,6 +256,7 @@ function QuoteBuilder({ meta, quoteId, oppId, onSaved }) {
             </div>
           </div>
         )}
+        {quoteId && <QuoteActions quoteId={quoteId} refreshKey={msg} />}
         {quoteId && <MakeOrBuy quoteId={quoteId} refreshKey={msg} />}
       </div>
     </div>
@@ -304,7 +321,7 @@ function SavedQuotes({ onOpen }) {
         <tbody>
           {rows.map((r) => (
             <tr key={r.id} className="click" onClick={() => onOpen(r)}>
-              <td><div className="t">{r.name}</div><div className="small mono muted">{[r.part_number, r.nsn, r.cad_file && `STEP: ${r.cad_file}`, r.kind === 'extrusion_build' && 'extrusion build', r.kind === 'drawing' && 'from drawing'].filter(Boolean).join(' · ')}</div></td>
+              <td><div className="t">{r.name}</div><div className="small mono muted">{[r.part_number, r.nsn, r.cad_file && `STEP: ${r.cad_file}`, r.kind && !['part', 'drawing'].includes(r.kind) && r.kind.replace('_', ' '), r.kind === 'drawing' && 'from drawing'].filter(Boolean).join(' · ')}</div></td>
               <td className="small">{r.solicitation_number || r.opportunity_title || <span className="muted">none</span>}</td>
               <td><span className="tag">{r.status}</span></td>
               <td className="mono">{r.quoted_quantity ? `${r.quoted_quantity} @ ${usd(r.quoted_unit_price)}` : ''}</td>

@@ -361,6 +361,39 @@ def convert_holes_for_inserts(file_id: str, selections: list[dict[str, Any]] | N
 
 
 @mcp.tool(annotations=READ)
+def dfm_check(file_id: str, process: str = "auto", material: str = "") -> dict[str, Any]:
+    """Manufacturability review of an analyzed STEP file for a process: auto | cnc_mill | cnc_lathe | sheet_metal |
+    3d_print. Finds thin walls, deep or tiny or non-standard holes, sharp internal corners, deep pockets with small
+    corner radii, extra setups and undercuts (milling), and tight bends, holes near bends and short flanges (sheet
+    metal). material picks the wall limit (metal or plastic; for 3d_print the FDM or SLA limit). Each finding has
+    severity (info | warn | cost), detail, suggestion, cost_effect and location (points in inches). Also returns
+    note, a plain-text summary to paste into a customer quote. Rules of thumb only: say so when reporting."""
+    from . import dfm
+    with session() as db:
+        cfg = quotes.get_config(db)
+    try:
+        r = dfm.check_file(file_id, process, material, cfg)
+    except cad.CadError as exc:
+        return _err(exc)
+    r.pop("rules", None)
+    return r
+
+
+@mcp.tool(annotations=WRITE)
+def split_assembly(file_id: str) -> dict[str, Any]:
+    """Split a STEP file that holds several solids (an assembly or weldment) into one stored STEP file per distinct
+    body. Identical bodies are grouped with qty per assembly. Returns groups [{file_id, name, qty, suggested_process,
+    bounding_box, volume}], the joints where bodies touch, and weld_estimate_in (two fillet welds along each contact,
+    an estimate to confirm against the weld symbols). Quote each body with quote_step_file, or price the whole
+    assembly over the REST endpoint POST /api/cad/{file_id}/assembly-quote."""
+    from . import assembly
+    try:
+        return assembly.split(file_id)
+    except cad.CadError as exc:
+        return _err(exc)
+
+
+@mcp.tool(annotations=READ)
 def quote_from_drawing(file_path: str, quantities: list[int] | None = None, material: str = "", process: str = "auto",
                        overrides: dict[str, Any] | None = None) -> dict[str, Any]:
     """Price a part from a PDF drawing alone (no STEP model). Reads hole callouts, bends, sheet thickness, turned

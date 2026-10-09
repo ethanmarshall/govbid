@@ -32,3 +32,9 @@ services:
         sync: false
       - key: APP_URL
         sync: false
+      - key: DIGIKEY_CLIENT_ID
+        sync: false
+      - key: DIGIKEY_CLIENT_SECRET
+        sync: false
+      - key: MOUSER_API_KEY
+        sync: false

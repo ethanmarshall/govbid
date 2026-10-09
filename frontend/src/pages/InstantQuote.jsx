@@ -2,6 +2,9 @@ import { useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { api } from '../api'
 import MakeOrBuy from '../MakeOrBuy'
+import QuoteActions from '../QuoteActions'
+import DfmPanel from '../DfmPanel'
+import AssemblyPanel from '../AssemblyPanel'
 import DrawingQuote from '../DrawingQuote'
 import HeatSetInserts from '../HeatSetInserts'
 import StepViewer from '../StepViewer'
@@ -236,6 +239,10 @@ export default function InstantQuote({ meta, quoteId, oppId, onSaved, onOpenManu
 
         <div className="panel">{drawingPanel}</div>
 
+        <DfmPanel fileId={file.file_id} process={process} material={opts.material} />
+
+        {(g.solids || 1) > 1 && <AssemblyPanel key={file.file_id} file={file} cadOpts={cadOpts} quantities={qty} statuses={meta.statuses} oppId={save.opportunity_id || oppId} onSaved={() => {}} />}
+
         <div className="panel">
           <h2>Configure</h2>
           <h3>Process</h3>
@@ -387,6 +394,7 @@ export default function InstantQuote({ meta, quoteId, oppId, onSaved, onOpenManu
             </div>
           </div>
         )}
+        {quoteId && <QuoteActions quoteId={quoteId} refreshKey={msg} />}
         {quoteId && <MakeOrBuy quoteId={quoteId} refreshKey={msg} />}
       </div>
     </div>

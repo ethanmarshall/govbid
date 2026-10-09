@@ -130,6 +130,15 @@ def save_quote(db: Session, spec: dict, *, opportunity_id: int | None = None, st
     if spec.get("kind") == "extrusion_build":  # T-slot builds price with their own model
         from .extrusion import estimate_spec
         result = estimate_spec(spec, get_config(db))
+    elif spec.get("kind") in ("harness", "panel", "labels"):  # electrical quoters price with their own models
+        from .electrical import estimate_spec as electrical_estimate
+        result = electrical_estimate(spec, get_config(db))
+    elif spec.get("kind") == "flat_dxf":  # DXF flat parts price with their own nesting and cut model
+        from .flat import estimate_spec as flat_estimate
+        result = flat_estimate(spec, get_overrides(db))
+    elif spec.get("kind") == "assembly":  # STEP assemblies: each body priced from the model, plus joining
+        from .assembly import estimate_spec as assembly_estimate
+        result = assembly_estimate(spec, get_overrides(db))
     else:
         result = run_estimate(db, spec)
     cad_notes = (spec.get("cad") or {}).get("notes") or []
