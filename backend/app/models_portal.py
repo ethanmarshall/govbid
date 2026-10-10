@@ -8,7 +8,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from .db import Base
 
-PORTAL_STATUSES = ("draft", "submitted", "reviewing", "confirmed", "declined", "closed")
+PORTAL_STATUSES = ("draft", "submitted", "reviewing", "confirmed", "ordered", "in_production", "shipped", "declined", "closed")
 
 
 class PortalRequest(Base):
@@ -39,6 +39,8 @@ class PortalRequest(Base):
     public_result: Mapped[dict] = mapped_column(JSON, default=dict)
     internal: Mapped[dict] = mapped_column(JSON, default=dict)
     internal_notes: Mapped[str] = mapped_column(Text, default="")
+    customer_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)  # the customer's account, when signed in
+    order: Mapped[dict] = mapped_column(JSON, default=dict)  # checkout: see checkout.py
     concept: Mapped[dict] = mapped_column(JSON, default=dict)  # a project idea without drawings (kind "concept"), see portal_concept.py
     line_opts: Mapped[dict] = mapped_column(JSON, default=dict)  # per line: {qty, material, finish, process, final_unit_price}
     quote_ids: Mapped[list] = mapped_column(JSON, default=list)  # internal PartQuotes made from this request
@@ -69,7 +71,8 @@ class PortalSettings(Base):
     incomplete_high_pct: Mapped[float] = mapped_column(Float, default=75.0)  # when parts still need a manual price
     review_days: Mapped[int] = mapped_column(Integer, default=2)
     max_quantity: Mapped[int] = mapped_column(Integer, default=10000)
-    terms: Mapped[str] = mapped_column(Text, default="Instant quotes are valid for 30 days and are confirmed by us before the order is placed. "
+    terms: Mapped[str] = mapped_column(Text, default="Instant quotes are firm for 30 days and can be ordered online. If we find a problem making a part as quoted, we contact you "
+                                                    "before we start and cancel or refund that line if you ask. "
                                                     "Estimates are not offers: we confirm the scope and price with you first. "
                                                     "Do not upload export-controlled (ITAR/EAR) or classified technical data.")
     # what the customer site says about you: about, capabilities, experience, industries, quality, faq (blank keys use the defaults)

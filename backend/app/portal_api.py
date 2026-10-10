@@ -14,10 +14,11 @@ save the priced items as internal part quotes, delete, and the portal settings.
 from __future__ import annotations
 
 import logging
+import os
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.concurrency import run_in_threadpool
-from fastapi.responses import FileResponse, HTMLResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -46,6 +47,19 @@ def _limit(limiter: portal.Limiter, request: Request):
 
 
 # ================================================================ public
+def _customer_of(request: Request, db: Session):
+    from . import customers
+
+    return customers.current(db, request.cookies.get(customers.COOKIE))
+
+
+def _base(request: Request) -> str:
+    base = (os.getenv("PUBLIC_URL") or str(request.base_url)).rstrip("/")
+    if request.headers.get("x-forwarded-proto") == "https" and base.startswith("http://"):
+        base = "https://" + base[len("http://"):]
+    return base
+
+
 def _owner(request: Request) -> bool:
     """You, signed in to GovBid Pro (only when a password is set). Lets you preview the page before it opens."""
     return auth.enabled() and auth.valid_session(request.cookies.get(auth.COOKIE))
@@ -74,6 +88,10 @@ async def new_quote(request: Request, files: list[UploadFile] = File(default=[])
     data = {"quantity": quantity, "material": material, "finish": finish, "thickness": thickness, "notes": notes,
             "export_controlled": export_controlled}
     req = await run_in_threadpool(_guard, portal.create, db, uploads, data, _client(request), preview and _owner(request))
+    cust = _customer_of(request, db)
+    if cust:
+        req.customer_id = cust.id
+        db.commit()
     return {**portal.public_view(req), "token": req.token}
 
 
@@ -105,6 +123,10 @@ async def new_concept(request: Request, background: BackgroundTasks, payload: st
         req = await run_in_threadpool(portal_concept.create, db, body.get("concept") or {}, body.get("contact") or {}, uploads, _client(request))
     except (portal_concept.ConceptError, portal.PortalError) as exc:
         raise HTTPException(400, str(exc))
+    cust = _customer_of(request, db)
+    if cust:
+        req.customer_id = cust.id
+        db.commit()
     background.add_task(_notify, req.id)
     return {**portal.public_view(req), "token": req.token}
 
@@ -114,9 +136,13 @@ def _customer(db: Session, ref: str, token: str) -> PortalRequest:
 
 
 @public.get("/quote/{ref}")
-def view(ref: str, token: str = "", db: Session = Depends(get_db)):
+def view(ref: str, background: BackgroundTasks, request: Request, token: str = "", db: Session = Depends(get_db)):
+    from . import checkout
+
     req = _customer(db, ref, token)
     portal.ensure_job(req)  # big models: keep reading (also after a server restart)
+    if checkout.confirm_if_paid(db, req):  # back from Stripe: the card payment went through
+        background.add_task(_order_placed, req.id, _base(request))
     return portal.public_view(req)
 
 
@@ -221,6 +247,212 @@ def submit(ref: str, body: SubmitIn, request: Request, background: BackgroundTas
     return portal.public_view(req)
 
 
+# ================================================================ checkout
+def _order_placed(req_id: int, base: str) -> None:
+    """Emails after an order: to you, and a short confirmation to the customer (both only when email is set up)."""
+    db = SessionLocal()
+    try:
+        req = db.get(PortalRequest, req_id)
+        if not req:
+            return
+        s = portal.get_settings(db)
+        try:
+            portal.notify(req, s)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("Order notice for %s not sent: %s", req.ref, exc)
+        try:
+            portal.confirm_to_customer(req, s, f"{base}/quote/status/{req.ref}?t={req.token}")
+        except Exception as exc:  # noqa: BLE001
+            log.info("Order confirmation for %s not sent: %s", req.ref, exc)
+    finally:
+        db.close()
+
+
+class CheckoutIn(BaseModel):
+    token: str
+    expected_total: float | None = None
+    method: str = "po"
+    contact: dict = {}
+    ship_to: dict = {}
+    po_number: str = ""
+    billing_email: str = ""
+    notes: str = ""
+    needed_by: str = ""
+    accept_terms: bool = False
+    save_address: bool = False
+
+
+@public.post("/quote/{ref}/checkout")
+async def do_checkout(ref: str, body: CheckoutIn, request: Request, background: BackgroundTasks, db: Session = Depends(get_db)):
+    from . import checkout
+
+    _limit(portal.SUBMIT_LIMIT, request)
+    req = _customer(db, ref, body.token)
+    cust = _customer_of(request, db)
+    try:
+        out = await run_in_threadpool(checkout.place, db, req, body.model_dump(exclude={"token"}), cust, _base(request))
+    except checkout.CheckoutError as exc:
+        msg = str(exc)
+        if msg.startswith("PRICE_CHANGED:"):
+            raise HTTPException(409, {"message": "The price changed since you last looked. Check the new total and place the order again.",
+                                      "total": float(msg.split(":", 1)[1]), "view": portal.public_view(req)})
+        raise HTTPException(400, msg)
+    if out["order"]["status"] == "po_received":
+        background.add_task(_order_placed, req.id, _base(request))
+    return {"view": portal.public_view(req), "redirect": out["redirect"]}
+
+
+@public.post("/stripe/webhook")
+async def stripe_webhook(request: Request, db: Session = Depends(get_db)):
+    """Stripe tells us a checkout was paid (set STRIPE_WEBHOOK_SECRET; event checkout.session.completed)."""
+    from . import checkout
+
+    secret = os.getenv("STRIPE_WEBHOOK_SECRET", "")
+    if not secret:
+        raise HTTPException(404, "Not set up")
+    payload = await request.body()
+    try:
+        event = checkout.verify_webhook(payload, request.headers.get("stripe-signature", ""), secret)
+    except (checkout.CheckoutError, ValueError):
+        raise HTTPException(400, "Bad signature")
+    if event.get("type") in ("checkout.session.completed", "checkout.session.async_payment_succeeded"):
+        sess = (event.get("data") or {}).get("object") or {}
+        ref = (sess.get("metadata") or {}).get("ref") or sess.get("client_reference_id")
+        req = db.scalar(select(PortalRequest).where(PortalRequest.ref == ref)) if ref else None
+        if req and checkout.mark_paid(db, req, sess):
+            _order_placed(req.id, _base(request))
+    return {"received": True}
+
+
+# ================================================================ customer accounts
+def _set_session(resp: Response, cust) -> None:
+    from . import auth, customers
+
+    resp.set_cookie(customers.COOKIE, customers.session_token(cust), max_age=customers.DAYS * 86400, httponly=True, samesite="lax",
+                    secure=auth.settings()["secure"], path="/")
+
+
+def _account_guard(fn, *a, **kw):
+    from . import customers
+
+    try:
+        return fn(*a, **kw)
+    except customers.AccountError as exc:
+        raise HTTPException(400, str(exc))
+
+
+def _require_customer(request: Request, db: Session):
+    c = _customer_of(request, db)
+    if not c:
+        raise HTTPException(401, "Please sign in.")
+    return c
+
+
+@public.get("/account")
+def account_me(request: Request, db: Session = Depends(get_db)):
+    from . import customers
+
+    c = _customer_of(request, db)
+    return {"customer": customers.public(c) if c else None, "reset_by_email": customers.email_enabled()}
+
+
+@public.post("/account/register")
+def account_register(body: dict, request: Request, db: Session = Depends(get_db)):
+    from . import customers
+
+    _limit(portal.SUBMIT_LIMIT, request)
+    c = _account_guard(customers.register, db, body)
+    resp = JSONResponse({"customer": customers.public(c)})
+    _set_session(resp, c)
+    return resp
+
+
+@public.post("/account/login")
+def account_login(body: dict, request: Request, db: Session = Depends(get_db)):
+    from . import customers
+
+    c = _account_guard(customers.login, db, str(body.get("email") or ""), str(body.get("password") or ""), _client(request))
+    resp = JSONResponse({"customer": customers.public(c)})
+    _set_session(resp, c)
+    return resp
+
+
+@public.post("/account/logout")
+def account_logout():
+    from . import customers
+
+    resp = JSONResponse({"ok": True})
+    resp.delete_cookie(customers.COOKIE, path="/")
+    return resp
+
+
+@public.put("/account")
+def account_update(body: dict, request: Request, db: Session = Depends(get_db)):
+    from . import customers
+
+    c = _require_customer(request, db)
+    c = _account_guard(customers.update, db, c, body)
+    resp = JSONResponse({"customer": customers.public(c)})
+    if body.get("new_password"):
+        _set_session(resp, c)  # this device stays signed in
+    return resp
+
+
+@public.post("/account/forgot")
+def account_forgot(body: dict, request: Request, db: Session = Depends(get_db)):
+    from . import customers
+
+    _account_guard(customers.start_reset, db, str(body.get("email") or ""), _base(request), _client(request))
+    return {"ok": True, "message": "If there is an account for that email, we sent a link to reset the password."}
+
+
+@public.post("/account/reset")
+def account_reset(body: dict, db: Session = Depends(get_db)):
+    from . import customers
+
+    c = _account_guard(customers.finish_reset, db, str(body.get("email") or ""), str(body.get("token") or ""), str(body.get("password") or ""))
+    resp = JSONResponse({"customer": customers.public(c)})
+    _set_session(resp, c)
+    return resp
+
+
+@public.get("/account/requests")
+def account_requests(request: Request, db: Session = Depends(get_db)):
+    """The signed-in customer's quotes, ideas and orders, newest first."""
+    c = _require_customer(request, db)
+    rows = db.scalars(select(PortalRequest).where(PortalRequest.customer_id == c.id).order_by(PortalRequest.id.desc()).limit(200)).all()
+    out = []
+    for r in rows:
+        v = portal.public_view(r)
+        res = v["result"] or {}
+        out.append({"ref": r.ref, "token": r.token, "status": r.status, "status_label": v["status_label"], "kind": res.get("kind"),
+                    "created": v["created"], "files": [f["name"] for f in v["files"]][:4], "total": res.get("total"),
+                    "total_low": res.get("total_low"), "total_high": res.get("total_high"), "lines": len(res.get("items") or []),
+                    "title": (r.concept or {}).get("title", "") if r.kind == "concept" else "", "order": v["order"]})
+    return out
+
+
+class ClaimIn(BaseModel):
+    items: list[dict]  # [{ref, token}] quotes saved in this browser
+
+
+@public.post("/account/claim")
+def account_claim(body: ClaimIn, request: Request, db: Session = Depends(get_db)):
+    """Add quotes made before signing in to the account. The private link (token) proves they are the customer's."""
+    import hmac as _hmac
+
+    c = _require_customer(request, db)
+    n = 0
+    for it in body.items[:50]:
+        r = db.scalar(select(PortalRequest).where(PortalRequest.ref == str(it.get("ref") or "")))
+        if r and r.customer_id in (None, c.id) and _hmac.compare_digest(r.token, str(it.get("token") or "")):
+            if r.customer_id is None:
+                r.customer_id = c.id
+                n += 1
+    db.commit()
+    return {"added": n}
+
+
 # ================================================================ internal (login required)
 @internal.get("/settings")
 def get_settings(db: Session = Depends(get_db)):
@@ -287,6 +519,30 @@ def download_file(rid: int, index: int, db: Session = Depends(get_db)):
 @internal.get("/requests/{rid}/views/{key}.svg")
 def request_views(rid: int, key: str, db: Session = Depends(get_db)):
     return _svg(_req(db, rid), key)
+
+
+class OrderIn(BaseModel):
+    status: str  # po_received | invoiced | paid | cancelled
+
+
+@internal.put("/requests/{rid}/order")
+def set_order(rid: int, body: OrderIn, db: Session = Depends(get_db)):
+    r = _req(db, rid)
+    if not r.order:
+        raise HTTPException(400, "There is no order on this request.")
+    if body.status not in ("po_received", "invoiced", "paid", "cancelled"):
+        raise HTTPException(400, "Unknown order status.")
+    from datetime import datetime as _dt
+
+    o = dict(r.order)
+    o["status"] = body.status
+    if body.status == "paid" and not o.get("paid_at"):
+        o["paid_at"] = _dt.utcnow().isoformat(timespec="seconds")
+    r.order = o
+    if body.status == "cancelled" and r.status == "ordered":
+        r.status = "closed"
+    db.commit()
+    return portal.internal_dict(r, full=True)
 
 
 class LinesIn(BaseModel):

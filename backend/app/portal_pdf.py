@@ -101,7 +101,7 @@ def render(view: dict, info: dict, link: str, keep_days: int = 30, sheets: dict 
     else:
         story += [P("Priced by an engineer", "h")]
     if res.get("lead_days"):
-        story += [P(f"Ships in about {res['lead_days']} days after the order is confirmed.")]
+        story += [P(f"Ships in about {res['lead_days']} days after you order.")]
     if res.get("message"):
         story += [Spacer(1, 6), P(res["message"])]
 

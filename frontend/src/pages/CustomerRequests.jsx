@@ -4,8 +4,9 @@ import { api } from '../api'
 import { PartsTable } from '../public/PublicQuote'
 
 const usd = (n) => (n == null ? '' : `$${Number(n).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`)
-const STATUSES = ['submitted', 'reviewing', 'confirmed', 'declined', 'closed', 'draft']
-const STATUS_LABEL = { draft: 'Not submitted', submitted: 'New', reviewing: 'In review', confirmed: 'Confirmed', declined: 'Declined', closed: 'Closed' }
+const STATUSES = ['submitted', 'reviewing', 'confirmed', 'ordered', 'in_production', 'shipped', 'declined', 'closed', 'draft']
+const STATUS_LABEL = { draft: 'Not submitted', submitted: 'New', reviewing: 'In review', confirmed: 'Confirmed', ordered: 'Ordered', in_production: 'In production', shipped: 'Shipped', declined: 'Declined', closed: 'Closed' }
+const ORDER_LABEL = { awaiting_payment: 'Waiting for card payment', paid: 'Paid by card', po_received: 'PO received', invoiced: 'Invoiced', cancelled: 'Cancelled' }
 const KIND_LABEL = { instant: 'Instant', estimate: 'Estimate', manual: 'Manual', needs_input: 'Needs input', processing: 'Reading model', concept: 'Project idea' }
 
 function shown(r) {
@@ -117,6 +118,7 @@ function RequestDetail({ id, onChange, onClose }) {
           <p className="small" style={{ margin: 0 }}>Quantity {r.quantity}<br />Material: {r.material || 'from the drawing'}<br />Finish: {r.finish || 'from the drawing'}{r.thickness ? <><br />Thickness: {r.thickness} in</> : ''}</p>
         </div>}
       </div>
+      {r.order?.status && <OrderBox r={r} id={id} setR={setR} setMsg={setMsg} setErr={setErr} onChange={onChange} />}
       {r.customer_notes && <><h3>Their notes</h3><p className="small" style={{ whiteSpace: 'pre-wrap' }}>{r.customer_notes}</p></>}
       <h3>Files</h3>
       {!r.files.length ? <p className="small muted">No files.</p> : (
@@ -155,6 +157,35 @@ function RequestDetail({ id, onChange, onClose }) {
       </div>
       {r.quote_ids?.length > 0 && <p className="small">Internal quotes: {r.quote_ids.map((q) => <Link key={q} to={`/part-quotes?tab=saved`} style={{ marginRight: 8 }}>#{q}</Link>)} (open them from Saved quotes to adjust and send a customer quote)</p>}
       {msg && <p className="small okline">{msg}</p>}
+    </div>
+  )
+}
+
+function OrderBox({ r, id, setR, setMsg, setErr, onChange }) {
+  const o = r.order
+  const a = o.ship_to || {}
+  const set = async (status) => {
+    if (status === 'cancelled' && !confirm(`Cancel order ${o.number}? A card payment is not refunded here; refund it in Stripe.`)) return
+    try { setR(await api.put(`/api/portal/requests/${id}/order`, { status })); setMsg(`Order marked ${ORDER_LABEL[status].toLowerCase()}.`); onChange() } catch (e) { setErr(e.message) }
+  }
+  return (
+    <div className="notice" style={{ marginTop: 12 }}>
+      <div className="row spread"><h3 style={{ margin: 0 }}>Order {o.number}: {usd(o.amount)}</h3><b>{ORDER_LABEL[o.status] || o.status}</b></div>
+      <p className="small" style={{ margin: '6px 0' }}>
+        {o.method === 'card' ? <>Card through Stripe{o.paid_at ? `, paid ${o.paid_at.slice(0, 10)} (${usd(o.paid_amount)})` : ''}{o.payment_intent ? `, ${o.payment_intent}` : ''}</> : <>Purchase order <b>{o.po_number}</b>{o.billing_email ? `, invoice to ${o.billing_email}` : ''}</>}
+        <br />Placed {(o.placed_at || '').replace('T', ' ')}{o.lead_days ? `, ships in about ${o.lead_days} days` : ''}
+        <br />Ship to: {[a.name, a.company, a.line1, a.line2, `${a.city}, ${a.state} ${a.zip}`, a.phone].filter(Boolean).join(', ')}
+        {o.notes && <><br />Order notes: {o.notes}</>}
+      </p>
+      <table className="small"><thead><tr><th>Line</th><th>Qty</th><th>Each</th><th>Total</th></tr></thead>
+        <tbody>{(o.lines || []).map((l, i) => <tr key={i}><td>{l.name}{l.group ? <span className="muted"> ({l.group})</span> : ''}<div className="muted">{[l.process, l.material, l.finish && l.finish !== 'none' && l.finish].filter(Boolean).join(', ')}</div></td><td className="mono">{l.qty}</td><td className="mono">{usd(l.unit_price)}</td><td className="mono">{usd(l.total)}</td></tr>)}</tbody>
+      </table>
+      <div className="row" style={{ marginTop: 8 }}>
+        {o.method === 'po' && o.status === 'po_received' && <button className="primary" onClick={() => set('invoiced')}>Mark invoiced</button>}
+        {o.method === 'po' && o.status === 'invoiced' && <button className="primary" onClick={() => set('paid')}>Mark paid</button>}
+        {o.status !== 'cancelled' && <button className="link" onClick={() => set('cancelled')}>Cancel order</button>}
+      </div>
+      <p className="small muted" style={{ marginBottom: 0 }}>Move the request status to In production and Shipped below as the job moves; the customer sees it on their status page and in their account.</p>
     </div>
   )
 }

@@ -32,7 +32,7 @@ from pathlib import Path
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from . import isolate, portal_concept, portal_read, pricing, quotes
+from . import checkout, isolate, portal_concept, portal_read, pricing, quotes
 from .config import UPLOAD_DIR
 from .models_portal import PORTAL_STATUSES, PortalRequest, PortalSettings
 
@@ -54,7 +54,8 @@ ACCEPT = ",".join(e for v in KINDS.values() for e in v)
 PROCESS_LABEL = {"cnc_mill": "CNC machined", "cnc_lathe": "CNC turned", "sheet_metal": "Sheet metal", "3d_print": "3D printed",
                  "laser_cut": "Laser cut", "waterjet": "Waterjet cut", "plasma": "Plasma cut", "router": "Router cut"}
 STATUS_LABEL = {"draft": "Quote not submitted", "submitted": "Submitted, waiting for review", "reviewing": "In review",
-                "confirmed": "Confirmed", "declined": "Declined", "closed": "Closed"}
+                "confirmed": "Confirmed", "ordered": "Ordered", "in_production": "In production", "shipped": "Shipped",
+                "declined": "Declined", "closed": "Closed"}
 
 
 class PortalError(ValueError):
@@ -93,7 +94,6 @@ DEFAULT_SITE = {
     "experience": [
         "Electrical engineering with mechanical design experience.",
         "Design of custom training equipment and power distribution.",
-        "Temperature monitoring panels, including RTD measurement over long lead lengths.",
         "Work on nuclear power training programs, where documentation and quality requirements are strict.",
     ],
     "industries": ["Defense and government", "Training equipment", "Industrial equipment", "Test and research labs"],
@@ -186,7 +186,8 @@ def public_info(db: Session) -> dict:
             "sheet_materials": sorted(flat_materials(cfg)), "finishes": sorted(cfg["finishes"]),
             "accept": ACCEPT, "max_files": MAX_FILES, "max_file_mb": MAX_FILE // (1024 * 1024), "keep_days": DRAFT_DAYS,
             "site": site_content(s), "company": _company_codes(prof) if s.show_codes else None,
-            "concept_options": portal_concept.OPTIONS, "must_have_hints": portal_concept.MUST_HAVE_HINTS}
+            "concept_options": portal_concept.OPTIONS, "must_have_hints": portal_concept.MUST_HAVE_HINTS,
+            "checkout_methods": checkout.methods()}
 
 
 def _company_codes(prof) -> dict | None:
@@ -730,7 +731,7 @@ def _finish(req: PortalRequest, s: PortalSettings, lines: list[dict], manual_rea
     days = f"{s.review_days} business day{'s' if s.review_days != 1 else ''}"
     if kind == "instant":
         out.update(total=round(exact, 2), unit_price=round(exact / n, 2), lead_days=int(lead),
-                   message="This is an instant quote. Submit it and we will confirm the order with you before we start.")
+                   message="This price is firm. Order it here, or send it for review if you want an engineer to check it first.")
     elif kind == "estimate":
         out.update(total_low=_round_est(low), total_high=_round_est(high), unit_low=_round_est(low / n), unit_high=_round_est(high / n),
                    lead_days=int(lead + s.review_days),
@@ -1010,6 +1011,8 @@ def get_for_customer(db: Session, ref: str, token: str) -> PortalRequest:
 def reprice(db: Session, req: PortalRequest, data: dict) -> PortalRequest:
     if req.status not in ("draft",):
         raise PortalError("This request was already submitted. Contact us to change it.")
+    if (req.order or {}).get("status") == "awaiting_payment":
+        req.order = {}  # changed after starting a card payment: start checkout again
     _clean_opts(req, data, get_settings(db).max_quantity)
     price_request(db, req)
     db.commit()
@@ -1051,7 +1054,13 @@ def public_view(req: PortalRequest) -> dict:
             "files": [{"name": f["name"], "kind": f["kind"], "removed": f.get("removed", False)} for f in req.files or []],
             "export_controlled": req.export_controlled, "result": req.public_result or {},
             "submitted": req.status != "draft", "created": req.created_at.date().isoformat() if req.created_at else "",
-            **(portal_concept.public(req) if req.kind == "concept" else {})}
+            **(portal_concept.public(req) if req.kind == "concept" else {}),
+            "order": checkout.public_order(req), "checkout": _checkout_state(req)}
+
+
+def _checkout_state(req: PortalRequest) -> dict:
+    ok, why = checkout.eligible(req)
+    return {"eligible": ok, "why": why, "methods": checkout.methods()}
 
 
 def notify(req: PortalRequest, s: PortalSettings) -> str:
@@ -1060,6 +1069,18 @@ def notify(req: PortalRequest, s: PortalSettings) -> str:
 
     r = req.public_result or {}
     app_url = (os.getenv("APP_URL") or "").rstrip("/")
+    o = req.order or {}
+    if o.get("status") in ("paid", "po_received"):
+        lines = "\n".join(f"  {l['qty']} x {l['name']}{' (' + l['group'] + ')' if l['group'] else ''}: ${l['unit_price']:,.2f} each, ${l['total']:,.2f}"
+                          for l in o.get("lines") or [])
+        a = o.get("ship_to") or {}
+        body = (f"New ORDER {req.ref}: ${o.get('amount', 0):,.2f}, "
+                f"{'paid by card' if o['status'] == 'paid' else 'purchase order ' + (o.get('po_number') or '')}\n\n"
+                f"From: {req.contact_name} <{req.email}>{', ' + req.company if req.company else ''}{', ' + req.phone if req.phone else ''}\n"
+                f"Ship to: {a.get('name', '')}, {a.get('company', '')} {a.get('line1', '')} {a.get('line2', '')}, {a.get('city', '')}, {a.get('state', '')} {a.get('zip', '')}\n"
+                f"Needed by: {req.needed_by or 'not given'}\nBilling email: {o.get('billing_email') or req.email}\n\n{lines}\n\n"
+                f"Notes: {o.get('notes') or 'none'}\n\nOpen it: {app_url}/customer-requests?id={req.id}\n")
+        return send_email(f"Order {req.ref}: ${o.get('amount', 0):,.2f} from {req.contact_name}", body, to=s.notify_email or None)
     if req.kind == "concept":
         brief = "\n\n".join(f"{a}:\n{b}" for a, b in portal_concept.brief_lines(req.concept or {}))
         body = (f"New project idea {req.ref}\n\nFrom: {req.contact_name} <{req.email}>{', ' + req.company if req.company else ''}"
@@ -1086,7 +1107,8 @@ def internal_dict(req: PortalRequest, full: bool = False) -> dict:
          "export_controlled": req.export_controlled, "created_at": req.created_at.isoformat() if req.created_at else None,
          "submitted_at": req.submitted_at.isoformat() if req.submitted_at else None, "quote_ids": req.quote_ids or [],
          "public_result": req.public_result or {}, "files": req.files or [],
-         "concept_title": (req.concept or {}).get("title", "") if req.kind == "concept" else ""}
+         "concept_title": (req.concept or {}).get("title", "") if req.kind == "concept" else "",
+         "order": req.order or {}, "customer_id": req.customer_id}
     if full:
         d.update(material=req.material, finish=req.finish, thickness=req.thickness, customer_notes=req.customer_notes,
                  internal=req.internal or {}, internal_notes=req.internal_notes, token=req.token, line_opts=req.line_opts or {},
@@ -1125,3 +1147,15 @@ def tab_for(kind: str) -> str:
 
 
 __all__ = ["PortalError", "PORTAL_STATUSES"]
+
+
+def confirm_to_customer(req: PortalRequest, s: PortalSettings, status_url: str) -> None:
+    """A short, fixed-text order confirmation to the customer's own address (only when email is set up)."""
+    from .cli import send_email
+
+    o = req.order or {}
+    how = "Your card payment was received." if o.get("status") == "paid" else f"We received your purchase order {o.get('po_number', '')}."
+    body = (f"Thank you for your order {req.ref}.\n\n{how} Total: ${o.get('amount', 0):,.2f}.\n\n"
+            "We will confirm the delivery date with you shortly. You can check your order here:\n"
+            f"{status_url}\n\n{s.display_name or ''}\n{s.contact_email or ''} {s.contact_phone or ''}\n")
+    send_email(f"Order {req.ref} received", body, to=req.email, allow_customer=True)

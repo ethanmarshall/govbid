@@ -1,12 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import './public.css'
+import { accountHref, call, loadSaved, money, pdfLink, range, statusLink, statusPath, useAccount, writeSaved } from './shared'
+import Account from './Account'
+import Checkout, { OrderPanel } from './Checkout'
+
+export { loadSaved }
 
 // Customer-facing quote page (/quote) and request status page (/quote/status/:ref?t=token).
 // Talks only to /api/public/*: no login, no internal data.
-
-const money = (n, cents = true) => (n == null ? '' : `$${Number(n).toLocaleString(undefined, { minimumFractionDigits: cents ? 2 : 0, maximumFractionDigits: cents ? 2 : 0 })}`)
-const range = (lo, hi) => `${money(lo, lo < 100)} to ${money(hi, hi < 100)}`
 
 // File uploads go through XMLHttpRequest so the page can show upload progress (large STEP files on a phone take a while).
 function upload(url, form, onProgress) {
@@ -29,23 +31,6 @@ const FILE_KIND = [[/\.(step|stp)$/i, '3D model'], [/\.pdf$/i, 'Drawing'], [/\.d
 const fileKind = (name) => (FILE_KIND.find(([rx]) => rx.test(name)) || [null, 'Reference'])[1]
 const size = (n) => (n < 102400 ? `${Math.max(1, Math.round(n / 1024))} KB` : `${(n / 1048576).toFixed(1)} MB`)
 
-async function call(method, url, body, form) {
-  const opts = { method, headers: {} }
-  if (form) opts.body = form
-  else if (body !== undefined) { opts.headers['Content-Type'] = 'application/json'; opts.body = JSON.stringify(body) }
-  const res = await fetch(url, opts)
-  let data = null
-  try { data = await res.json() } catch { /* not json */ }
-  if (!res.ok) throw new Error((data && (typeof data.detail === 'string' ? data.detail : null)) || `Something went wrong (${res.status}). Try again.`)
-  return data
-}
-
-// Quotes this browser has priced, so a customer can come back to them. Only refs and private links, kept on their device.
-const SAVED_KEY = 'pq-saved-quotes'
-export function loadSaved() {
-  try { const v = JSON.parse(localStorage.getItem(SAVED_KEY) || '[]'); return Array.isArray(v) ? v : [] } catch { return [] }
-}
-function writeSaved(list) { try { localStorage.setItem(SAVED_KEY, JSON.stringify(list.slice(0, 30))) } catch { /* private mode */ } }
 function priceText(res) {
   if (!res) return ''
   const many = (res.items || []).length > 1
@@ -56,8 +41,10 @@ function priceText(res) {
   if (res.kind === 'concept') return 'Project idea'
   return 'Priced by an engineer'
 }
+let lastQuote = null // the quote on screen, so signing in comes back to it
 function remember(req, token) {
   if (!req?.ref || !token) return
+  lastQuote = { ref: req.ref, token }
   const entry = { ref: req.ref, token, created: req.created || new Date().toISOString().slice(0, 10), quantity: req.result?.quantity || req.quantity,
     price: priceText(req.result), status: req.status_label || '', files: (req.files || []).map((f) => f.name).slice(0, 3).join(', ') }
   writeSaved([entry, ...loadSaved().filter((x) => x.ref !== req.ref)])
@@ -68,11 +55,13 @@ function useSaved() {
   useEffect(() => { const f = () => setList(loadSaved()); window.addEventListener('pq-saved', f); window.addEventListener('storage', f); return () => { window.removeEventListener('pq-saved', f); window.removeEventListener('storage', f) } }, [])
   return list
 }
-const statusLink = (ref, token) => `${window.location.origin}/quote/status/${ref}?t=${encodeURIComponent(token)}`
-const pdfLink = (ref, token) => `/api/public/quote/${ref}/pdf?token=${encodeURIComponent(token)}`
 
 function Sheet({ info, children, home = false, onPath }) {
   const saved = useSaved()
+  const acct = useAccount()
+  const me = acct?.customer
+  const here = typeof window !== 'undefined' ? window.location.pathname + window.location.search : ''
+  const onAccount = here.startsWith('/quote/account')
   const go = (id) => (e) => {
     if (!home) return
     e.preventDefault()
@@ -93,12 +82,14 @@ function Sheet({ info, children, home = false, onPath }) {
             <a className="pq-name" href="/quote">{info?.name || 'Valley Power Systems LLC'}</a>
             {info?.tagline && <p className="pq-tagline">{info.tagline}</p>}
           </div>
-          {(info?.contact_email || info?.contact_phone) && (
-            <div className="pq-contact">
-              {info.contact_email && <a href={`mailto:${info.contact_email}`}>{info.contact_email}</a>}
-              {info.contact_phone && <a href={`tel:${info.contact_phone.replace(/[^0-9+]/g, '')}`}>{info.contact_phone}</a>}
-            </div>
-          )}
+          <div className="pq-contact">
+            {info?.contact_email && <a href={`mailto:${info.contact_email}`}>{info.contact_email}</a>}
+            {info?.contact_phone && <a href={`tel:${info.contact_phone.replace(/[^0-9+]/g, '')}`}>{info.contact_phone}</a>}
+            {info && acct !== undefined && !onAccount && (
+              <a className="pq-acct" href={me ? '/quote/account' : accountHref(here)}
+                onClick={(e) => { if (me) return; e.preventDefault(); const p = window.location.pathname; window.location.assign(accountHref(p.startsWith('/quote/status/') ? p + window.location.search : lastQuote ? statusPath(lastQuote.ref, lastQuote.token) : p)) }}>{me ? `${me.name.split(' ')[0] || 'Your'}'s account` : 'Sign in or create an account'}</a>
+            )}
+          </div>
         </header>
         {info && links.length > 1 && (
           <nav className="pq-nav" aria-label="Sections">
@@ -126,6 +117,7 @@ export default function PublicQuote() {
   }, [info])
   const m = loc.pathname.match(/^\/quote\/status\/([A-Za-z0-9-]+)/)
   if (!info) return <Sheet info={null}><p className="pq-muted pq-pad">{err || 'Loading…'}</p></Sheet>
+  if (loc.pathname.startsWith('/quote/account')) return <Sheet info={info}><Account info={info} /></Sheet>
   if (m) return <Sheet info={info}><Status refId={m[1]} token={new URLSearchParams(loc.search).get('t') || ''} info={info} /></Sheet>
   const open = info.enabled || info.owner
   return (
@@ -667,7 +659,7 @@ function QuoteForm({ info }) {
       <aside className="pq-side" ref={block} aria-live="polite">
         <TitleBlock req={req} info={info} qty={qty} material={material} busy={busy} progress={progress} />
         {req && !stale && !req.submitted && <SaveBar req={req} token={req.token} info={info} />}
-        {req && !stale && res?.kind !== 'needs_input' && res?.kind !== 'processing' && <SubmitForm req={req} setReq={setReq} info={info} />}
+        {req && !stale && <NextStep req={req} token={req.token} setReq={setReq} info={info} />}
       </aside>
     </div>
     {req && !stale && <PartsTable req={req} token={req.token} info={info} onLine={changeLine} pending={linePending} />}
@@ -741,24 +733,44 @@ function TitleBlock({ req, info, qty, material, busy, progress }) {
         )}
         {res?.message && <p className="pq-msg">{res.message}</p>}
       </div>
-      {res?.lead_days ? <div className="pq-tb-row"><div className="pq-cell wide"><span>Ships in about</span><b>{res.lead_days} days after the order is confirmed</b></div></div> : null}
+      {res?.lead_days ? <div className="pq-tb-row"><div className="pq-cell wide"><span>Ships in about</span><b>{res.lead_days} days after {kind === 'instant' ? 'you order' : 'the order is confirmed'}</b></div></div> : null}
     </div>
   )
 }
 
-function SubmitForm({ req, setReq, info }) {
+// After pricing: order it now when every line has a firm price, otherwise send it for review.
+function NextStep({ req, token, setReq, info }) {
+  const [review, setReview] = useState(false)
+  const kind = req.result?.kind
+  if (kind === 'needs_input' || kind === 'processing') return null
+  if (req.order && req.order.status !== 'awaiting_payment') return <OrderPanel order={req.order} info={info} fresh />
+  if (req.checkout?.eligible) {
+    return (
+      <>
+        <Checkout req={req} token={token} setReq={setReq} info={info} />
+        {req.submitted ? null : review ? <SubmitForm req={req} setReq={setReq} info={info} secondary />
+          : <p className="pq-or"><button type="button" className="pq-link" onClick={() => setReview(true)}>Rather have an engineer look at it before you order?</button></p>}
+      </>
+    )
+  }
+  return <SubmitForm req={req} setReq={setReq} info={info} secondary={review} />
+}
+
+function SubmitForm({ req, setReq, info, secondary = false }) {
+  const me = useAccount()?.customer
   const [f, setF] = useState({ name: '', company: '', email: '', phone: '', needed_by: '', notes: '', accept_terms: false })
+  useEffect(() => { if (me) setF((x) => ({ ...x, name: x.name || me.name, company: x.company || me.company, email: x.email || me.email, phone: x.phone || me.phone })) }, [me?.id])
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
   const [copied, setCopied] = useState(false)
   const kind = req.result?.kind
-  const action = kind === 'instant' ? 'Place order request' : 'Request review'
+  const action = secondary ? 'Send for review' : kind === 'instant' ? 'Place order request' : 'Request review'
   const link = statusLink(req.ref, req.token)
   if (req.submitted) {
     return (
       <div className="pq-done">
-        <h2>{kind === 'instant' ? 'Order request sent' : 'Review requested'}</h2>
-        <p>Your request is <b>{req.ref}</b>. {kind === 'instant'
+        <h2>{kind === 'instant' && !secondary ? 'Order request sent' : 'Review requested'}</h2>
+        <p>Your request is <b>{req.ref}</b>. {kind === 'instant' && !secondary
           ? 'We will confirm the order and delivery date with you before we start.'
           : `An engineer will review your files and contact you within ${info.review_days} business day${info.review_days === 1 ? '' : 's'} to confirm what you need and the final cost.`}</p>
         <p className="pq-muted">Keep this link to check on your request:</p>
@@ -778,7 +790,8 @@ function SubmitForm({ req, setReq, info }) {
   }
   return (
     <form className="pq-submit" onSubmit={(e) => { e.preventDefault(); send() }}>
-      <h2>{kind === 'instant' ? 'Order this' : 'Send it for review'}</h2>
+      <h2>{secondary ? 'Or ask us to look at it first' : kind === 'instant' ? 'Order this' : 'Send it for review'}</h2>
+      {secondary && <p className="pq-muted pq-small">An engineer checks the files and confirms the price and delivery date before you order. Nothing is charged.</p>}
       <div className="pq-fields two">
         <label>Name<input required autoComplete="name" value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} /></label>
         <label>Company<input autoComplete="organization" value={f.company} onChange={(e) => setF({ ...f, company: e.target.value })} /></label>
@@ -1022,14 +1035,18 @@ function Status({ refId, token, info }) {
   if (err && !r) return <div className="pq-closed"><h1>Quote not found</h1><Forget refId={refId} token={token} /><p>{err} <button className="pq-link" onClick={() => navigate('/quote')}>Start a new quote</button></p></div>
   if (!r) return <p className="pq-muted pq-pad">Loading…</p>
   const draft = !r.submitted
+  const qs = new URLSearchParams(window.location.search)
+  const payNote = qs.get('paid') ? (r.order?.status === 'paid' ? { ok: true, text: 'Payment received. Thank you, your order is in.' } : r.order?.status === 'awaiting_payment' ? { ok: false, text: 'We have not received the payment confirmation yet. Refresh this page in a minute.' } : null)
+    : qs.get('cancelled') && r.order?.status === 'awaiting_payment' ? { ok: false, text: 'Payment was not completed. Your quote is still here when you are ready.' } : null
   const res = r.result || {}
   return (
     <>
     <div className="pq-body">
       <section className="pq-form">
-        <h1>{draft ? `Saved quote ${r.ref}` : `Request ${r.ref}`}</h1>
+        <h1>{r.order && r.status !== 'draft' ? `Order ${r.ref}` : draft ? `Saved quote ${r.ref}` : `Request ${r.ref}`}</h1>
         <p className="pq-intro"><b>{r.status_label}.</b> {draft
-          ? 'Change the quantity to see a new price, then send it to us when you are ready.'
+          ? (r.checkout?.eligible ? 'Change the quantity to see a new price, then place your order when you are ready.' : 'Change the quantity to see a new price, then send it to us when you are ready.')
+          : r.status === 'ordered' ? 'We have your order and will confirm the ship date by email.'
           : r.status === 'submitted' || r.status === 'reviewing' ? `We will contact you within ${info.review_days} business day${info.review_days === 1 ? '' : 's'}.` : ''}</p>
         {draft && res.kind !== 'manual' && (
           <div className="pq-fields">
@@ -1044,8 +1061,10 @@ function Status({ refId, token, info }) {
       <aside className="pq-side">
         <TitleBlock req={r} info={info} qty={qty || r.quantity} material={r.material} busy={false} />
         {draft && <SaveBar req={r} token={token} info={info} />}
-        {draft || sent
-          ? res.kind !== 'needs_input' && res.kind !== 'processing' && <SubmitForm req={{ ...r, token }} setReq={(v) => { setR(v); setSent(true) }} info={info} />
+        {payNote && <p className={payNote.ok ? 'pq-okline' : 'pq-err'} role="status">{payNote.text}</p>}
+        {r.order && !(draft || sent) && <OrderPanel order={r.order} info={info} />}
+        {draft || sent || r.checkout?.eligible
+          ? <NextStep req={{ ...r, token }} token={token} setReq={(v) => { setR(v); setSent(true) }} info={info} />
           : <p><a href={pdfLink(r.ref, token)} target="_blank" rel="noopener">Save a PDF copy</a></p>}
       </aside>
     </div>

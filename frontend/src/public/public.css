@@ -339,4 +339,45 @@
   .pq-body { grid-template-columns: minmax(0, 1fr) 330px; gap: 28px; }
   .pq-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
+/* Accounts and checkout */
+.pq-small { font-size: 14.5px; }
+.pq a.pq-btn { color: var(--dye-ink); text-decoration: none; }
+.pq a.pq-btn.ghost { color: var(--dye); }
+.pq-okline { color: var(--ok); font-weight: 500; }
+.pq-acct { font-family: var(--cond); font-weight: 600; font-size: 16px; margin-top: 4px; }
+.pq-buy { margin-top: 20px; padding-top: 18px; border-top: 1.5px solid var(--ink); }
+.pq-buy h2, .pq-checkout h2, .pq-order h2 { margin: 0 0 6px; }
+.pq-buy .pq-btn { width: 100%; margin-top: 8px; }
+.pq-or { margin: 14px 0 0; font-size: 15px; }
+.pq-checkout fieldset { border: 0; padding: 0; margin: 18px 0 0; min-width: 0; }
+.pq-checkout legend { font-family: var(--cond); font-weight: 700; font-size: 18px; padding: 0; margin-bottom: 8px; }
+.pq-checkout .pq-fields.two { margin-top: 8px; }
+.pq-checkout .pq-btn + .pq-link { display: block; margin: 8px auto 0; }
+.pq-span2 { grid-column: 1 / -1; }
+.pq-wide { display: flex; flex-direction: column; gap: 4px; font-size: 15px; font-weight: 500; }
+.pq-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.pq-methods { display: grid; gap: 8px; }
+.pq label.pq-method { flex-direction: row; color: var(--ink); }
+.pq-method { display: flex; gap: 12px; align-items: flex-start; border: 1px solid var(--rule); padding: 10px 12px; cursor: pointer; border-radius: 3px; }
+.pq-method.on { border-color: var(--dye); box-shadow: inset 3px 0 0 var(--dye); }
+.pq-method input { accent-color: var(--dye); width: 18px; height: 18px; min-height: 0; margin-top: 3px; flex: none; }
+.pq-method > span { display: flex; flex-direction: column; font-size: 15px; }
+.pq-method b { font-family: var(--cond); font-size: 17px; }
+.pq-ostat { display: inline-block; font-family: var(--cond); font-weight: 600; font-size: 14px; padding: 1px 8px; border: 1px solid currentColor; border-radius: 3px; color: var(--ok); }
+.pq-ostat.s-awaiting_payment, .pq-ostat.s-cancelled { color: var(--wait); }
+.pq-odl { margin: 10px 0; display: grid; gap: 6px; }
+.pq-odl div { display: grid; grid-template-columns: 90px 1fr; gap: 10px; font-size: 15px; }
+.pq-odl dt { color: var(--ink-3); }
+.pq-odl dd { margin: 0; white-space: pre-line; }
+.pq-acctbox { max-width: 620px; padding-bottom: 12px; }
+.pq-tabs { max-width: 460px; margin: 6px 0 4px; }
+.pq-tabs .pq-path { padding: 10px 16px; }
+.pq-tabs .pq-path b { font-size: 18px; }
+.pq-accthead { display: flex; justify-content: space-between; align-items: flex-end; gap: 18px; flex-wrap: wrap; }
+.pq-accthead h1 { margin: 0; }
+.pq-accthead p { margin: 4px 0 0; }
+.pq-accthead .pq-btn { text-decoration: none; display: inline-flex; align-items: center; }
+.pq-addrs { list-style: none; margin: 0 0 16px; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 12px; }
+.pq-addrs li { border: 1px solid var(--rule); padding: 12px 14px; display: flex; flex-direction: column; justify-content: space-between; gap: 8px; font-size: 15px; }
+.pq-addrs address { font-style: normal; }
 @media (prefers-reduced-motion: reduce) { .pq * { transition: none !important; animation: none !important; scroll-behavior: auto !important; } }
