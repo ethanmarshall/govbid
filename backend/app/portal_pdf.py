@@ -54,7 +54,7 @@ def render(view: dict, info: dict, link: str, keep_days: int = 30, sheets: dict 
     codes = ", ".join(x for x in (co.get("uei") and f"UEI {co['uei']}", co.get("cage") and f"CAGE {co['cage']}") if x)
     contact = "   ".join(x for x in (info.get("contact_email"), info.get("contact_phone"), codes) if x)
     head = Table([[[P(info.get("name") or "Quote", "name"), P(info.get("tagline") or "", "sub")],
-                   [P("QUOTE" if kind == "instant" else "ESTIMATE" if kind == "estimate" else "QUOTE REQUEST", "lab"), P(view["ref"], "name")]]],
+                   [P("QUOTE" if kind == "instant" else "ESTIMATE" if kind == "estimate" else "PROJECT" if kind == "concept" else "QUOTE REQUEST", "lab"), P(view["ref"], "name")]]],
                  colWidths=[width * 0.66, width * 0.34])
     head.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "TOP"), ("LINEBELOW", (0, 0), (-1, 0), 1.2, ink), ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
                               ("LEFTPADDING", (0, 0), (-1, -1), 0)]))
@@ -96,6 +96,8 @@ def render(view: dict, info: dict, link: str, keep_days: int = 30, sheets: dict 
                       P(f"{_range(res.get('total_low'), res.get('total_high'))} for {items[0].get('qty', q):,}")]
     elif kind == "needs_input":
         story += [P("Not priced yet", "h")]
+    elif kind == "concept":
+        story += [P("Project idea, an engineer will reply", "h")]
     else:
         story += [P("Priced by an engineer", "h")]
     if res.get("lead_days"):
@@ -152,6 +154,13 @@ def render(view: dict, info: dict, link: str, keep_days: int = 30, sheets: dict 
                 except Exception:  # noqa: BLE001  (a drawing problem never stops the PDF)
                     pass
             story.append(KeepTogether(block))
+
+    if view.get("concept"):
+        story += [P("Your project", "h")]
+        cr = [[P(x["label"], "lab"), P(x["text"], "cell")] for x in view["concept"]]
+        ct = Table(cr, colWidths=[width * 0.26, width * 0.74])
+        ct.setStyle(TableStyle([("LINEBELOW", (0, 0), (-1, -1), 0.3, rule), ("VALIGN", (0, 0), (-1, -1), "TOP"), ("LEFTPADDING", (0, 0), (-1, -1), 2)]))
+        story.append(ct)
 
     files = [f for f in view.get("files") or []]
     if files:

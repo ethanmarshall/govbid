@@ -371,3 +371,44 @@ def test_bought_part_priced_from_the_library(client, monkeypatch):
         db.query(HardwareItem).delete()
         db.commit()
         db.close()
+
+
+def _concept(c, concept, contact=None, files=()):
+    payload = {"concept": concept, "contact": {"name": "Dana Lee", "company": "Navy school", "email": "dana@example.com", "phone": "555-0100",
+                                               "accept_terms": True, **(contact or {})}}
+    up = [("files", (p.name, p.read_bytes(), "application/octet-stream")) for p in files]
+    return c.post("/api/public/concept", data={"payload": json.dumps(payload)}, files=up or None)
+
+
+def test_project_idea_without_drawings(client):
+    info = client.get("/api/public/info").json()
+    assert "Just an idea" in info["concept_options"]["stages"] and info["must_have_hints"]
+    concept = {"title": "Pump trainer", "description": "A bench trainer that shows students how a centrifugal pump and its controls work.",
+               "goals": "Students can start, stop and fault the pump safely.", "stage": "Sketches or notes",
+               "must_haves": ["Runs on 120 VAC", "Fits through a 36 in door", ""], "environment": ["Indoors", "Not a real choice"],
+               "standards": ["UL listing"], "power": ["120 VAC"], "quantity_first": "2 to 10", "budget": "$25,000 to $100,000",
+               "needed_by": "2027-03-01", "deadline_firm": True, "help": ["Engineering and design", "A prototype"], "government": True,
+               "contract_ref": "N00000-27-Q-0001", "nda": True, "unknown": "dropped"}
+    r = _concept(client, concept, files=[FIX / "drawings" / "sheet_cover.pdf"])
+    assert r.status_code == 200, r.text
+    q = r.json()
+    assert q["status"] == "submitted" and q["result"]["kind"] == "concept" and "NDA" in q["result"]["message"]
+    labels = {x["label"]: x["text"] for x in q["concept"]}
+    assert "Fits through a 36 in door" in labels["Must haves (not negotiable)"] and labels["Where it works"] == "Indoors"
+    assert "unknown" not in json.dumps(q) and "dana@example.com" not in json.dumps(q)  # the status page does not echo contact details
+    assert q["files"][0]["name"] == "sheet_cover.pdf"
+    v = client.get(f"/api/public/quote/{q['ref']}?token={q['token']}").json()
+    assert v["concept"] and v["status_label"]
+    row = next(x for x in client.get("/api/portal/requests").json() if x["ref"] == q["ref"])
+    full = client.get(f"/api/portal/requests/{row['id']}").json()
+    assert full["kind"] == "concept" and full["email"] == "dana@example.com" and any(x["label"] == "Budget" for x in full["concept"])
+    # repricing an idea does nothing to it
+    assert client.post(f"/api/portal/requests/{row['id']}/reprice").json()["public_result"]["kind"] == "concept"
+
+
+def test_project_idea_needs_contact_and_a_description(client, tmp_path):
+    assert _concept(client, {"title": "X"}).status_code == 400  # too little to go on
+    assert _concept(client, {"description": "A long enough description of the idea."}, {"email": "bad"}).status_code == 400
+    ok = _concept(client, {"description": "A long enough description of the idea."}, {"export_controlled": True},
+                  files=[FIX / "drawings" / "sheet_cover.pdf"]).json()
+    assert ok["files"] == [] and ok["export_controlled"]  # controlled projects send no files here

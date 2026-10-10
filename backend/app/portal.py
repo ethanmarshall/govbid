@@ -32,7 +32,7 @@ from pathlib import Path
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from . import isolate, portal_read, pricing, quotes
+from . import isolate, portal_concept, portal_read, pricing, quotes
 from .config import UPLOAD_DIR
 from .models_portal import PORTAL_STATUSES, PortalRequest, PortalSettings
 
@@ -48,7 +48,7 @@ KINDS = {
     "pdf": (".pdf",),
     "dxf": (".dxf",),
     "pcb": (".zip", ".gbr", ".ger", ".gtl", ".gbl", ".gko", ".gm1", ".drl", ".xln", ".pos", ".csv", ".xlsx", ".tsv"),
-    "ref": (".png", ".jpg", ".jpeg", ".txt", ".docx"),
+    "ref": (".png", ".jpg", ".jpeg", ".heic", ".webp", ".gif", ".txt", ".docx", ".doc", ".pptx", ".mp4", ".mov"),
 }
 ACCEPT = ",".join(e for v in KINDS.values() for e in v)
 PROCESS_LABEL = {"cnc_mill": "CNC machined", "cnc_lathe": "CNC turned", "sheet_metal": "Sheet metal", "3d_print": "3D printed",
@@ -185,7 +185,8 @@ def public_info(db: Session) -> dict:
             "materials": sorted(cfg["materials"]), "print_materials": sorted(cfg["additive"]["materials"]),
             "sheet_materials": sorted(flat_materials(cfg)), "finishes": sorted(cfg["finishes"]),
             "accept": ACCEPT, "max_files": MAX_FILES, "max_file_mb": MAX_FILE // (1024 * 1024), "keep_days": DRAFT_DAYS,
-            "site": site_content(s), "company": _company_codes(prof) if s.show_codes else None}
+            "site": site_content(s), "company": _company_codes(prof) if s.show_codes else None,
+            "concept_options": portal_concept.OPTIONS, "must_have_hints": portal_concept.MUST_HAVE_HINTS}
 
 
 def _company_codes(prof) -> dict | None:
@@ -432,6 +433,8 @@ def price_request(db: Session, req: PortalRequest) -> None:
     from . import portal_lines as PL
     from . import portal_views as pv
 
+    if req.kind == "concept":  # an idea, read by an engineer: nothing to price automatically
+        return
     s = get_settings(db)
     cfg = quotes.get_config(db)
     over = quotes.get_overrides(db)
@@ -1047,7 +1050,8 @@ def public_view(req: PortalRequest) -> dict:
             "material": req.material, "finish": req.finish, "thickness": req.thickness, "notes": req.customer_notes,
             "files": [{"name": f["name"], "kind": f["kind"], "removed": f.get("removed", False)} for f in req.files or []],
             "export_controlled": req.export_controlled, "result": req.public_result or {},
-            "submitted": req.status != "draft", "created": req.created_at.date().isoformat() if req.created_at else ""}
+            "submitted": req.status != "draft", "created": req.created_at.date().isoformat() if req.created_at else "",
+            **(portal_concept.public(req) if req.kind == "concept" else {})}
 
 
 def notify(req: PortalRequest, s: PortalSettings) -> str:
@@ -1055,6 +1059,14 @@ def notify(req: PortalRequest, s: PortalSettings) -> str:
     from .cli import send_email
 
     r = req.public_result or {}
+    app_url = (os.getenv("APP_URL") or "").rstrip("/")
+    if req.kind == "concept":
+        brief = "\n\n".join(f"{a}:\n{b}" for a, b in portal_concept.brief_lines(req.concept or {}))
+        body = (f"New project idea {req.ref}\n\nFrom: {req.contact_name} <{req.email}>{', ' + req.company if req.company else ''}"
+                f"{', ' + req.phone if req.phone else ''}\nFiles: {', '.join(f['name'] for f in req.files or []) or 'none'}\n"
+                f"{'EXPORT-CONTROLLED: they said the project involves controlled data. Arrange a secure transfer.' if req.export_controlled else ''}\n\n"
+                f"{brief}\n\nReview it: {app_url}/customer-requests?id={req.id}\n")
+        return send_email(f"Project idea {req.ref}: {(req.concept or {}).get('title') or req.contact_name}", body, to=s.notify_email or None)
     price = (f"${r.get('unit_price'):,.2f} per unit, ${r.get('total'):,.2f} for {req.quantity}" if r.get("kind") == "instant"
              else f"${r.get('unit_low'):,.0f} to ${r.get('unit_high'):,.0f} per unit (estimate)" if r.get("kind") == "estimate" else "no price (manual review)")
     app_url = (os.getenv("APP_URL") or "").rstrip("/")
@@ -1073,10 +1085,12 @@ def internal_dict(req: PortalRequest, full: bool = False) -> dict:
          "company": req.company, "email": req.email, "phone": req.phone, "needed_by": req.needed_by,
          "export_controlled": req.export_controlled, "created_at": req.created_at.isoformat() if req.created_at else None,
          "submitted_at": req.submitted_at.isoformat() if req.submitted_at else None, "quote_ids": req.quote_ids or [],
-         "public_result": req.public_result or {}, "files": req.files or []}
+         "public_result": req.public_result or {}, "files": req.files or [],
+         "concept_title": (req.concept or {}).get("title", "") if req.kind == "concept" else ""}
     if full:
         d.update(material=req.material, finish=req.finish, thickness=req.thickness, customer_notes=req.customer_notes,
-                 internal=req.internal or {}, internal_notes=req.internal_notes, token=req.token, line_opts=req.line_opts or {})
+                 internal=req.internal or {}, internal_notes=req.internal_notes, token=req.token, line_opts=req.line_opts or {},
+                 concept=[{"label": a, "text": b} for a, b in portal_concept.brief_lines(req.concept or {})] if req.kind == "concept" else [])
     return d
 
 

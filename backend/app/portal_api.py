@@ -77,6 +77,38 @@ async def new_quote(request: Request, files: list[UploadFile] = File(default=[])
     return {**portal.public_view(req), "token": req.token}
 
 
+@public.post("/concept")
+async def new_concept(request: Request, background: BackgroundTasks, payload: str = Form(...), files: list[UploadFile] = File(default=[]),
+                      website: str = Form(""), db: Session = Depends(get_db)):
+    """A project idea without drawings: who they are, the concept, goals, must-haves, conditions, and optional sketches or photos.
+    payload is JSON: {contact: {name, company, email, phone, accept_terms, export_controlled}, concept: {...}}."""
+    import json as _json
+
+    from . import portal_concept
+
+    if website:
+        raise HTTPException(400, "Could not process the request.")
+    _limit(portal.SUBMIT_LIMIT, request)
+    try:
+        body = _json.loads(payload)
+    except ValueError:
+        raise HTTPException(400, "Could not read the form.")
+    uploads = []
+    total = 0
+    for f in files[: portal.MAX_FILES + 1]:
+        data = await f.read(portal.MAX_FILE + 1)
+        total += len(data)
+        if total > portal.MAX_TOTAL + portal.MAX_FILE:
+            raise HTTPException(413, "The files are too large.")
+        uploads.append((f.filename or "file", data))
+    try:
+        req = await run_in_threadpool(portal_concept.create, db, body.get("concept") or {}, body.get("contact") or {}, uploads, _client(request))
+    except (portal_concept.ConceptError, portal.PortalError) as exc:
+        raise HTTPException(400, str(exc))
+    background.add_task(_notify, req.id)
+    return {**portal.public_view(req), "token": req.token}
+
+
 def _customer(db: Session, ref: str, token: str) -> PortalRequest:
     return _guard(portal.get_for_customer, db, ref, token)
 

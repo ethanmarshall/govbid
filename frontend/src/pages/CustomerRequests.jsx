@@ -6,7 +6,7 @@ import { PartsTable } from '../public/PublicQuote'
 const usd = (n) => (n == null ? '' : `$${Number(n).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`)
 const STATUSES = ['submitted', 'reviewing', 'confirmed', 'declined', 'closed', 'draft']
 const STATUS_LABEL = { draft: 'Not submitted', submitted: 'New', reviewing: 'In review', confirmed: 'Confirmed', declined: 'Declined', closed: 'Closed' }
-const KIND_LABEL = { instant: 'Instant', estimate: 'Estimate', manual: 'Manual', needs_input: 'Needs input', processing: 'Reading model' }
+const KIND_LABEL = { instant: 'Instant', estimate: 'Estimate', manual: 'Manual', needs_input: 'Needs input', processing: 'Reading model', concept: 'Project idea' }
 
 function shown(r) {
   const p = r.public_result || {}
@@ -14,6 +14,7 @@ function shown(r) {
   if (p.kind === 'instant') return many ? `${usd(p.total)} total` : `${usd(p.unit_price)} ea`
   if (p.kind === 'estimate') return many ? `${usd(p.total_low)} to ${usd(p.total_high)} total` : `${usd(p.unit_low)} to ${usd(p.unit_high)} ea`
   if (p.kind === 'processing') return 'reading model'
+  if (p.kind === 'concept') return (r.concept_title || 'idea')
   return 'no price'
 }
 
@@ -111,10 +112,10 @@ function RequestDetail({ id, onChange, onClose }) {
               Needed by: {r.needed_by || 'not given'}</p>
           ) : <p className="small muted">Not submitted yet (no contact details).</p>}
         </div>
-        <div>
+        {r.kind !== 'concept' && <div>
           <h3>What they chose</h3>
           <p className="small" style={{ margin: 0 }}>Quantity {r.quantity}<br />Material: {r.material || 'from the drawing'}<br />Finish: {r.finish || 'from the drawing'}{r.thickness ? <><br />Thickness: {r.thickness} in</> : ''}</p>
-        </div>
+        </div>}
       </div>
       {r.customer_notes && <><h3>Their notes</h3><p className="small" style={{ whiteSpace: 'pre-wrap' }}>{r.customer_notes}</p></>}
       <h3>Files</h3>
@@ -126,10 +127,20 @@ function RequestDetail({ id, onChange, onClose }) {
       <h3>Shown to the customer</h3>
       <p className="small" style={{ margin: 0 }}><b>{KIND_LABEL[p.kind] || p.kind}</b>: {shown(r)}{p.kind === 'instant' ? `, ${usd(p.total)} total` : p.kind === 'estimate' ? `, ${usd(p.total_low)} to ${usd(p.total_high)} total` : ''}{p.lead_days ? `, about ${p.lead_days} days` : ''}</p>
       {r.internal?.shown_to_customer && <p className="small muted">Repriced since; the customer saw the earlier price.</p>}
+      {r.kind === 'concept' && (
+        <>
+          <h3>Their project</h3>
+          <table className="small"><tbody>{(r.concept || []).map((x, i) => (
+            <tr key={i}><td className="muted" style={{ width: 170, verticalAlign: 'top' }}>{x.label}</td><td style={{ whiteSpace: 'pre-wrap' }}>{x.text}</td></tr>
+          ))}</tbody></table>
+        </>
+      )}
+      {r.kind !== 'concept' && <>
       <h3>Your numbers, line by line</h3>
       <p className="small muted" style={{ marginTop: 0 }}>Tool price is before calibration. A final price replaces the tool's for the customer and is saved as a calibration sample, so the tool learns from each job.</p>
       <LineTable r={r} id={id} setR={setR} setMsg={setMsg} setErr={setErr} />
       <div className="pq pq-embed"><PartsTable req={{ ...r, result: p, submitted: true }} info={{}} viewUrl={(key) => `/api/portal/requests/${id}/views/${key}.svg`} /></div>
+      </>}
       <h3>Review</h3>
       <div className="grid g2">
         <label className="f">Status<select value={r.status} onChange={(e) => put({ status: e.target.value })}>{STATUSES.map((s) => <option key={s} value={s}>{STATUS_LABEL[s]}</option>)}</select></label>
@@ -138,7 +149,7 @@ function RequestDetail({ id, onChange, onClose }) {
       <label className="f" style={{ marginTop: 10 }}>Your notes<textarea value={notes} onChange={(e) => setNotes(e.target.value)} onBlur={() => notes !== (r.internal_notes || '') && put({ internal_notes: notes })} placeholder="Call notes, scope changes, the price you confirmed" /></label>
       <div className="row" style={{ marginTop: 10 }}>
         <button className="primary" onClick={toQuotes}>Save as internal quotes</button>
-        <button onClick={reprice}>Price again with current rates</button>
+        {r.kind !== 'concept' && <button onClick={reprice}>Price again with current rates</button>}
         {r.email && <a className="btn" href={mail}>Email the customer</a>}
         <button className="link" onClick={del}>Delete</button>
       </div>

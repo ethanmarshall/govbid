@@ -53,6 +53,7 @@ function priceText(res) {
   if (res.kind === 'estimate') return many ? `${range(res.total_low, res.total_high)} total (estimate)` : `${range(res.unit_low, res.unit_high)} each (estimate)`
   if (res.kind === 'needs_input') return 'Needs one more detail'
   if (res.kind === 'processing') return 'Reading your model'
+  if (res.kind === 'concept') return 'Project idea'
   return 'Priced by an engineer'
 }
 function remember(req, token) {
@@ -70,11 +71,17 @@ function useSaved() {
 const statusLink = (ref, token) => `${window.location.origin}/quote/status/${ref}?t=${encodeURIComponent(token)}`
 const pdfLink = (ref, token) => `/api/public/quote/${ref}/pdf?token=${encodeURIComponent(token)}`
 
-function Sheet({ info, children, home = false }) {
+function Sheet({ info, children, home = false, onPath }) {
   const saved = useSaved()
-  const go = (id) => (e) => { if (home) { e.preventDefault(); document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' }); history.replaceState(null, '', `#${id}`) } }
+  const go = (id) => (e) => {
+    if (!home) return
+    e.preventDefault()
+    if (onPath && (id === 'idea' || id === 'quote')) onPath(id === 'idea' ? 'idea' : 'files')
+    setTimeout(() => document.getElementById(id === 'idea' ? 'quote' : id)?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 30)
+    history.replaceState(null, '', `#${id}`)
+  }
   const site = info?.site
-  const links = [['quote', 'Get a quote'], site?.capabilities?.length && ['capabilities', 'Capabilities'], (site?.about || site?.experience?.length) && ['about', 'About us'],
+  const links = [['quote', 'Get a quote'], ['idea', 'Start with an idea'], site?.capabilities?.length && ['capabilities', 'Capabilities'], (site?.about || site?.experience?.length) && ['about', 'About us'],
     site?.quality?.length && ['quality', 'Quality'], site?.faq?.length && ['questions', 'Questions'], saved.length && ['saved', `Saved quotes (${saved.length})`]].filter(Boolean)
   return (
     <div className="pq">
@@ -109,6 +116,7 @@ function Sheet({ info, children, home = false }) {
 
 export default function PublicQuote() {
   const loc = useLocation()
+  const [path, setPath] = useState(() => (loc.hash === '#idea' ? 'idea' : 'files'))
   const [info, setInfo] = useState(null)
   const [err, setErr] = useState('')
   useEffect(() => { document.title = 'Get a quote'; call('GET', '/api/public/info').then(setInfo).catch((e) => setErr(e.message)) }, [])
@@ -121,9 +129,11 @@ export default function PublicQuote() {
   if (m) return <Sheet info={info}><Status refId={m[1]} token={new URLSearchParams(loc.search).get('t') || ''} info={info} /></Sheet>
   const open = info.enabled || info.owner
   return (
-    <Sheet info={info} home>
+    <Sheet info={info} home onPath={setPath}>
       <div id="quote" className="pq-anchor">
-        {open ? <QuoteForm info={info} /> : (
+        <PathChooser path={path} setPath={setPath} />
+        <div id="idea" className="pq-anchor" />
+        {path === 'idea' ? <ConceptForm info={info} /> : open ? <QuoteForm info={info} /> : (
           <div className="pq-closed">
             <h1>Send us your files for a price</h1>
             <p>Online pricing is not open yet. Email your drawings or models{info.contact_email ? <> to <a href={`mailto:${info.contact_email}`}>{info.contact_email}</a></> : ''} with the quantity you need, and we will reply with a price.</p>
@@ -133,6 +143,218 @@ export default function PublicQuote() {
       <SavedQuotes />
       <SiteSections info={info} />
     </Sheet>
+  )
+}
+
+function PathChooser({ path, setPath }) {
+  const opt = (key, title, text) => (
+    <button type="button" role="tab" aria-selected={path === key} className={`pq-path ${path === key ? 'on' : ''}`}
+      onClick={() => { setPath(key); history.replaceState(null, '', key === 'idea' ? '#idea' : '#quote') }}>
+      <b>{title}</b><span>{text}</span>
+    </button>
+  )
+  return (
+    <div className="pq-paths" role="tablist" aria-label="How do you want to start?">
+      {opt('files', 'I have drawings or models', 'Upload STEP, PDF, DXF or board files and get a price now.')}
+      {opt('idea', 'I have an idea', 'No drawings yet? Tell us what you need and an engineer will help you get there.')}
+    </div>
+  )
+}
+
+// A project without drawings: the idea, goals, must-haves, conditions, quantities, budget, timing and contact.
+function ConceptForm({ info }) {
+  const o = info.concept_options || {}
+  const [c, setC] = useState({ title: '', stage: '', description: '', goals: '', users: '', must_haves: [''], nice_to_haves: '',
+    environment: [], environment_notes: '', power: [], standards: [], standards_other: '', size_limits: '', interfaces: '',
+    quantity_first: '', quantity_annual: '', budget: '', budget_notes: '', needed_by: '', deadline_firm: false, help: [],
+    government: false, contract_ref: '', end_customer: '', nda: false, contact_method: 'Email', best_time: '', heard: '', notes: '' })
+  const [who, setWho] = useState({ name: '', company: '', email: '', phone: '', accept_terms: false, export_controlled: false })
+  const [files, setFiles] = useState([])
+  const [busy, setBusy] = useState(false)
+  const [progress, setProgress] = useState(null)
+  const [err, setErr] = useState('')
+  const [done, setDone] = useState(null)
+  const fileIn = useRef()
+  const set = (k) => (e) => setC({ ...c, [k]: e?.target ? (e.target.type === 'checkbox' ? e.target.checked : e.target.value) : e })
+  const toggle = (k, v) => setC({ ...c, [k]: c[k].includes(v) ? c[k].filter((x) => x !== v) : [...c[k], v] })
+  const must = c.must_haves
+  const setMust = (i, v) => setC({ ...c, must_haves: must.map((x, j) => (j === i ? v : x)) })
+  const addMust = (v = '') => setC({ ...c, must_haves: [...must.filter((x, j) => x.trim() || j < must.length - 1), v, ''].filter((x, j, a) => x !== '' || j === a.length - 1) })
+  const addFiles = (list) => {
+    const next = [...files]
+    for (const f of list) {
+      if (f.size > info.max_file_mb * 1048576) { setErr(`${f.name} is larger than ${info.max_file_mb} MB.`); continue }
+      if (!next.some((x) => x.name === f.name && x.size === f.size)) next.push(f)
+    }
+    setFiles(next.slice(0, info.max_files))
+  }
+  const send = async (e) => {
+    e.preventDefault(); setErr(''); setBusy(true); setProgress(0)
+    const form = new FormData()
+    form.append('payload', JSON.stringify({ concept: { ...c, must_haves: must.filter((x) => x.trim()) }, contact: who }))
+    form.append('website', '')
+    if (!who.export_controlled) files.forEach((f) => form.append('files', f))
+    try {
+      const r = await upload('/api/public/concept', form, setProgress)
+      remember({ ...r, files: r.files }, r.token)
+      setDone(r)
+      setTimeout(() => document.getElementById('quote')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 30)
+    } catch (x) { setErr(x.message) }
+    setBusy(false); setProgress(null)
+  }
+  const chips = (k, list) => (
+    <div className="pq-chips">
+      {(list || []).map((v) => (
+        <label key={v} className={`pq-chip ${c[k].includes(v) ? 'on' : ''}`}>
+          <input type="checkbox" checked={c[k].includes(v)} onChange={() => toggle(k, v)} />{v}
+        </label>
+      ))}
+    </div>
+  )
+  if (done) {
+    const link = statusLink(done.ref, done.token)
+    return (
+      <div className="pq-concept-done">
+        <h1>We have your project</h1>
+        <p>Your reference is <b>{done.ref}</b>. {done.result?.message}</p>
+        <p className="pq-muted">Keep this link to see what you sent and where it stands:</p>
+        <div className="pq-linkrow"><input readOnly value={link} onFocus={(e) => e.target.select()} aria-label="Status link" />
+          <button type="button" className="pq-btn ghost" onClick={() => navigator.clipboard?.writeText(link)}>Copy link</button></div>
+      </div>
+    )
+  }
+  return (
+    <form className="pq-concept" onSubmit={send}>
+      <h1>Tell us about your project</h1>
+      <p className="pq-intro">No drawings needed. The more you tell us, the better our first answer, but only the parts marked required are needed. An engineer reads every project and replies within {info.review_days} business day{info.review_days === 1 ? '' : 's'}.</p>
+
+      <fieldset className="pq-step">
+        <legend><span className="pq-stepno">1</span>The idea</legend>
+        <div className="pq-fields two">
+          <label>Project name<input value={c.title} onChange={set('title')} maxLength={120} placeholder="Pump control trainer" /></label>
+          <label>Where it stands
+            <select value={c.stage} onChange={set('stage')}><option value="">Choose one</option>{(o.stages || []).map((v) => <option key={v}>{v}</option>)}</select>
+          </label>
+        </div>
+        <label className="pq-notes">What do you want built? (required)
+          <textarea required minLength={20} value={c.description} onChange={set('description')} maxLength={4000} rows={4}
+            placeholder="What it is, what it does, and roughly how big it is. Rough is fine." /></label>
+        <label className="pq-notes">What problem does it solve, and what does success look like?
+          <textarea value={c.goals} onChange={set('goals')} maxLength={3000} rows={3} placeholder="Students can practice a full startup without risk to real equipment." /></label>
+        <label className="pq-notes">Who will use it, and how?<input value={c.users} onChange={set('users')} maxLength={1000} placeholder="Instructors and students, about 4 hours a day" /></label>
+      </fieldset>
+
+      <fieldset className="pq-step">
+        <legend><span className="pq-stepno">2</span>Must haves</legend>
+        <p className="pq-hint">Things that are not negotiable: if the design misses one, it does not work for you.</p>
+        <ul className="pq-must">
+          {must.map((v, i) => (
+            <li key={i}>
+              <input value={v} onChange={(e) => setMust(i, e.target.value)} maxLength={300} aria-label={`Must have ${i + 1}`}
+                placeholder={i === 0 ? 'Runs on 120 VAC from a standard outlet' : 'Another must have'}
+                onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addMust() } }} />
+              {must.length > 1 && <button type="button" className="pq-link" onClick={() => setC({ ...c, must_haves: must.filter((_, j) => j !== i) })} aria-label="Remove">Remove</button>}
+            </li>
+          ))}
+        </ul>
+        <div className="pq-chips pq-hints"><span className="pq-muted">Common ones:</span>
+          {(info.must_have_hints || []).map((h) => <button type="button" key={h} className="pq-chip" onClick={() => addMust(h + ': ')}>{h}</button>)}
+        </div>
+        <label className="pq-notes">Nice to have, if it fits the budget<textarea value={c.nice_to_haves} onChange={set('nice_to_haves')} maxLength={3000} rows={2} /></label>
+      </fieldset>
+
+      <fieldset className="pq-step">
+        <legend><span className="pq-stepno">3</span>Where and how it works</legend>
+        <p className="pq-label">Where it will be used</p>{chips('environment', o.environments)}
+        <label className="pq-notes">Temperatures, moisture, vibration or anything harsh<input value={c.environment_notes} onChange={set('environment_notes')} maxLength={1500} placeholder="0 to 40 C, occasional washdown" /></label>
+        <p className="pq-label">Power available</p>{chips('power', o.power)}
+        <p className="pq-label">Standards it must meet</p>{chips('standards', o.standards)}
+        <div className="pq-fields two">
+          <label>Other standards or specs<input value={c.standards_other} onChange={set('standards_other')} maxLength={500} placeholder="NAVSEA spec, customer drawing, ..." /></label>
+          <label>Size and weight limits<input value={c.size_limits} onChange={set('size_limits')} maxLength={800} placeholder="Fits on a 30 x 60 in bench, under 150 lb" /></label>
+        </div>
+        <label className="pq-notes">What it connects to or works with<input value={c.interfaces} onChange={set('interfaces')} maxLength={1500} placeholder="Existing PLC, 4-20 mA sensors, a laptop over USB" /></label>
+      </fieldset>
+
+      <fieldset className="pq-step">
+        <legend><span className="pq-stepno">4</span>Quantity, budget and timing</legend>
+        <div className="pq-fields">
+          <label>First order<select value={c.quantity_first} onChange={set('quantity_first')}><option value="">Choose one</option>{(o.volumes || []).map((v) => <option key={v}>{v}</option>)}</select></label>
+          <label>Later, per year<input value={c.quantity_annual} onChange={set('quantity_annual')} maxLength={120} placeholder="About 20" /></label>
+          <label>Budget<select value={c.budget} onChange={set('budget')}><option value="">Choose one</option>{(o.budgets || []).map((v) => <option key={v}>{v}</option>)}</select></label>
+          <label>Needed by<input type="date" value={c.needed_by} onChange={set('needed_by')} /></label>
+        </div>
+        <label className="pq-check"><input type="checkbox" checked={c.deadline_firm} onChange={set('deadline_firm')} /><span>The date is firm (for example, a contract delivery or class start date)</span></label>
+      </fieldset>
+
+      <fieldset className="pq-step">
+        <legend><span className="pq-stepno">5</span>What you need from us</legend>
+        {chips('help', o.help)}
+        <label className="pq-check"><input type="checkbox" checked={c.government} onChange={set('government')} /><span>This is for a government contract or a government end user</span></label>
+        {c.government && (
+          <div className="pq-fields two">
+            <label>Contract or solicitation number<input value={c.contract_ref} onChange={set('contract_ref')} maxLength={200} /></label>
+            <label>End customer or agency<input value={c.end_customer} onChange={set('end_customer')} maxLength={200} /></label>
+          </div>
+        )}
+        <label className="pq-check"><input type="checkbox" checked={c.nda} onChange={set('nda')} /><span>Send me an NDA before I share details</span></label>
+      </fieldset>
+
+      <fieldset className="pq-step">
+        <legend><span className="pq-stepno">6</span>Sketches, photos or documents (optional)</legend>
+        {!who.export_controlled && (
+          <div className="pq-drop pq-drop-small" onClick={() => fileIn.current.click()} role="button" tabIndex={0}
+            onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); fileIn.current.click() } }}
+            onDragOver={(e) => e.preventDefault()} onDrop={(e) => { e.preventDefault(); addFiles(e.dataTransfer.files) }}>
+            <input ref={fileIn} type="file" multiple hidden onChange={(e) => { addFiles(e.target.files); e.target.value = '' }} />
+            <div className="pq-drop-main">Add a sketch, photo, or similar product</div>
+            <div className="pq-drop-sub">Photos, PDFs, documents or any CAD you have. Up to {info.max_files} files.</div>
+          </div>
+        )}
+        {files.length > 0 && !who.export_controlled && (
+          <ul className="pq-files">{files.map((f, i) => (
+            <li key={i}><span>{f.name}</span><span className="pq-muted">{size(f.size)}</span>
+              <button type="button" className="pq-link" onClick={() => setFiles(files.filter((_, j) => j !== i))}>Remove</button></li>
+          ))}</ul>
+        )}
+        <label className="pq-check"><input type="checkbox" checked={who.export_controlled} onChange={(e) => setWho({ ...who, export_controlled: e.target.checked })} />
+          <span>The project involves export-controlled (ITAR/EAR) technical data. <span className="pq-muted">Don't upload it here; we will arrange a secure transfer.</span></span></label>
+      </fieldset>
+
+      <fieldset className="pq-step">
+        <legend><span className="pq-stepno">7</span>How to reach you</legend>
+        <div className="pq-fields two">
+          <label>Name (required)<input required autoComplete="name" value={who.name} onChange={(e) => setWho({ ...who, name: e.target.value })} /></label>
+          <label>Company or organization<input autoComplete="organization" value={who.company} onChange={(e) => setWho({ ...who, company: e.target.value })} /></label>
+          <label>Email (required)<input required type="email" autoComplete="email" value={who.email} onChange={(e) => setWho({ ...who, email: e.target.value })} /></label>
+          <label>Phone<input type="tel" autoComplete="tel" value={who.phone} onChange={(e) => setWho({ ...who, phone: e.target.value })} /></label>
+          <label>Best way to reach you<select value={c.contact_method} onChange={set('contact_method')}>{(o.contact_methods || []).map((v) => <option key={v}>{v}</option>)}</select></label>
+          <label>Best time<input value={c.best_time} onChange={set('best_time')} maxLength={120} placeholder="Weekdays after 2 pm Eastern" /></label>
+        </div>
+        <label className="pq-notes">Anything else we should know<textarea value={c.notes} onChange={set('notes')} maxLength={3000} rows={2} /></label>
+        <label className="pq-notes">How did you hear about us?<input value={c.heard} onChange={set('heard')} maxLength={200} /></label>
+        <label className="pq-check"><input type="checkbox" required checked={who.accept_terms} onChange={(e) => setWho({ ...who, accept_terms: e.target.checked })} />
+          <span>I have not included export-controlled (ITAR/EAR) or classified information in this form or its files.</span></label>
+      </fieldset>
+
+      {err && <p className="pq-err" role="alert">{err}</p>}
+      <div className="pq-actions">
+        <button className="pq-btn" disabled={busy}>{busy ? (progress != null && progress < 1 && files.length ? `Uploading ${Math.round(progress * 100)}%` : 'Sending…') : 'Send my project'}</button>
+        <span className="pq-muted">We reply within {info.review_days} business day{info.review_days === 1 ? '' : 's'}.</span>
+      </div>
+    </form>
+  )
+}
+
+export function ConceptBrief({ r }) {
+  if (!r.concept?.length) return null
+  return (
+    <section className="pq-parts" aria-labelledby="brief-h">
+      <h2 id="brief-h">Your project</h2>
+      <div className="pq-facts pq-brief"><dl>
+        {r.concept.map((x, i) => <div key={i}><dt>{x.label}</dt><dd>{x.text}</dd></div>)}
+      </dl></div>
+    </section>
   )
 }
 
@@ -463,12 +685,12 @@ function TitleBlock({ req, info, qty, material, busy, progress }) {
   return (
     <div className={`pq-tb ${kind ? `k-${kind}` : ''}`}>
       <div className="pq-tb-row">
-        <div className="pq-cell"><span>Quote</span><b>{req?.ref || 'Not priced yet'}</b></div>
-        <div className="pq-cell"><span>{nLines > 1 ? 'Parts' : 'Quantity'}</span><b>{nLines > 1 ? nLines : q.toLocaleString()}</b></div>
+        <div className="pq-cell"><span>{kind === 'concept' ? 'Project' : 'Quote'}</span><b>{req?.ref || 'Not priced yet'}</b></div>
+        {kind !== 'concept' && <div className="pq-cell"><span>{nLines > 1 ? 'Parts' : 'Quantity'}</span><b>{nLines > 1 ? nLines : q.toLocaleString()}</b></div>}
       </div>
-      <div className="pq-tb-row">
+      {kind !== 'concept' && <div className="pq-tb-row">
         <div className="pq-cell wide"><span>Material</span><b>{nLines > 1 ? 'Set for each part below' : (single?.material || req?.material || material || 'From your files')}</b></div>
-      </div>
+      </div>}
       <div className="pq-tb-price">
         {busy && !res && (
           <div className="pq-progress" role="status">
@@ -509,6 +731,7 @@ function TitleBlock({ req, info, qty, material, busy, progress }) {
             )}
           </>
         )}
+        {kind === 'concept' && <span className="pq-kind">Project idea, an engineer will reply</span>}
         {(kind === 'manual' || kind === 'needs_input') && <span className="pq-kind">{kind === 'manual' ? 'Priced by an engineer' : 'One more detail'}</span>}
         {kind === 'processing' && (
           <div className="pq-progress" role="status">
@@ -826,7 +1049,7 @@ function Status({ refId, token, info }) {
           : <p><a href={pdfLink(r.ref, token)} target="_blank" rel="noopener">Save a PDF copy</a></p>}
       </aside>
     </div>
-    <PartsTable req={r} token={token} info={info} onLine={draft ? changeLine : null} pending={linePending} />
+    {r.result?.kind === 'concept' ? <ConceptBrief r={r} /> : <PartsTable req={r} token={token} info={info} onLine={draft ? changeLine : null} pending={linePending} />}
     </>
   )
 }
