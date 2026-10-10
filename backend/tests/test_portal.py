@@ -268,3 +268,11 @@ def test_big_model_is_read_in_the_background(client, monkeypatch):
 
 def test_size_limits_allow_large_models():
     assert portal.MAX_FILE >= 150 * 1024 * 1024 and portal.MAX_TOTAL > portal.MAX_FILE
+
+
+def test_assembly_part_names_and_bought_parts():
+    from app.assembly import is_bought, part_name
+
+    assert part_name("04_compressor_outlet_guide_vanes") == "compressor outlet guide vanes"
+    assert is_bought("08_bearing_608_reference") and is_bought("21_igniter_electrode_reference") and is_bought("M5 x 10 socket head screw")
+    assert not is_bought("07_rear_bearing_spacer") and not is_bought("22_igniter_boss") and not is_bought("06_shaft")

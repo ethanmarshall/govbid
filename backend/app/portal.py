@@ -474,18 +474,26 @@ def price_request(db: Session, req: PortalRequest) -> None:
                 from .assembly import quote_assembly, split
 
                 sp = split(stored["file_id"])
+                made = [g for g in sp["groups"] if not g.get("bought")] or sp["groups"]
+                bought = [g for g in sp["groups"] if g.get("bought") and g not in made]
                 bodies = [{"file_id": g["file_id"], "name": g.get("name") or "body", "qty": g.get("qty", 1),
                            "process": "3d_print" if is_print else g.get("suggested_process") or "auto", "material": mat,
-                           "finishes": _finishes(req, cfg, is_print, drawing_fin)} for g in sp["groups"]]
+                           "finishes": _finishes(req, cfg, is_print, drawing_fin)} for g in made]
                 joining = {"weld_process": "mig", "weld_length_in": sp.get("weld_estimate_in") or 0, "assembly_minutes": 10 * len(bodies),
                            "inspection_minutes": 10}
                 r = quote_assembly(bodies, joining, q, over)
                 spec = {"kind": "assembly", "name": name, "quantities": q, "bodies": bodies, "joining": joining,
                         "cad": {"file_id": stored["file_id"], "filename": f["name"], "notes": [], "options": {"assembly": True}}}
-                items.append(_item(name, "estimate", f"Assembly of {len(bodies)} part types, {mat}", r["price_breaks"], n, kind="assembly", spec=spec,
-                                   public_reason=f"Your model has {solids} separate parts, so an engineer will confirm how it goes together.",
-                                   internal_reasons=r.get("warnings", [])[:6], incomplete=bool(r.get("incomplete")),
-                                   facts=portal_read.step_assembly(stored.get("geometry") or {}, sp["groups"], mat, msrc), view=view))
+                note = f"Your model has {solids} separate parts, so an engineer will confirm how it goes together."
+                if bought:
+                    note += (" Bought parts (" + ", ".join(g["name"] for g in bought[:4]) + (" and more" if len(bought) > 4 else "")
+                             + ") are not in this price yet; we add them when we confirm.")
+                items.append(_item(name, "estimate", f"Assembly of {len(bodies)} made part types, {mat}", r["price_breaks"], n, kind="assembly", spec=spec,
+                                   public_reason=note,
+                                   internal_reasons=r.get("warnings", [])[:6] + [f"Bought parts not priced: {', '.join(g['name'] for g in bought)}"] * bool(bought),
+                                   incomplete=bool(r.get("incomplete")) or bool(bought),
+                                   facts=portal_read.step_assembly(stored.get("geometry") or {}, made, mat, msrc, bought=bought,
+                                                                   lines=r.get("lines") or r.get("bodies") or []), view=view))
             except Exception as exc:  # noqa: BLE001
                 items.append(_item(name, "manual", f"Assembly ({solids} parts)", None, n, kind="assembly",
                                    public_reason=f"Your model has {solids} separate parts; we will price it by hand.", internal_reasons=[str(exc)], view=view))
@@ -805,6 +813,11 @@ def _run_job(ref: str) -> None:
     finally:
         with _jobs_lock:
             _jobs.pop(ref, None)
+
+
+def reset_big(req: PortalRequest) -> None:
+    """Read big models again from the start (after a fix, or on a bigger server)."""
+    shutil.rmtree(req_dir(req) / "prep", ignore_errors=True)
 
 
 def ensure_job(req: PortalRequest) -> None:

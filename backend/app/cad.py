@@ -29,6 +29,68 @@ def _ocp():
         raise CadError("STEP support needs the 'cadquery-ocp' package: pip install cadquery-ocp") from exc
 
 
+def load_step_named(path: Path) -> tuple:
+    """Load a STEP file and return (shape, names), names[i] being the part (product) name of the i-th solid
+    in TopExp order, or "" when the file does not say. Names come from the assembly structure."""
+    _ocp()
+    from OCP.IFSelect import IFSelect_RetDone
+    from OCP.Interface import Interface_Static
+    from OCP.STEPControl import STEPControl_Reader
+    from OCP.TopAbs import TopAbs_SOLID
+    from OCP.TopExp import TopExp_Explorer
+    from OCP.TopoDS import TopoDS_Iterator
+
+    Interface_Static.SetCVal_s("xstep.cad.unit", "MM")
+    r = STEPControl_Reader()
+    if r.ReadFile(str(path)) != IFSelect_RetDone:
+        raise CadError("Could not read the STEP file. Export it again as STEP AP203 or AP214.")
+    r.TransferRoots()
+    shape = r.OneShape()
+    if shape is None or shape.IsNull():
+        raise CadError("The STEP file has no geometry.")
+    names: list[str] = []
+    try:
+        tr = r.WS().TransferReader()
+
+        def ename(sh) -> str:
+            e = tr.EntityFromShapeResult(sh, 1)
+            if e is None:
+                return ""
+            for get in (lambda: e.RelatedProductDefinition().Formation().OfProduct().Name().ToCString(), lambda: e.Name().ToCString()):
+                try:
+                    v = get()
+                    if v:
+                        return v
+                except Exception:  # noqa: BLE001
+                    pass
+            return ""
+
+        def walk(sh, inherited: str):
+            own = ename(sh) or inherited
+            if sh.ShapeType() == TopAbs_SOLID:
+                names.append(own)
+                return
+            it = TopoDS_Iterator(sh)
+            any_child = False
+            while it.More():
+                any_child = True
+                walk(it.Value(), own)
+                it.Next()
+            if not any_child:
+                return
+
+        walk(shape, "")
+        ex, count = TopExp_Explorer(shape, TopAbs_SOLID), 0
+        while ex.More():
+            count += 1
+            ex.Next()
+        if len(names) != count:  # an unusual structure: better no names than wrong ones
+            names = [""] * count
+    except Exception:  # noqa: BLE001
+        names = []
+    return shape, names
+
+
 def load_step(path: Path):
     _ocp()
     from OCP.IFSelect import IFSelect_RetDone

@@ -89,13 +89,26 @@ def step_part(geom: dict, mat: str, mat_source: str, finishes: list[str], fin_so
 
 
 @_safe
-def step_assembly(geom: dict, groups: list[dict], mat: str, mat_source: str) -> list[dict]:
+def step_assembly(geom: dict, groups: list[dict], mat: str, mat_source: str, bought: list[dict] | None = None, lines: list | None = None) -> list[dict]:
     bb = geom.get("bounding_box") or {}
-    total = sum(int(g.get("qty", 1)) for g in groups) or geom.get("solids")
-    names = ", ".join(f"{g.get('qty', 1)} x {g.get('name') or 'part'}" for g in groups[:6]) + (" and more" if len(groups) > 6 else "")
-    return [row("Overall size", _size(bb.get("length"), bb.get("width"), bb.get("height"))),
-            row("Parts in the model", f"{total} ({len(groups)} different)"), row("Parts", names), material_row(mat, mat_source),
-            row("Joining", "Welded or fastened, to be confirmed by an engineer", "check")]
+    bought = bought or []
+    made = sum(int(g.get("qty", 1)) for g in groups)
+    out = [row("Overall size", _size(bb.get("length"), bb.get("width"), bb.get("height"))),
+           row("Parts in the model", f"{geom.get('solids') or made + sum(int(g.get('qty', 1)) for g in bought)}: "
+                                     f"{len(groups)} different made parts" + (f", {len(bought)} bought" if bought else "")),
+           material_row(mat, mat_source)]
+    proc = {"cnc_mill": "milled", "cnc_lathe": "turned", "sheet_metal": "sheet metal", "3d_print": "3D printed", "weldment": "welded"}
+    for g in groups[:24]:
+        how = proc.get(g.get("suggested_process") or "", "")
+        bbx = g.get("bounding_box") or {}
+        size = _size(bbx.get("length"), bbx.get("width"), bbx.get("height")) if bbx.get("length") else ""
+        out.append(row(f"{g.get('qty', 1)} x {g.get('name') or 'part'}", ", ".join(x for x in (how, size) if x)))
+    if len(groups) > 24:
+        out.append(row("More", f"{len(groups) - 24} more part types"))
+    for g in bought[:10]:
+        out.append(row(f"{g.get('qty', 1)} x {g.get('name') or 'part'}", "Bought part (not made by us); priced when we confirm", "check"))
+    out.append(row("Joining", "Welded or fastened, to be confirmed by an engineer", "check"))
+    return out
 
 
 @_safe

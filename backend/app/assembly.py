@@ -19,6 +19,7 @@ with commercial packaging so those are charged once, at the assembly.
 from __future__ import annotations
 
 import json
+import re
 import math
 import tempfile
 from pathlib import Path
@@ -86,9 +87,35 @@ def _same(a: dict, b: dict) -> bool:
     return all(abs(x - y) <= SAME_DIM_IN for x, y in zip(da, db))
 
 
-def _load_solids(file_id: str):
-    shape = cad.load_step(cad_quote.step_path(file_id))
-    return inserts._solids(shape)
+def _load_solids(file_id: str, with_names: bool = False):
+    shape, names = cad.load_step_named(cad_quote.step_path(file_id))
+    solids = inserts._solids(shape)
+    if with_names:
+        return solids, (names if len(names) == len(solids) else [""] * len(solids))
+    return solids
+
+
+# Parts the model shows only for fit (bearings, fasteners, references): bought, not made.
+BOUGHT = re.compile(r"\b(reference|ref|bearing|608|6\d\dzz|bolt|screw|nut|washer|dowel|pin|o-?ring|spring|insert|standoff|"
+                    r"fastener|rivet|bushing|seal|circlip|retaining ring|hardware|purchased|cots|mcmaster)\b", re.I)
+
+
+MADE = re.compile(r"\b(spacer|housing|cover|retainer|boss|cap|holder|mount|seat|block|plate|bracket|tunnel|shaft|sleeve|frame|carrier)\b", re.I)
+
+
+def is_bought(raw: str) -> bool:
+    """A part shown for fit that we buy: '08_bearing_608_reference' yes, '07_rear_bearing_spacer' no."""
+    n = (raw or "").replace("_", " ")
+    if re.search(r"\breference\b|\bref\b|\bpurchased\b|\bcots\b|\bmcmaster\b", n, re.I):
+        return True
+    return bool(BOUGHT.search(n)) and not MADE.search(n)
+
+
+def part_name(raw: str) -> str:
+    """'04_compressor_outlet_guide_vanes' -> 'compressor outlet guide vanes'."""
+    n = re.sub(r"^\s*\d+[\s_.-]+", "", raw or "")
+    n = re.sub(r"[_]+", " ", n).strip()
+    return n[:80]
 
 
 def bodies(file_id: str, with_mesh: bool = True) -> dict:
@@ -101,7 +128,7 @@ def bodies(file_id: str, with_mesh: bool = True) -> dict:
             for b in data["bodies"]:
                 b.pop("mesh", None)
         return data
-    solids = _load_solids(file_id)
+    solids, solid_names = _load_solids(file_id, with_names=True)
     if not solids:
         raise cad.CadError("No solid bodies found in this file.")
     rows = []
@@ -128,16 +155,23 @@ def bodies(file_id: str, with_mesh: bool = True) -> dict:
     for n, g in enumerate(groups, 1):
         geo = g["_first"]["geometry"]
         bb = geo["bounding_box"]
-        name = f"{stem} body {n}"
+        named = [part_name(solid_names[i]) for i in g["bodies"] if solid_names[i]]
+        name = max(set(named), key=named.count) if named else f"{stem} body {n}"
+        raw = [solid_names[i] for i in g["bodies"] if solid_names[i]]
         for i in g["bodies"]:
             next(r for r in rows if r["index"] == i)["group"] = n
         out_groups.append({"group": n, "name": name, "qty": len(g["bodies"]), "bodies": g["bodies"], "representative": g["bodies"][0],
+                           "bought": bool(raw) and all(is_bought(x) for x in raw),
                            "suggested_process": geo["suggested_process"], "volume": geo["volume"], "bounding_box": bb,
                            "holes": len(geo["holes"]), "sheet_thickness": (geo.get("sheet_metal") or {}).get("thickness")})
     joints = []
     boxes = {i: _bbox_mm(s) for i, s in enumerate(solids)}
     good_idx = [r["index"] for r in good]
-    for a_k, a in enumerate(good_idx):
+    faces = sum(sum((r["geometry"].get("faces") or {}).values()) for r in good)
+    # Contact checks between detailed parts (blades, threads, nested turned parts) can take hours, and they only
+    # feed the weld estimate. Big mechanical assemblies skip them; the weld length can be entered by hand.
+    skip_joints = len(good_idx) > 25 or faces > 4000
+    for a_k, a in enumerate([] if skip_joints else good_idx):
         for b in good_idx[a_k + 1:]:
             if not _boxes_touch(boxes[a], boxes[b]):
                 continue
@@ -146,7 +180,9 @@ def bodies(file_id: str, with_mesh: bool = True) -> dict:
                 joints.append({"a": a, "b": b, **j})
     data = {"file_id": file_id, "filename": src["filename"], "count": len(solids), "bodies": rows, "groups": out_groups,
             "joints": joints, "weld_estimate_in": round(sum(j["weld_estimate_in"] for j in joints), 2),
-            "weld_note": "Estimate: two fillet welds along the long side of each contact patch. Edit it to match the weld symbols."}
+            "weld_note": ("Not estimated: this is a large assembly, so contacts between parts were not checked. Enter the weld length if it is welded."
+                          if skip_joints else "Estimate: two fillet welds along the long side of each contact patch. Edit it to match the weld symbols."),
+            "joints_checked": not skip_joints}
     cache.write_text(json.dumps(data))
     if not with_mesh:
         for b in data["bodies"]:

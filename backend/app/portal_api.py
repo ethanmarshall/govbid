@@ -269,9 +269,11 @@ async def reprice_internal(rid: int, db: Session = Depends(get_db)):
     """Price again with today's shop rates (does not change what the customer was shown until they look again)."""
     r = _req(db, rid)
     shown = dict(r.public_result or {})
+    portal.reset_big(r)  # big models are read again too
     await run_in_threadpool(portal.price_request, db, r)
     r.internal = {**(r.internal or {}), "shown_to_customer": shown}
     db.commit()
+    portal.ensure_job(r)
     return portal.internal_dict(r, full=True)
 
 
