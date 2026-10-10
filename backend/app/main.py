@@ -77,6 +77,10 @@ from .backup import router as backup_router  # noqa: E402
 
 app.include_router(backup_router)
 app.middleware("http")(auth_mod.middleware)
+from . import security as security_mod  # noqa: E402
+
+app.middleware("http")(security_mod.middleware)  # added last, so it runs first: headers on every response, including 401s
+security_mod.install_log_filter()
 
 
 @app.get("/api/health", include_in_schema=False)

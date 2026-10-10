@@ -10,7 +10,7 @@ from app.main import app
 def test_open_when_no_password(monkeypatch):
     monkeypatch.delenv("APP_PASSWORD", raising=False)
     with TestClient(app) as c:
-        assert c.get("/api/auth/status").json() == {"login_required": False, "signed_in": True, "username": None, "calendar_token": ""}
+        assert c.get("/api/auth/status").json() == {"login_required": False, "signed_in": True, "username": None, "calendar_token": "", "weak_password": False}
         assert c.get("/api/dashboard").status_code == 200
 
 
@@ -43,7 +43,7 @@ def test_login_required_flow(monkeypatch):
 def test_forged_or_other_secret_cookie_rejected(monkeypatch):
     monkeypatch.setenv("APP_PASSWORD", "pw")
     monkeypatch.setenv("SESSION_SECRET", "one")
-    token = auth._signer().sign("admin").decode()
+    token = auth.session_token()
     assert auth.valid_session(token)
     monkeypatch.setenv("SESSION_SECRET", "two")
     assert not auth.valid_session(token)
@@ -90,3 +90,21 @@ def test_forged_forwarded_for_does_not_reset_the_lockout(monkeypatch):
         assert r.status_code == 429
     auth._fails.clear()
     auth._all_fails.clear()
+
+
+def test_changing_the_password_signs_staff_out(monkeypatch):
+    monkeypatch.setenv("APP_PASSWORD", "first-long-password")
+    monkeypatch.setenv("SESSION_SECRET", "s")
+    tok = auth.session_token()
+    assert auth.valid_session(tok)
+    monkeypatch.setenv("APP_PASSWORD", "second-long-password")
+    assert not auth.valid_session(tok)
+
+
+def test_weak_staff_password_flag_and_tighter_lockout(monkeypatch):
+    from app import security
+
+    monkeypatch.setenv("APP_PASSWORD", "0000")
+    assert security.weak_staff_password()
+    monkeypatch.setenv("APP_PASSWORD", "a much longer pass phrase")
+    assert not security.weak_staff_password()

@@ -111,7 +111,7 @@ DEFAULT_SITE = {
         {"q": "Is there a minimum order?", "a": "No. One part is fine, and the price per part drops as the quantity goes up."},
         {"q": "Are my files kept private?", "a": "Your files are stored on our server for quoting and for building your order. They are not sent to any outside service. Quotes you do not send to us are deleted with their files after 30 days."},
         {"q": "Can you take export-controlled (ITAR or EAR) work?", "a": "Do not upload controlled data here. Check the export-controlled box, send your contact details, and we will talk with you about whether we can take the work and how to transfer the data."},
-        {"q": "How do I pay?", "a": "We agree on payment terms when we confirm your order. Purchase orders are welcome."},
+        {"q": "How do I pay?", "a": "Quotes with a firm price can be ordered online by card or purchase order. Card payments go through Stripe, so your card number never reaches us. For jobs that need a review, we agree on payment terms when we confirm the order. Purchase orders are welcome."},
     ],
 }
 SITE_LIMITS = {"capabilities": 24, "experience": 20, "industries": 20, "quality": 20, "faq": 30}
@@ -1012,7 +1012,7 @@ def reprice(db: Session, req: PortalRequest, data: dict) -> PortalRequest:
     if req.status not in ("draft",):
         raise PortalError("This request was already submitted. Contact us to change it.")
     if (req.order or {}).get("status") == "awaiting_payment":
-        req.order = {}  # changed after starting a card payment: start checkout again
+        checkout.retire_session(req)  # changed after starting a card payment: close that page and start checkout again
     _clean_opts(req, data, get_settings(db).max_quantity)
     price_request(db, req)
     db.commit()

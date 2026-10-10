@@ -22,7 +22,7 @@ from sqlalchemy.orm import Session
 
 STRIPE_API = "https://api.stripe.com/v1"
 ORDER_LABEL = {"awaiting_payment": "Waiting for card payment", "paid": "Paid by card", "po_received": "Purchase order received",
-               "invoiced": "Invoiced", "cancelled": "Cancelled"}
+               "invoiced": "Invoiced", "cancelled": "Cancelled", "payment_review": "Payment received, we are checking it"}
 
 
 class CheckoutError(ValueError):
@@ -45,7 +45,7 @@ def eligible(req) -> tuple[bool, str]:
         return False, "Export-controlled projects are handled directly with us."
     if req.status in ("declined", "closed", "ordered", "in_production", "shipped"):
         return False, "This request is closed or already ordered."
-    if (req.order or {}).get("status") in ("paid", "po_received", "invoiced"):
+    if (req.order or {}).get("status") in ("paid", "po_received", "invoiced", "payment_review"):
         return False, "This quote has already been ordered."
     if r.get("kind") != "instant":
         return False, "Some parts need an engineer's review first. Send it for review and we will confirm the price; then you can order here."
@@ -69,7 +69,9 @@ def place(db: Session, req, data: dict, customer=None, base_url: str = "") -> di
     if not ok:
         raise CheckoutError(why)
     if req.status == "draft":  # still the customer's to change: price it again at today's rates
-        req.order = {}
+        retire_session(req)
+        retired = (req.order or {}).get("retired_sessions") or []
+        req.order = {"retired_sessions": retired} if retired else {}
         portal.price_request(db, req)
         db.commit()
         ok, why = eligible(req)
@@ -108,7 +110,7 @@ def place(db: Session, req, data: dict, customer=None, base_url: str = "") -> di
         req.customer_id = customer.id
         if data.get("save_address") and not any(a.get("line1") == ship["line1"] and a.get("zip") == ship["zip"] for a in customer.addresses or []):
             customer.addresses = (customer.addresses or []) + [ship]
-    order = {"number": req.ref, "method": method, "placed_at": datetime.utcnow().isoformat(timespec="seconds"), "amount": total,
+    order = {"retired_sessions": (req.order or {}).get("retired_sessions", []), "number": req.ref, "method": method, "placed_at": datetime.utcnow().isoformat(timespec="seconds"), "amount": total,
              "lines": lines, "ship_to": ship, "po_number": po, "billing_email": str(data.get("billing_email") or "").strip()[:160],
              "notes": str(data.get("notes") or "").strip()[:2000], "lead_days": (req.public_result or {}).get("lead_days")}
     redirect = None
@@ -176,20 +178,67 @@ def confirm_if_paid(db: Session, req) -> bool:
     return mark_paid(db, req, sess)
 
 
+def retire_session(req) -> None:
+    """The customer changed the quote or started checkout again: close the old Stripe page so it cannot be paid,
+    and remember its id so a payment that slipped through anyway is still matched to this request."""
+    o = req.order or {}
+    sid = o.get("stripe_session_id")
+    if not sid or o.get("status") != "awaiting_payment":
+        return
+    retired = list(o.get("retired_sessions") or []) + [sid]
+    req.order = {"retired_sessions": retired[-20:]}
+    try:
+        _stripe("POST", f"/checkout/sessions/{sid}/expire", {}, _transport)
+    except Exception:  # noqa: BLE001  (already expired or paid; a payment is still caught by the webhook)
+        pass
+
+
 def mark_paid(db: Session, req, sess: dict) -> bool:
+    """Record a completed Stripe payment. The amount and currency must match the order exactly; anything that does
+    not match (a different amount, an old checkout page) is kept for you to check rather than marked paid."""
     o = dict(req.order or {})
-    if sess.get("payment_status") != "paid" or sess.get("id") != o.get("stripe_session_id"):
+    if sess.get("payment_status") != "paid":
         return False
-    if o.get("status") == "paid":
+    sid = sess.get("id")
+    if sid != o.get("stripe_session_id"):
+        if sid and (sid in (o.get("retired_sessions") or [])) and sid not in [u.get("id") for u in o.get("unmatched_payments") or []]:
+            o["unmatched_payments"] = list(o.get("unmatched_payments") or []) + [
+                {"id": sid, "amount": (sess.get("amount_total") or 0) / 100, "at": datetime.utcnow().isoformat(timespec="seconds"),
+                 "payment_intent": sess.get("payment_intent") or ""}]
+            req.order = o
+            db.commit()
+            _alert(req, f"A card payment came in for {req.ref} on a checkout page the customer had replaced. Check it in Stripe and refund or apply it.")
         return False
+    if o.get("status") in ("paid", "payment_review"):
+        return False
+    want = int(round(float(o.get("amount") or 0) * 100))
+    got = sess.get("amount_subtotal")
+    got = int(got) if got is not None else int(sess.get("amount_total") or 0)
     paid = (sess.get("amount_total") or 0) / 100
-    o.update(status="paid", paid_at=datetime.utcnow().isoformat(timespec="seconds"), paid_amount=paid,
+    ok = got == want and str(sess.get("currency") or "usd").lower() == "usd"
+    o.update(status="paid" if ok else "payment_review", paid_at=datetime.utcnow().isoformat(timespec="seconds"), paid_amount=paid,
              payment_intent=sess.get("payment_intent") or "")
+    if not ok:
+        o["review_reason"] = f"Stripe reported {got / 100:.2f} {sess.get('currency') or ''} for an order of {want / 100:.2f} USD."
+        req.order = o
+        db.commit()
+        _alert(req, f"The card payment for {req.ref} does not match the order total. {o['review_reason']} Check it in Stripe before starting work.")
+        return False
     req.order = o
     req.status = "ordered"
     req.submitted_at = req.submitted_at or datetime.utcnow()
     db.commit()
     return True
+
+
+def _alert(req, text: str) -> None:
+    """Email you about a payment that needs a look (best effort; it also shows on the request)."""
+    try:
+        from .cli import send_email
+
+        send_email(f"Payment to check: {req.ref}", text)
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def verify_webhook(payload: bytes, sig_header: str, secret: str, tolerance: int = 300) -> dict:
@@ -210,6 +259,8 @@ def verify_webhook(payload: bytes, sig_header: str, secret: str, tolerance: int 
 def public_order(req) -> dict | None:
     o = req.order or {}
     if not o:
+        return None
+    if not o.get("number"):
         return None
     return {k: o.get(k) for k in ("number", "method", "status", "placed_at", "amount", "lines", "ship_to", "po_number", "paid_at", "lead_days")} | {
         "status_label": ORDER_LABEL.get(o.get("status"), o.get("status"))}

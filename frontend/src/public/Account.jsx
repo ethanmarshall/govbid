@@ -130,6 +130,7 @@ function Dashboard({ me }) {
         <div className="pq-actions" style={{ marginTop: 0 }}>
           <a className="pq-btn" href="/quote">Get a new quote</a>
           <button type="button" className="pq-btn ghost" onClick={signOut}>Sign out</button>
+          <button type="button" className="pq-link pq-small" onClick={async () => { if (!confirm('Sign out on every phone and computer signed in to this account?')) return; await call('POST', '/api/public/account/logout?everywhere=1'); setAccount({ customer: null }); window.location.assign('/quote/account') }}>Sign out of all devices</button>
         </div>
       </div>
       {err && <p className="pq-err">{err}</p>}

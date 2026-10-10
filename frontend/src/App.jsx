@@ -45,7 +45,7 @@ export default function App() {
   if (!auth.signed_in) {
     // visitors to the home page get the public business site; staff sign in at /login (or any inside page)
     if (window.location.pathname === '/') { window.location.replace('/quote'); return null }
-    return <Login onDone={async () => { await checkAuth(); if (window.location.pathname === '/login') window.history.replaceState(null, '', '/') }} />
+    return <Login onDone={async () => { await checkAuth(); if (window.location.pathname === '/login') window.location.replace('/') }} />
   }
   return <Shell auth={auth} />
 }
@@ -152,6 +152,11 @@ function Shell({ auth }) {
           </div>
         </nav>
         <main className="main">
+          {auth.weak_password && (
+            <div className="notice err" role="alert" style={{ marginBottom: 16 }}>
+              <b>Your staff password is too short.</b> This sign-in controls customer orders and payments. In Render, set APP_PASSWORD to at least 12 characters (a few random words works well). Until then, sign-in locks after 10 wrong tries a day.
+            </div>
+          )}
           <Routes>
             <Route path="/" element={<Dashboard />} />
             <Route path="/opportunities" element={<Opportunities />} />

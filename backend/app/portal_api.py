@@ -378,9 +378,14 @@ def account_login(body: dict, request: Request, db: Session = Depends(get_db)):
 
 
 @public.post("/account/logout")
-def account_logout():
+def account_logout(request: Request, everywhere: bool = False, db: Session = Depends(get_db)):
+    """Sign out here; with ?everywhere=1, every device signed in to the account is signed out too."""
     from . import customers
 
+    if everywhere:
+        c = _customer_of(request, db)
+        if c:
+            customers.sign_out_everywhere(db, c)
     resp = JSONResponse({"ok": True})
     resp.delete_cookie(customers.COOKIE, path="/")
     return resp
@@ -407,10 +412,11 @@ def account_forgot(body: dict, request: Request, db: Session = Depends(get_db)):
 
 
 @public.post("/account/reset")
-def account_reset(body: dict, db: Session = Depends(get_db)):
+def account_reset(body: dict, request: Request, db: Session = Depends(get_db)):
     from . import customers
 
-    c = _account_guard(customers.finish_reset, db, str(body.get("email") or ""), str(body.get("token") or ""), str(body.get("password") or ""))
+    c = _account_guard(customers.finish_reset, db, str(body.get("email") or ""), str(body.get("token") or ""), str(body.get("password") or ""),
+                       _client(request))
     resp = JSONResponse({"customer": customers.public(c)})
     _set_session(resp, c)
     return resp
@@ -528,7 +534,7 @@ class OrderIn(BaseModel):
 @internal.put("/requests/{rid}/order")
 def set_order(rid: int, body: OrderIn, db: Session = Depends(get_db)):
     r = _req(db, rid)
-    if not r.order:
+    if not (r.order or {}).get("number"):
         raise HTTPException(400, "There is no order on this request.")
     if body.status not in ("po_received", "invoiced", "paid", "cancelled"):
         raise HTTPException(400, "Unknown order status.")

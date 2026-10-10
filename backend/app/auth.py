@@ -57,15 +57,28 @@ def _signer() -> TimestampSigner:
     return TimestampSigner(settings()["secret"], salt="govbid-login")
 
 
+def _session_value(s: dict) -> str:
+    """The signed cookie value: the username plus a fingerprint of the password, so changing APP_PASSWORD signs
+    every device out."""
+    import hashlib
+
+    fp = hashlib.sha256(f"{s['password']}|{s['secret']}".encode()).hexdigest()[:16]
+    return f"{s['username']}|{fp}"
+
+
+def session_token() -> str:
+    return _signer().sign(_session_value(settings())).decode()
+
+
 def valid_session(token: str | None) -> bool:
     if not token:
         return False
     s = settings()
     try:
-        user = _signer().unsign(token, max_age=int(s["days"] * 86400)).decode()
+        value = _signer().unsign(token, max_age=int(s["days"] * 86400)).decode()
     except (BadSignature, SignatureExpired):
         return False
-    return hmac.compare_digest(user, s["username"])
+    return hmac.compare_digest(value, _session_value(s))
 
 
 _fails: dict[str, deque] = defaultdict(deque)
@@ -90,8 +103,13 @@ def _prune(q: deque, window: float) -> None:
 
 
 def _too_many(ip: str) -> bool:
+    from .security import weak_staff_password
+
     q = _fails[ip]
     _prune(q, WINDOW_S)
+    if weak_staff_password():  # a short password could be guessed from many addresses: allow far fewer misses a day
+        _prune(_all_fails, 24 * 3600)
+        return len(q) >= MAX_FAILS or len(_all_fails) >= 10
     _prune(_all_fails, GLOBAL_WINDOW_S)
     return len(q) >= MAX_FAILS or len(_all_fails) >= GLOBAL_MAX_FAILS
 
@@ -127,7 +145,8 @@ def status(request: Request):
     signed_in = (not enabled()) or valid_session(request.cookies.get(COOKIE))
     return {"login_required": enabled(), "signed_in": signed_in, "username": s["username"] if enabled() else None,
             # calendar apps cannot sign in, so the feed URL carries its own secret (only shown once signed in)
-            "calendar_token": s["calendar_token"] if (signed_in and enabled()) else ""}
+            "calendar_token": s["calendar_token"] if (signed_in and enabled()) else "",
+            "weak_password": bool(signed_in and enabled() and __import__("app.security", fromlist=["x"]).weak_staff_password())}
 
 
 @router.post("/login")
@@ -145,7 +164,7 @@ def login(body: LoginIn, request: Request, response: Response):
         time.sleep(0.5)
         raise HTTPException(401, "Wrong username or password.")
     _fails.pop(ip, None)
-    token = _signer().sign(s["username"]).decode()
+    token = session_token()
     response.set_cookie(COOKIE, token, max_age=int(s["days"] * 86400), httponly=True, samesite="lax", secure=s["secure"], path="/")
     return {"ok": True}
 

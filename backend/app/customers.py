@@ -30,26 +30,65 @@ class AccountError(ValueError):
 
 
 # ------------------------------------------------------------------ passwords
+SCRYPT_N = 2 ** 15  # 32 MB per check; older hashes keep their own settings and are upgraded at the next sign-in
+_MAXMEM = 128 * 1024 * 1024
+_HASHING = __import__("threading").BoundedSemaphore(4)  # at most 4 password checks at once (each uses 32 MB)
+
+
 def hash_password(pw: str) -> str:
     salt = secrets.token_bytes(16)
-    dk = hashlib.scrypt(pw.encode(), salt=salt, n=2 ** 14, r=8, p=1, dklen=32)
-    return f"scrypt$16384$8$1${salt.hex()}${dk.hex()}"
+    with _HASHING:
+        dk = hashlib.scrypt(pw.encode(), salt=salt, n=SCRYPT_N, r=8, p=1, dklen=32, maxmem=_MAXMEM)
+    return f"scrypt${SCRYPT_N}$8$1${salt.hex()}${dk.hex()}"
 
 
 def check_password(pw: str, stored: str) -> bool:
     try:
         _, n, r, p, salt, dk = stored.split("$")
-        got = hashlib.scrypt(pw.encode(), salt=bytes.fromhex(salt), n=int(n), r=int(r), p=int(p), dklen=len(bytes.fromhex(dk)))
+        if int(n) > 2 ** 17 or int(r) > 16 or int(p) > 4:
+            return False
+        with _HASHING:
+            got = hashlib.scrypt(pw.encode()[:400], salt=bytes.fromhex(salt), n=int(n), r=int(r), p=int(p), dklen=len(bytes.fromhex(dk)), maxmem=_MAXMEM)
     except (ValueError, TypeError):
         return False
     return hmac.compare_digest(got.hex(), dk)
 
 
-def _check_new_password(pw: str) -> None:
-    if len(pw or "") < 10:
+def needs_rehash(stored: str) -> bool:
+    try:
+        return int(stored.split("$")[1]) < SCRYPT_N
+    except (IndexError, ValueError):
+        return True
+
+
+_DUMMY_HASH = None
+
+
+def _dummy_check(pw: str) -> None:
+    """Take as long as a real check when there is no such account, so timing does not reveal which emails have one."""
+    global _DUMMY_HASH
+    if _DUMMY_HASH is None:
+        _DUMMY_HASH = hash_password(secrets.token_urlsafe(12))
+    check_password(pw, _DUMMY_HASH)
+
+
+# Passwords people reuse most; refusing them stops the first guesses anyone tries.
+_COMMON = {"password", "password1", "password12", "password123", "password1234", "passw0rd", "123456789", "1234567890",
+           "12345678910", "qwertyuiop", "qwerty1234", "qwerty12345", "iloveyou12", "letmein123", "welcome123", "welcome1234",
+           "administrator", "changeme123", "abc1234567", "1q2w3e4r5t", "1qaz2wsx3edc", "football123", "baseball123", "trustno1234",
+           "starwars123", "sunshine123", "princess123", "dragon1234", "monkey1234", "superman123", "0987654321", "1111111111",
+           "0000000000", "aaaaaaaaaa", "asdfghjkl1", "zxcvbnm123"}
+
+
+def _check_new_password(pw: str, email: str = "") -> None:
+    pw = pw or ""
+    if len(pw) < 10:
         raise AccountError("Use a password of at least 10 characters.")
     if len(pw) > 200:
         raise AccountError("That password is too long.")
+    low = pw.lower()
+    if low in _COMMON or len(set(low)) < 4 or (email and (low == email.lower() or low == email.lower().split("@")[0])):
+        raise AccountError("That password is too easy to guess. Try a short phrase of a few words.")
 
 
 # ------------------------------------------------------------------ sessions
@@ -103,7 +142,7 @@ def register(db: Session, data: dict) -> Customer:
     email = str(data.get("email") or "").strip().lower()[:160]
     if not EMAIL_RX.match(email):
         raise AccountError("Enter a valid email address.")
-    _check_new_password(str(data.get("password") or ""))
+    _check_new_password(str(data.get("password") or ""), email)
     name = str(data.get("name") or "").strip()[:120]
     if not name:
         raise AccountError("Enter your name.")
@@ -121,12 +160,23 @@ def login(db: Session, email: str, password: str, ip: str) -> Customer:
     if _limited(f"ip:{ip}", 20) or _limited(f"email:{email}"):
         raise AccountError("Too many tries. Wait 15 minutes, or reset your password.")
     c = db.scalar(select(Customer).where(Customer.email == email))
+    if not c:
+        _dummy_check(password or "")
     if not c or not c.active or not check_password(password or "", c.password_hash):
         _fail(f"ip:{ip}")
         _fail(f"email:{email}")
         time.sleep(0.3)
         raise AccountError("Wrong email or password.")
+    if needs_rehash(c.password_hash):
+        c.password_hash = hash_password(password)
     c.last_login = datetime.utcnow()
+    _fails.pop(f"email:{email}", None)
+    db.commit()
+    return c
+
+
+def sign_out_everywhere(db: Session, c: Customer) -> Customer:
+    c.session_version += 1
     db.commit()
     return c
 
@@ -167,7 +217,7 @@ def update(db: Session, c: Customer, data: dict) -> Customer:
     if data.get("new_password"):
         if not check_password(str(data.get("password") or ""), c.password_hash):
             raise AccountError("Your current password is not right.")
-        _check_new_password(str(data["new_password"]))
+        _check_new_password(str(data["new_password"]), c.email)
         c.password_hash = hash_password(data["new_password"])
         c.session_version += 1  # signs out every other device
     db.commit()
@@ -198,13 +248,16 @@ def start_reset(db: Session, email: str, base_url: str, ip: str) -> None:
         raise AccountError("We could not send the email right now. Contact us and we will help you sign in.") from exc
 
 
-def finish_reset(db: Session, email: str, token: str, new_password: str) -> Customer:
+def finish_reset(db: Session, email: str, token: str, new_password: str, ip: str = "") -> Customer:
+    if _limited(f"reset-try:{ip}", 10, 3600):
+        raise AccountError("Too many tries. Try again later.")
     c = db.scalar(select(Customer).where(Customer.email == (email or "").strip().lower()))
     ok = (c and c.reset_hash and c.reset_expires and c.reset_expires > datetime.utcnow()
           and hmac.compare_digest(c.reset_hash, hashlib.sha256((token or "").encode()).hexdigest()))
     if not ok:
+        _fail(f"reset-try:{ip}")
         raise AccountError("That reset link is not valid or has expired. Ask for a new one.")
-    _check_new_password(new_password)
+    _check_new_password(new_password, c.email)
     c.password_hash = hash_password(new_password)
     c.reset_hash, c.reset_expires = "", None
     c.session_version += 1
