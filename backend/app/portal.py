@@ -179,7 +179,7 @@ def public_info(db: Session) -> dict:
     prof = db.scalars(select(CompanyProfile)).first()
     from .flat import materials as flat_materials
 
-    return {"enabled": s.enabled, "name": s.display_name or (prof.name if prof else "") or "Quote request",
+    return {"enabled": s.enabled, "name": s.display_name or (prof.name if prof else "") or "Valley Power Systems LLC",
             "tagline": s.tagline, "intro": s.intro, "contact_email": s.contact_email, "contact_phone": s.contact_phone,
             "terms": s.terms, "review_days": s.review_days, "max_quantity": s.max_quantity,
             "materials": sorted(cfg["materials"]), "print_materials": sorted(cfg["additive"]["materials"]),

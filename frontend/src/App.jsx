@@ -42,7 +42,11 @@ export default function App() {
     return () => window.removeEventListener('govbid:signed-out', out)
   }, [])
   if (!auth) return null
-  if (!auth.signed_in) return <Login onDone={checkAuth} />
+  if (!auth.signed_in) {
+    // visitors to the home page get the public business site; staff sign in at /login (or any inside page)
+    if (window.location.pathname === '/') { window.location.replace('/quote'); return null }
+    return <Login onDone={async () => { await checkAuth(); if (window.location.pathname === '/login') window.history.replaceState(null, '', '/') }} />
+  }
   return <Shell auth={auth} />
 }
 
@@ -59,7 +63,7 @@ function Login({ onDone }) {
   return (
     <div className="login-wrap">
       <form className="panel login-box" onSubmit={submit}>
-        <div className="brand-dark">GovBid<span>Pro</span></div>
+        <div className="brand-dark">Valley Power<span> Systems</span></div>
         <label className="f">Username<input autoFocus autoComplete="username" value={u} onChange={(e) => setU(e.target.value)} /></label>
         <label className="f">Password<input type="password" autoComplete="current-password" value={p} onChange={(e) => setP(e.target.value)} /></label>
         {err && <div className="err">{err}</div>}
@@ -81,7 +85,7 @@ const NAV = [
 ]
 
 function pageTitle(path) {
-  let best = ['', 'GovBid Pro']
+  let best = ['', 'Valley Power Systems']
   for (const [, links] of NAV) for (const [to, label] of links) {
     if ((to === '/' ? path === '/' : path === to || path.startsWith(to + '/')) && to.length >= best[0].length) best = [to, label]
   }
@@ -113,7 +117,7 @@ function Shell({ auth }) {
     if (menu) window.addEventListener('keydown', key)
     return () => window.removeEventListener('keydown', key)
   }, [menu])
-  const logout = async () => { try { await api.post('/api/auth/logout', {}) } finally { window.location.href = '/' } }
+  const logout = async () => { try { await api.post('/api/auth/logout', {}) } finally { window.location.href = '/login' } }
 
   return (
     <AuthContext.Provider value={auth}>
@@ -121,13 +125,13 @@ function Shell({ auth }) {
       <header className="topbar">
         <button className="menu-btn" aria-label="Open menu" aria-expanded={menu} onClick={() => setMenu(true)}><span /><span /><span /></button>
         <div className="topbar-title">{pageTitle(loc.pathname)}</div>
-        <div className="brand topbar-brand">GovBid<span>Pro</span></div>
+        <div className="brand topbar-brand">Valley Power<span> Systems</span></div>
       </header>
       {menu && <div className="nav-backdrop" onClick={() => setMenu(false)} />}
       <div className="layout">
         <nav className={`nav ${menu ? 'open' : ''}`} aria-label="Main">
           <div className="row spread nav-head">
-            <div className="brand">GovBid<span>Pro</span></div>
+            <div className="brand">Valley Power<span> Systems</span></div>
             <button className="nav-close" aria-label="Close menu" onClick={() => setMenu(false)}>×</button>
           </div>
           <div className="nav-acct">

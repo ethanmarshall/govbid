@@ -57,7 +57,7 @@ class PortalSettings(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     enabled: Mapped[bool] = mapped_column(Boolean, default=False)
-    display_name: Mapped[str] = mapped_column(String(160), default="")  # blank: the company profile name
+    display_name: Mapped[str] = mapped_column(String(160), default="Valley Power Systems LLC")  # blank: the company profile name
     tagline: Mapped[str] = mapped_column(String(300), default="Machined, sheet metal and 3D printed parts, cable harnesses and electromechanical assemblies.")
     intro: Mapped[str] = mapped_column(Text, default="Upload your files for an instant quote. Complex builds get an estimate and a review by an engineer before we confirm the order.")
     contact_email: Mapped[str] = mapped_column(String(160), default="")

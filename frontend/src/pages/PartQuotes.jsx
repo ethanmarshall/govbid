@@ -67,7 +67,7 @@ export default function PartQuotes() {
   return (
     <>
       <h1>Part quotes</h1>
-      <p className="sub">Drop in a STEP file for an instant price, or build an estimate by hand. The same engine is available to AI agents through the GovBid Pro MCP server.</p>
+      <p className="sub">Drop in a STEP file for an instant price, or build an estimate by hand. The same engine is available to AI agents through the MCP server.</p>
       <div className="tabs">
         <button className={tab === 'instant' ? 'on' : ''} onClick={() => go('instant')}>Instant quote</button>
         <button className={tab === 'flat' ? 'on' : ''} onClick={() => go('flat')}>DXF flat parts</button>

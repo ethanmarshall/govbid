@@ -83,7 +83,7 @@ function Sheet({ info, children, home = false }) {
         <div className="pq-zones pq-zones-side" aria-hidden="true">{['A', 'B', 'C', 'D'].map((n) => <span key={n}>{n}</span>)}</div>
         <header className="pq-head">
           <div>
-            <a className="pq-name" href="/quote">{info?.name || 'Quote request'}</a>
+            <a className="pq-name" href="/quote">{info?.name || 'Valley Power Systems LLC'}</a>
             {info?.tagline && <p className="pq-tagline">{info.tagline}</p>}
           </div>
           {(info?.contact_email || info?.contact_phone) && (
@@ -245,6 +245,7 @@ function SiteSections({ info }) {
           {info.contact_email && <a href={`mailto:${info.contact_email}`}>{info.contact_email}</a>}
           {info.contact_phone && <a href={`tel:${info.contact_phone.replace(/[^0-9+]/g, '')}`}>{info.contact_phone}</a>}
           <a href="/quote#quote" onClick={(e) => { e.preventDefault(); document.getElementById('quote')?.scrollIntoView({ behavior: 'smooth' }) }}>Start a quote</a>
+          <a href="/login" className="pq-muted">Staff sign in</a>
         </div>
       </footer>
     </>

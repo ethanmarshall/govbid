@@ -80,7 +80,7 @@ export default function OpportunityDetail() {
         </div>
         <div className="row">
           {o.url && <a className="btn" href={o.url} target="_blank" rel="noreferrer">Open on {o.source === 'dibbs' ? 'DIBBS' : o.source === 'sam' ? 'SAM.gov' : 'source'}</a>}
-          <button onClick={() => { if (confirm('Remove this opportunity from GovBid Pro?')) api.del(`/api/opportunities/${id}`).then(() => nav('/opportunities')) }}>Remove</button>
+          <button onClick={() => { if (confirm('Remove this opportunity?')) api.del(`/api/opportunities/${id}`).then(() => nav('/opportunities')) }}>Remove</button>
         </div>
       </div>
 
