@@ -27,6 +27,7 @@ import Market from './pages/Market.jsx'
 import CapabilityStatement from './pages/CapabilityStatement.jsx'
 import CustomerRequests from './pages/CustomerRequests.jsx'
 import Hardware from './pages/Hardware.jsx'
+import CustomerAccounts from './pages/CustomerAccounts.jsx'
 import Calibration from './pages/Calibration.jsx'
 
 const MetaContext = createContext(null)
@@ -79,7 +80,7 @@ export const useAuth = () => useContext(AuthContext)
 const NAV = [
   [null, [['/', 'Dashboard'], ['/search', 'Search everything']]],
   ['Find work', [['/opportunities', 'Opportunities'], ['/pipeline', 'Pipeline'], ['/competitors', 'Competitor intel'], ['/market', 'Recompetes and buyers'], ['/import', 'Import (DIBBS, forecasts)']]],
-  ['Bid', [['/packages', 'Packages'], ['/part-quotes', 'Part quotes'], ['/customer-requests', 'Customer requests'], ['/hardware', 'Hardware'], ['/calibration', 'Calibration'], ['/pricing-workbook', 'Pricing workbook'], ['/source-approvals', 'Source approvals'], ['/standards', 'Standards library'], ['/resources', 'Resources']]],
+  ['Bid', [['/packages', 'Packages'], ['/part-quotes', 'Part quotes'], ['/customer-requests', 'Customer requests'], ['/customer-accounts', 'Customer accounts'], ['/hardware', 'Hardware'], ['/calibration', 'Calibration'], ['/pricing-workbook', 'Pricing workbook'], ['/source-approvals', 'Source approvals'], ['/standards', 'Standards library'], ['/resources', 'Resources']]],
   ['Deliver', [['/jobs', 'Jobs'], ['/quality', 'Quality and suppliers'], ['/flowdown', 'Clause flowdown'], ['/finance', 'Invoices and finance']]],
   ['Business', [['/contacts', 'Contacts and teaming'], ['/past-performance', 'Past performance'], ['/capability', 'Capability statement'], ['/compliance', 'CMMC compliance'], ['/profile', 'Company profile']]],
 ]
@@ -184,6 +185,7 @@ function Shell({ auth }) {
             <Route path="/capability" element={<CapabilityStatement />} />
             <Route path="/customer-requests" element={<CustomerRequests />} />
             <Route path="/hardware" element={<Hardware />} />
+            <Route path="/customer-accounts" element={<CustomerAccounts />} />
             <Route path="/calibration" element={<Calibration />} />
           </Routes>
         </main>

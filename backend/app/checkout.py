@@ -4,7 +4,9 @@ Two ways to pay:
   - card, through Stripe Checkout (a page hosted by Stripe; card numbers never touch this server). Needs
     STRIPE_SECRET_KEY, and STRIPE_WEBHOOK_SECRET for the webhook (optional: payment is also checked when the
     customer returns). Turned on when the key is set.
-  - purchase order: the order is placed and you invoice against the PO (government and company buyers).
+  - invoice (invoicing.py): an invoice is made at once, with the customer's PO number if they have one. Accounts you
+    approved for terms get net terms and the work starts; everyone else pays the invoice before we start (bank
+    transfer, check, or online through Stripe).
 
 At checkout the quote is priced again, so the order is always at today's price; if that changes the total, the
 customer is shown the new total before anything is placed. The order is a snapshot of the lines and prices.
@@ -21,8 +23,10 @@ from datetime import datetime
 from sqlalchemy.orm import Session
 
 STRIPE_API = "https://api.stripe.com/v1"
-ORDER_LABEL = {"awaiting_payment": "Waiting for card payment", "paid": "Paid by card", "po_received": "Purchase order received",
-               "invoiced": "Invoiced", "cancelled": "Cancelled", "payment_review": "Payment received, we are checking it"}
+ORDER_LABEL = {"awaiting_payment": "Waiting for card payment", "paid": "Paid", "po_received": "Purchase order received",
+               "invoiced": "Invoiced", "invoice_due": "Invoice sent, we start when it is paid", "cancelled": "Cancelled",
+               "payment_review": "Payment received, we are checking it"}
+PLACED = ("paid", "po_received", "invoiced", "invoice_due", "payment_review")
 
 
 class CheckoutError(ValueError):
@@ -34,7 +38,7 @@ def stripe_enabled() -> bool:
 
 
 def methods() -> list[str]:
-    return (["card"] if stripe_enabled() else []) + ["po"]
+    return (["card"] if stripe_enabled() else []) + ["invoice"]
 
 
 def eligible(req) -> tuple[bool, str]:
@@ -45,7 +49,7 @@ def eligible(req) -> tuple[bool, str]:
         return False, "Export-controlled projects are handled directly with us."
     if req.status in ("declined", "closed", "ordered", "in_production", "shipped"):
         return False, "This request is closed or already ordered."
-    if (req.order or {}).get("status") in ("paid", "po_received", "invoiced", "payment_review"):
+    if (req.order or {}).get("status") in PLACED:
         return False, "This quote has already been ordered."
     if r.get("kind") != "instant":
         return False, "Some parts need an engineer's review first. Send it for review and we will confirm the price; then you can order here."
@@ -63,7 +67,7 @@ def _snapshot(req) -> list[dict]:
 
 def place(db: Session, req, data: dict, customer=None, base_url: str = "") -> dict:
     """Validate, price again, and place the order. Returns {"order": ..., "redirect": url or None}."""
-    from . import customers, portal
+    from . import customers, invoicing, portal
 
     ok, why = eligible(req)
     if not ok:
@@ -94,12 +98,12 @@ def place(db: Session, req, data: dict, customer=None, base_url: str = "") -> di
         raise CheckoutError("Enter the shipping address: name, street, city, state and ZIP code.")
     if not data.get("accept_terms"):
         raise CheckoutError("Please accept the terms.")
-    method = data.get("method") or "po"
+    method = data.get("method") or "invoice"
+    if method == "po":  # the earlier name for invoice
+        method = "invoice"
     if method not in methods():
         raise CheckoutError("Choose how to pay.")
     po = str(data.get("po_number") or "").strip()[:60]
-    if method == "po" and not po:
-        raise CheckoutError("Enter your purchase order number.")
     req.contact_name, req.email = name, email
     req.company = str(contact.get("company") or (customer.company if customer else "")).strip()[:160]
     req.phone = customers._phone(contact.get("phone") or (customer.phone if customer else ""))
@@ -114,10 +118,12 @@ def place(db: Session, req, data: dict, customer=None, base_url: str = "") -> di
              "lines": lines, "ship_to": ship, "po_number": po, "billing_email": str(data.get("billing_email") or "").strip()[:160],
              "notes": str(data.get("notes") or "").strip()[:2000], "lead_days": (req.public_result or {}).get("lead_days")}
     redirect = None
-    if method == "po":
-        order["status"] = "po_received"
+    if method == "invoice":
+        terms = invoicing.terms_for(customer)
+        order["status"] = "invoiced" if terms else "invoice_due"
         req.status = "ordered"
         req.submitted_at = req.submitted_at or datetime.utcnow()
+        invoicing.create(db, req, order, terms)
     else:
         sess = create_stripe_session(req, lines, email, base_url)
         order.update(status="awaiting_payment", stripe_session_id=sess["id"])
@@ -166,10 +172,29 @@ def create_stripe_session(req, lines: list[dict], email: str, base_url: str) -> 
     return _stripe("POST", "/checkout/sessions", data, _transport)
 
 
+def pay_invoice(db: Session, req, base_url: str) -> str:
+    """Pay an open invoice online (bank transfer or card, whichever you turned on in Stripe). Returns Stripe's page."""
+    o = dict(req.order or {})
+    if o.get("status") not in ("invoiced", "invoice_due") or not stripe_enabled():
+        raise CheckoutError("This invoice cannot be paid online.")
+    if o.get("stripe_session_id"):
+        retired = list(o.get("retired_sessions") or []) + [o["stripe_session_id"]]
+        try:
+            _stripe("POST", f"/checkout/sessions/{o['stripe_session_id']}/expire", {}, _transport)
+        except Exception:  # noqa: BLE001
+            pass
+        o["retired_sessions"] = retired[-20:]
+    sess = create_stripe_session(req, o.get("lines") or [], req.email, base_url)
+    o["stripe_session_id"] = sess["id"]
+    req.order = o
+    db.commit()
+    return sess["url"]
+
+
 def confirm_if_paid(db: Session, req) -> bool:
     """Ask Stripe whether a waiting card order was paid (when the customer comes back). True when it is now paid."""
     o = dict(req.order or {})
-    if o.get("status") != "awaiting_payment" or not o.get("stripe_session_id") or not stripe_enabled():
+    if o.get("status") not in ("awaiting_payment", "invoiced", "invoice_due") or not o.get("stripe_session_id") or not stripe_enabled():
         return False
     try:
         sess = _stripe("GET", f"/checkout/sessions/{o['stripe_session_id']}", None, _transport)
@@ -217,7 +242,7 @@ def mark_paid(db: Session, req, sess: dict) -> bool:
     paid = (sess.get("amount_total") or 0) / 100
     ok = got == want and str(sess.get("currency") or "usd").lower() == "usd"
     o.update(status="paid" if ok else "payment_review", paid_at=datetime.utcnow().isoformat(timespec="seconds"), paid_amount=paid,
-             payment_intent=sess.get("payment_intent") or "")
+             payment_intent=sess.get("payment_intent") or "", paid_online=True)
     if not ok:
         o["review_reason"] = f"Stripe reported {got / 100:.2f} {sess.get('currency') or ''} for an order of {want / 100:.2f} USD."
         req.order = o
@@ -225,8 +250,12 @@ def mark_paid(db: Session, req, sess: dict) -> bool:
         _alert(req, f"The card payment for {req.ref} does not match the order total. {o['review_reason']} Check it in Stripe before starting work.")
         return False
     req.order = o
-    req.status = "ordered"
+    if req.status in ("draft", "submitted", "reviewing", "confirmed"):
+        req.status = "ordered"
     req.submitted_at = req.submitted_at or datetime.utcnow()
+    from . import invoicing
+
+    invoicing.mark_paid(db, req, paid, "Paid online through Stripe")
     db.commit()
     return True
 
@@ -262,5 +291,6 @@ def public_order(req) -> dict | None:
         return None
     if not o.get("number"):
         return None
-    return {k: o.get(k) for k in ("number", "method", "status", "placed_at", "amount", "lines", "ship_to", "po_number", "paid_at", "lead_days")} | {
+    return {k: o.get(k) for k in ("number", "method", "status", "placed_at", "amount", "lines", "ship_to", "po_number", "paid_at", "lead_days",
+                                  "invoice_number", "terms_days", "due_date", "invoice_date")} | {"pay_online": stripe_enabled() and o.get("status") in ("invoiced", "invoice_due"), 
         "status_label": ORDER_LABEL.get(o.get("status"), o.get("status"))}

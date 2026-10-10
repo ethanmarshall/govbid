@@ -73,7 +73,8 @@ def get_settings(db: Session) -> PortalSettings:
 
 
 SETTINGS_FIELDS = ("enabled", "display_name", "tagline", "intro", "contact_email", "contact_phone", "notify_email", "estimate_low_pct",
-                   "estimate_high_pct", "incomplete_high_pct", "review_days", "max_quantity", "terms", "show_codes")
+                   "estimate_high_pct", "incomplete_high_pct", "review_days", "max_quantity", "terms", "show_codes",
+                   "pay_instructions")
 
 # What the customer site says about you until you change it in Portal settings. Written to be true of a small
 # veteran-owned shop that designs, builds and tests; edit every line so it matches what you actually do.
@@ -142,7 +143,13 @@ def _clean_site(v: dict) -> dict:
 
 
 def settings_dict(s: PortalSettings) -> dict:
-    return {**{k: getattr(s, k) for k in SETTINGS_FIELDS}, "site": site_content(s), "site_defaults": DEFAULT_SITE}
+    from sqlalchemy.orm import object_session
+
+    from .finance_api import get_settings as finance_settings
+
+    db = object_session(s)
+    remit = (finance_settings(db).remit_to or "") if db is not None else ""
+    return {**{k: getattr(s, k) for k in SETTINGS_FIELDS}, "remit_to": remit, "site": site_content(s), "site_defaults": DEFAULT_SITE}
 
 
 def update_settings(db: Session, changes: dict) -> dict:
@@ -150,6 +157,11 @@ def update_settings(db: Session, changes: dict) -> dict:
     for k, v in (changes or {}).items():
         if k == "site" and v is not None:
             s.site = {**(s.site or {}), **_clean_site(v)}
+            continue
+        if k == "remit_to" and v is not None:  # the address printed on invoices (shared with Invoices and finance)
+            from .finance_api import get_settings as finance_settings
+
+            finance_settings(db).remit_to = str(v)[:600]
             continue
         if k not in SETTINGS_FIELDS or v is None:
             continue
@@ -1070,12 +1082,12 @@ def notify(req: PortalRequest, s: PortalSettings) -> str:
     r = req.public_result or {}
     app_url = (os.getenv("APP_URL") or "").rstrip("/")
     o = req.order or {}
-    if o.get("status") in ("paid", "po_received"):
+    if o.get("status") in ("paid", "po_received", "invoiced", "invoice_due"):
         lines = "\n".join(f"  {l['qty']} x {l['name']}{' (' + l['group'] + ')' if l['group'] else ''}: ${l['unit_price']:,.2f} each, ${l['total']:,.2f}"
                           for l in o.get("lines") or [])
         a = o.get("ship_to") or {}
         body = (f"New ORDER {req.ref}: ${o.get('amount', 0):,.2f}, "
-                f"{'paid by card' if o['status'] == 'paid' else 'purchase order ' + (o.get('po_number') or '')}\n\n"
+                f"{_how_paid(o)}\n\n"
                 f"From: {req.contact_name} <{req.email}>{', ' + req.company if req.company else ''}{', ' + req.phone if req.phone else ''}\n"
                 f"Ship to: {a.get('name', '')}, {a.get('company', '')} {a.get('line1', '')} {a.get('line2', '')}, {a.get('city', '')}, {a.get('state', '')} {a.get('zip', '')}\n"
                 f"Needed by: {req.needed_by or 'not given'}\nBilling email: {o.get('billing_email') or req.email}\n\n{lines}\n\n"
@@ -1149,12 +1161,27 @@ def tab_for(kind: str) -> str:
 __all__ = ["PortalError", "PORTAL_STATUSES"]
 
 
+def _how_paid(o: dict) -> str:
+    po = f", PO {o['po_number']}" if o.get("po_number") else ""
+    if o.get("status") == "paid":
+        return f"PAID{' online' if o.get('paid_online') or o.get('method') == 'card' else ''}{po}"
+    if o.get("status") == "invoiced":
+        return f"invoice {o.get('invoice_number', '')}, net {o.get('terms_days')}, due {o.get('due_date', '')}{po}: start the work"
+    if o.get("status") == "invoice_due":
+        return f"invoice {o.get('invoice_number', '')} due on receipt{po}: start when it is paid"
+    return f"purchase order {o.get('po_number') or ''}"
+
+
 def confirm_to_customer(req: PortalRequest, s: PortalSettings, status_url: str) -> None:
     """A short, fixed-text order confirmation to the customer's own address (only when email is set up)."""
     from .cli import send_email
 
     o = req.order or {}
-    how = "Your card payment was received." if o.get("status") == "paid" else f"We received your purchase order {o.get('po_number', '')}."
+    how = ("Your payment was received." if o.get("status") == "paid"
+           else f"Invoice {o.get('invoice_number', '')} is attached to your order page. Terms: net {o.get('terms_days')}, due {o.get('due_date', '')}."
+           if o.get("status") == "invoiced"
+           else f"Invoice {o.get('invoice_number', '')} is on your order page. It is due on receipt, and we start your order when it is paid."
+           if o.get("status") == "invoice_due" else f"We received your purchase order {o.get('po_number', '')}.")
     body = (f"Thank you for your order {req.ref}.\n\n{how} Total: ${o.get('amount', 0):,.2f}.\n\n"
             "We will confirm the delivery date with you shortly. You can check your order here:\n"
             f"{status_url}\n\n{s.display_name or ''}\n{s.contact_email or ''} {s.contact_phone or ''}\n")

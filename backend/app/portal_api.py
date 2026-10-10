@@ -297,7 +297,7 @@ async def do_checkout(ref: str, body: CheckoutIn, request: Request, background: 
             raise HTTPException(409, {"message": "The price changed since you last looked. Check the new total and place the order again.",
                                       "total": float(msg.split(":", 1)[1]), "view": portal.public_view(req)})
         raise HTTPException(400, msg)
-    if out["order"]["status"] == "po_received":
+    if out["order"]["status"] in ("invoiced", "invoice_due"):
         background.add_task(_order_placed, req.id, _base(request))
     return {"view": portal.public_view(req), "redirect": out["redirect"]}
 
@@ -322,6 +322,45 @@ async def stripe_webhook(request: Request, db: Session = Depends(get_db)):
         if req and checkout.mark_paid(db, req, sess):
             _order_placed(req.id, _base(request))
     return {"received": True}
+
+
+# ================================================================ invoices
+def _invoice_pdf(db: Session, req: PortalRequest, base: str) -> Response:
+    from . import checkout, invoicing
+    from .finance_api import get_settings as finance_settings
+
+    o = req.order or {}
+    if not o.get("invoice_number"):
+        raise HTTPException(404, "There is no invoice for this order yet.")
+    s = portal.get_settings(db)
+    pay_url = f"{base}/quote/status/{req.ref}?t={req.token}" if checkout.stripe_enabled() and o.get("status") in ("invoiced", "invoice_due") else ""
+    pdf = invoicing.render(req, o, portal.public_info(db), finance_settings(db).remit_to or "", s.pay_instructions or "", pay_url)
+    return Response(pdf, media_type="application/pdf", headers={"Content-Disposition": f'inline; filename="{o["invoice_number"]}.pdf"',
+                                                                 "Cache-Control": "no-store"})
+
+
+@public.get("/quote/{ref}/invoice.pdf")
+def invoice_pdf(ref: str, request: Request, token: str = "", db: Session = Depends(get_db)):
+    """The customer's invoice (or receipt, once paid by card) for their order."""
+    _limit(portal.REPRICE_LIMIT, request)
+    return _invoice_pdf(db, _customer(db, ref, token), _base(request))
+
+
+class TokenIn(BaseModel):
+    token: str
+
+
+@public.post("/quote/{ref}/pay")
+def pay_invoice(ref: str, body: TokenIn, request: Request, db: Session = Depends(get_db)):
+    """Pay an open invoice online through Stripe (bank transfer or card, as you set up in Stripe)."""
+    from . import checkout
+
+    _limit(portal.SUBMIT_LIMIT, request)
+    req = _customer(db, ref, body.token)
+    try:
+        return {"redirect": checkout.pay_invoice(db, req, _base(request))}
+    except checkout.CheckoutError as exc:
+        raise HTTPException(400, str(exc))
 
 
 # ================================================================ customer accounts
@@ -438,6 +477,42 @@ def account_requests(request: Request, db: Session = Depends(get_db)):
     return out
 
 
+@public.post("/account/terms-request")
+def account_terms_request(body: dict, request: Request, background: BackgroundTasks, db: Session = Depends(get_db)):
+    """Ask for invoice terms (net 30). You approve it in Customer accounts."""
+    from datetime import datetime as _dt
+
+    _limit(portal.SUBMIT_LIMIT, request)
+    c = _require_customer(request, db)
+    if c.net_terms_days:
+        raise HTTPException(400, "Your account already has invoice terms.")
+    c.terms_requested_at = _dt.utcnow()
+    c.terms_request_note = str(body.get("note") or "").strip()[:2000]
+    db.commit()
+    background.add_task(_terms_notice, c.id)
+    from . import customers
+
+    return {"customer": customers.public(c)}
+
+
+def _terms_notice(cid: int) -> None:
+    from .cli import send_email
+    from .models_customers import Customer
+
+    db = SessionLocal()
+    try:
+        c = db.get(Customer, cid)
+        s = portal.get_settings(db)
+        app_url = (os.getenv("APP_URL") or "").rstrip("/")
+        send_email(f"Net terms request: {c.company or c.name}",
+                   f"{c.name} <{c.email}>{', ' + c.company if c.company else ''}{', ' + c.phone if c.phone else ''} asked for invoice terms.\n\n"
+                   f"{c.terms_request_note or '(no note)'}\n\nApprove or decline: {app_url}/customer-accounts\n", to=s.notify_email or None)
+    except Exception as exc:  # noqa: BLE001
+        log.info("Terms request notice not sent: %s", exc)
+    finally:
+        db.close()
+
+
 class ClaimIn(BaseModel):
     items: list[dict]  # [{ref, token}] quotes saved in this browser
 
@@ -536,19 +611,83 @@ def set_order(rid: int, body: OrderIn, db: Session = Depends(get_db)):
     r = _req(db, rid)
     if not (r.order or {}).get("number"):
         raise HTTPException(400, "There is no order on this request.")
-    if body.status not in ("po_received", "invoiced", "paid", "cancelled"):
+    if body.status not in ("invoiced", "invoice_due", "paid", "cancelled"):
         raise HTTPException(400, "Unknown order status.")
     from datetime import datetime as _dt
+
+    from . import invoicing
 
     o = dict(r.order)
     o["status"] = body.status
     if body.status == "paid" and not o.get("paid_at"):
         o["paid_at"] = _dt.utcnow().isoformat(timespec="seconds")
+        o["paid_amount"] = o.get("amount")
     r.order = o
-    if body.status == "cancelled" and r.status == "ordered":
-        r.status = "closed"
+    if body.status == "paid":
+        invoicing.mark_paid(db, r, o.get("amount"), "Marked paid in Customer requests")
+    if body.status == "cancelled":
+        invoicing.cancel(db, r)
+        if r.status == "ordered":
+            r.status = "closed"
     db.commit()
     return portal.internal_dict(r, full=True)
+
+
+@internal.get("/requests/{rid}/invoice.pdf")
+def internal_invoice_pdf(rid: int, request: Request, db: Session = Depends(get_db)):
+    return _invoice_pdf(db, _req(db, rid), _base(request))
+
+
+@internal.get("/customers")
+def list_customers(db: Session = Depends(get_db)):
+    """Customer accounts with their orders and the terms you gave them; requests for terms first."""
+    from .models_customers import Customer
+
+    out = []
+    for c in db.scalars(select(Customer).order_by(Customer.id.desc())).all():
+        reqs = db.scalars(select(PortalRequest).where(PortalRequest.customer_id == c.id)).all()
+        orders = [r.order for r in reqs if (r.order or {}).get("number") and r.order.get("status") != "cancelled"]
+        owed = sum(float(o.get("amount") or 0) for o in orders if o.get("status") in ("invoiced", "invoice_due"))
+        out.append({"id": c.id, "email": c.email, "name": c.name, "company": c.company, "phone": c.phone, "active": c.active,
+                    "since": c.created_at.date().isoformat() if c.created_at else "", "last_login": c.last_login.isoformat(timespec="minutes") if c.last_login else "",
+                    "requests": len(reqs), "orders": len(orders), "ordered_total": round(sum(float(o.get("amount") or 0) for o in orders), 2),
+                    "owed": round(owed, 2), "net_terms_days": c.net_terms_days or 0,
+                    "terms_requested_at": c.terms_requested_at.isoformat(timespec="minutes") if c.terms_requested_at else "",
+                    "terms_request_note": c.terms_request_note or "", "staff_notes": c.staff_notes or ""})
+    out.sort(key=lambda x: (not (x["terms_requested_at"] and not x["net_terms_days"]),))
+    return out
+
+
+class CustomerIn(BaseModel):
+    net_terms_days: int | None = None
+    active: bool | None = None
+    staff_notes: str | None = None
+    decline_terms: bool = False
+
+
+@internal.put("/customers/{cid}")
+def update_customer(cid: int, body: CustomerIn, db: Session = Depends(get_db)):
+    from . import invoicing
+    from .models_customers import Customer
+
+    c = db.get(Customer, cid)
+    if not c:
+        raise HTTPException(404, "Customer not found")
+    if body.net_terms_days is not None:
+        if body.net_terms_days not in invoicing.TERMS_CHOICES:
+            raise HTTPException(400, "Terms must be one of " + ", ".join(map(str, invoicing.TERMS_CHOICES)) + " days.")
+        c.net_terms_days = body.net_terms_days
+        c.terms_requested_at = None if body.net_terms_days else c.terms_requested_at
+    if body.decline_terms:
+        c.terms_requested_at = None
+    if body.active is not None:
+        c.active = body.active
+        if not body.active:
+            c.session_version += 1  # signs them out
+    if body.staff_notes is not None:
+        c.staff_notes = body.staff_notes[:3000]
+    db.commit()
+    return {"ok": True}
 
 
 class LinesIn(BaseModel):

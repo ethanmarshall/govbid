@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { call, claimSaved, money, range, refreshAccount, setAccount, statusPath, useAccount } from './shared'
+import { invoiceLink } from './Checkout'
 
 // /quote/account: sign in, create an account, reset a password, and (signed in) quotes, orders, profile and addresses.
 export default function Account({ info }) {
@@ -103,21 +104,21 @@ function Reset({ token, email }) {
   )
 }
 
-const priceOf = (q) => (q.order ? money(q.order.amount) : q.total != null ? money(q.total) : q.total_low != null ? range(q.total_low, q.total_high) : q.kind === 'concept' ? '' : 'By review')
+const priceOf = (q) => (q.order?.number ? money(q.order.amount) : q.total != null ? money(q.total) : q.total_low != null ? range(q.total_low, q.total_high) : q.kind === 'concept' ? '' : 'By review')
 
 function Dashboard({ me }) {
   const [list, setList] = useState(null)
   const [err, setErr] = useState('')
   useEffect(() => { call('GET', '/api/public/account/requests').then(setList).catch((e) => setErr(e.message)) }, [])
   const signOut = async () => { await call('POST', '/api/public/account/logout'); setAccount({ customer: null }); window.location.assign('/quote') }
-  const orders = (list || []).filter((q) => q.order && q.order.status !== 'awaiting_payment')
+  const orders = (list || []).filter((q) => q.order?.number && q.order.status !== 'awaiting_payment')
   const rest = (list || []).filter((q) => !orders.includes(q))
   const row = (q) => (
     <li key={q.ref}>
       <a className="pq-saved-ref" href={statusPath(q.ref, q.token)}>{q.ref}</a>
       <span className="pq-saved-what">{q.title || q.files.join(', ') || 'No files'}<span className="pq-muted"> {q.created}{q.lines > 1 ? `, ${q.lines} parts` : ''}</span></span>
       <span className="pq-saved-price">{priceOf(q)}</span>
-      <span className="pq-saved-act pq-muted">{q.order ? q.order.status_label : q.status_label}</span>
+      <span className="pq-saved-act pq-muted">{q.order?.number ? q.order.status_label : q.status_label}{q.order?.invoice_number && <> <a href={invoiceLink(q.ref, q.token)} target="_blank" rel="noopener">{q.order.method === 'card' && q.order.status === 'paid' ? 'Receipt' : `Invoice ${q.order.invoice_number}`}</a></>}</span>
     </li>
   )
   return (
@@ -147,6 +148,7 @@ function Dashboard({ me }) {
         </>
       )}
       {!list && !err && <p className="pq-muted pq-pad">Loading your quotes…</p>}
+      <Terms me={me} />
       <Profile me={me} />
       <Addresses me={me} />
       <Password />
@@ -248,6 +250,36 @@ function Password() {
         <div className="pq-actions"><button className="pq-btn ghost" disabled={st.busy}>Change password</button>{st.ok && <span className="pq-okline">{st.ok}</span>}</div>
         {st.err && <p className="pq-err">{st.err}</p>}
       </form>
+    </section>
+  )
+}
+
+function Terms({ me }) {
+  const [note, setNote] = useState('')
+  const [st, setSt] = useState({ busy: false, err: '' })
+  useEffect(() => { if (window.location.hash === '#terms') setTimeout(() => document.getElementById('terms')?.scrollIntoView({ block: 'start' }), 300) }, [])
+  const ask = async (e) => {
+    e.preventDefault(); setSt({ busy: true, err: '' })
+    try { const r = await call('POST', '/api/public/account/terms-request', { note }); setAccount({ customer: r.customer, reset_by_email: true }); setSt({ busy: false, err: '' }) } catch (x) { setSt({ busy: false, err: x.message }) }
+  }
+  return (
+    <section id="terms" className="pq-sec pq-anchor" aria-labelledby="terms-h">
+      <h2 id="terms-h">Payment terms</h2>
+      {me.net_terms_days ? (
+        <p>Your account has <b>net {me.net_terms_days}</b> terms. When you choose Invoice my company at checkout, we start right away and you pay within {me.net_terms_days} days.</p>
+      ) : me.terms_requested ? (
+        <p>You asked for net terms. We review requests within a few business days and will email you. Until then, invoices are due on receipt, and you can always pay by card.</p>
+      ) : (
+        <form onSubmit={ask}>
+          <p className="pq-muted" style={{ marginTop: 0 }}>Right now your invoices are due on receipt, and we start when they are paid. Businesses and agencies can ask for net 30 terms.</p>
+          <label className="pq-notes">About your company
+            <textarea required minLength={10} maxLength={2000} value={note} onChange={(e) => setNote(e.target.value)}
+              placeholder="Legal company name, years in business, who pays invoices (accounts payable email), and one or two suppliers who give you terms" />
+          </label>
+          <div className="pq-actions"><button className="pq-btn ghost" disabled={st.busy}>Ask for net 30 terms</button></div>
+          {st.err && <p className="pq-err">{st.err}</p>}
+        </form>
+      )}
     </section>
   )
 }

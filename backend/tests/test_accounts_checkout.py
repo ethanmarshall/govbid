@@ -90,27 +90,27 @@ def test_quotes_belong_to_the_account_and_can_be_claimed(client):
     assert client.get("/api/public/account/requests").status_code == 401
 
 
-def test_checkout_by_purchase_order(client, monkeypatch):
+def test_checkout_by_invoice(client, monkeypatch):
     notices = []
     monkeypatch.setattr(portal, "notify", lambda req, s: notices.append(req.ref))
     monkeypatch.setattr(portal, "confirm_to_customer", lambda req, s, url: notices.append("customer"))
     q = _quote(client, FIX / "cad" / "machined_block.step", quantity=5)
-    assert q["checkout"]["eligible"] and q["checkout"]["methods"] == ["po"]  # no Stripe key here
+    assert q["checkout"]["eligible"] and q["checkout"]["methods"] == ["invoice"]  # no Stripe key here
     total = q["result"]["total"]
     base = {"token": q["token"], "method": "po", "contact": {"name": "Dana", "email": "dana@example.com"}, "ship_to": SHIP, "accept_terms": True}
-    assert client.post(f"/api/public/quote/{q['ref']}/checkout", json={**base, "po_number": ""}).status_code == 400
     assert client.post(f"/api/public/quote/{q['ref']}/checkout", json={**base, "po_number": "PO-1", "ship_to": {"name": "x"}}).status_code == 400
     bad = client.post(f"/api/public/quote/{q['ref']}/checkout", json={**base, "po_number": "PO-1", "expected_total": total + 50})
     assert bad.status_code == 409 and bad.json()["detail"]["total"] == pytest.approx(total)
     r = client.post(f"/api/public/quote/{q['ref']}/checkout", json={**base, "po_number": "PO-1", "expected_total": total})
     assert r.status_code == 200, r.text
     v = r.json()["view"]
-    assert v["status"] == "ordered" and v["order"]["status"] == "po_received" and v["order"]["amount"] == pytest.approx(total)
+    assert v["status"] == "ordered" and v["order"]["status"] == "invoice_due" and v["order"]["amount"] == pytest.approx(total)
+    assert v["order"]["invoice_number"] and v["order"]["po_number"] == "PO-1"
     assert v["order"]["lines"][0]["qty"] == 5 and not v["checkout"]["eligible"]
     assert q["ref"] in notices and "customer" in notices
     assert client.post(f"/api/public/quote/{q['ref']}/options", json={"token": q["token"], "quantity": 9}).status_code == 400  # locked
     rid = next(x["id"] for x in client.get("/api/portal/requests").json() if x["ref"] == q["ref"])
-    assert client.put(f"/api/portal/requests/{rid}/order", json={"status": "invoiced"}).json()["order"]["status"] == "invoiced"
+    assert client.put(f"/api/portal/requests/{rid}/order", json={"status": "paid"}).json()["order"]["status"] == "paid"
 
 
 def test_estimates_cannot_check_out(client):
@@ -139,7 +139,7 @@ def test_card_checkout_with_stripe(client, monkeypatch):
 
     monkeypatch.setattr(checkout, "_transport", httpx.MockTransport(handler))
     q = _quote(client, FIX / "cad" / "machined_block.step", quantity=2)
-    assert q["checkout"]["methods"] == ["card", "po"]
+    assert q["checkout"]["methods"] == ["card", "invoice"]
     r = client.post(f"/api/public/quote/{q['ref']}/checkout", json={"token": q["token"], "method": "card", "ship_to": SHIP, "accept_terms": True,
                                                                  "contact": {"name": "Dana", "email": "dana@example.com"}}).json()
     assert r["redirect"].startswith("https://checkout.stripe.com") and r["view"]["order"]["status"] == "awaiting_payment"

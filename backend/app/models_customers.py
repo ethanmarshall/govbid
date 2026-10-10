@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import JSON, Boolean, DateTime, Integer, String
+from sqlalchemy import JSON, Boolean, DateTime, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .db import Base
@@ -24,5 +24,10 @@ class Customer(Base):
     reset_hash: Mapped[str] = mapped_column(String(128), default="")
     reset_expires: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     active: Mapped[bool] = mapped_column(Boolean, default=True)
+    # payment terms you approved: 0 = pay the invoice before we start; 30 = net 30 (we start, they pay within 30 days)
+    net_terms_days: Mapped[int] = mapped_column(Integer, default=0)
+    terms_requested_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    terms_request_note: Mapped[str] = mapped_column(Text, default="")
+    staff_notes: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     last_login: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)

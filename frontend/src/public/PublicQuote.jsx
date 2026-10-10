@@ -743,7 +743,7 @@ function NextStep({ req, token, setReq, info }) {
   const [review, setReview] = useState(false)
   const kind = req.result?.kind
   if (kind === 'needs_input' || kind === 'processing') return null
-  if (req.order && req.order.status !== 'awaiting_payment') return <OrderPanel order={req.order} info={info} fresh />
+  if (req.order?.number && req.order.status !== 'awaiting_payment') return <OrderPanel order={req.order} info={info} token={token} fresh />
   if (req.checkout?.eligible) {
     return (
       <>
@@ -1062,7 +1062,7 @@ function Status({ refId, token, info }) {
         <TitleBlock req={r} info={info} qty={qty || r.quantity} material={r.material} busy={false} />
         {draft && <SaveBar req={r} token={token} info={info} />}
         {payNote && <p className={payNote.ok ? 'pq-okline' : 'pq-err'} role="status">{payNote.text}</p>}
-        {r.order && !(draft || sent) && <OrderPanel order={r.order} info={info} />}
+        {r.order?.number && !(draft || sent) && <OrderPanel order={r.order} info={info} token={token} />}
         {draft || sent || r.checkout?.eligible
           ? <NextStep req={{ ...r, token }} token={token} setReq={(v) => { setR(v); setSent(true) }} info={info} />
           : <p><a href={pdfLink(r.ref, token)} target="_blank" rel="noopener">Save a PDF copy</a></p>}

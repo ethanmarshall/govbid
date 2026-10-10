@@ -78,4 +78,6 @@ class PortalSettings(Base):
     # what the customer site says about you: about, capabilities, experience, industries, quality, faq (blank keys use the defaults)
     site: Mapped[dict] = mapped_column(JSON, default=dict)
     show_codes: Mapped[bool] = mapped_column(Boolean, default=True)  # UEI, CAGE, NAICS and held certifications on the page
+    # printed on invoices: how to pay (bank transfer details, where to mail a check)
+    pay_instructions: Mapped[str] = mapped_column(Text, default="")
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

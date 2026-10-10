@@ -135,7 +135,8 @@ def _fail(key: str) -> None:
 # ------------------------------------------------------------------ account
 def public(c: Customer) -> dict:
     return {"id": c.id, "email": c.email, "name": c.name, "company": c.company, "phone": c.phone, "addresses": c.addresses or [],
-            "since": c.created_at.date().isoformat() if c.created_at else ""}
+            "since": c.created_at.date().isoformat() if c.created_at else "", "net_terms_days": c.net_terms_days or 0,
+            "terms_requested": bool(c.terms_requested_at)}
 
 
 def register(db: Session, data: dict) -> Customer:
