@@ -68,20 +68,32 @@ def render(view: dict, info: dict, link: str, keep_days: int = 30, sheets: dict 
 
     status = view.get("status_label") or ""
     block = Table([
-        [cell("Date", created), cell("Quantity", f"{q:,}"), cell("Status", status)],
-        [cell("Material", view.get("material") or "From your files"), cell("Finish", view.get("finish") or "From your files"),
+        [cell("Date", created), cell("Parts" if len(res.get("items") or []) > 1 else "Quantity",
+                                     f"{len(res['items'])}" if len(res.get("items") or []) > 1 else f"{((res.get('items') or [{}])[0].get('qty') or q):,}"),
+         cell("Status", status)],
+        [cell("Material", "Per line, below" if len(res.get("items") or []) > 1 else ((res.get("items") or [{}])[0].get("material") or view.get("material") or "From your files")),
+         cell("Finish", "Per line, below" if len(res.get("items") or []) > 1 else (view.get("finish") or "From your files")),
          cell("Price valid until" if kind == "instant" else "Saved until", until)],
     ], colWidths=[width / 3] * 3)
     block.setStyle(TableStyle([("BOX", (0, 0), (-1, -1), 1, ink), ("INNERGRID", (0, 0), (-1, -1), 0.6, ink), ("VALIGN", (0, 0), (-1, -1), "TOP"),
                                ("TOPPADDING", (0, 0), (-1, -1), 4), ("BOTTOMPADDING", (0, 0), (-1, -1), 6)]))
     story += [block, Spacer(1, 12)]
 
+    items = res.get("items") or []
+    many = len(items) > 1
     if kind == "instant":
-        story += [P("Instant quote", "h"), Paragraph(f"{_money(res.get('unit_price'))} each", st["big"]),
-                  P(f"{_money(res.get('total'))} for {q:,}")]
+        story += [P("Instant quote", "h")]
+        story += ([Paragraph(f"{_money(res.get('total'))} total", st["big"]), P(f"{len(items)} parts" + (f", {_money(res.get('unit_price'))} per set of {q:,}" if q > 1 else ""))]
+                  if many else [Paragraph(f"{_money(items[0].get('unit_price') if items else res.get('unit_price'))} each", st["big"]),
+                                P(f"{_money(res.get('total'))} for {(items[0].get('qty') if items else q):,}")])
     elif kind == "estimate":
-        story += [P("Estimate, confirmed after review", "h"), Paragraph(f"{_range(res.get('unit_low'), res.get('unit_high'))} each", st["big"]),
-                  P(f"{_range(res.get('total_low'), res.get('total_high'))} for {q:,}")]
+        story += [P("Estimate, confirmed after review", "h")]
+        if many or not items or items[0].get("unit_low") is None:
+            story += [Paragraph(f"{_range(res.get('total_low'), res.get('total_high'))} total", st["big"]),
+                      P(f"{len(items)} parts" + (f", {res['unpriced_lines']} priced by an engineer" if res.get("unpriced_lines") else ""))]
+        else:
+            story += [Paragraph(f"{_range(items[0]['unit_low'], items[0]['unit_high'])} each", st["big"]),
+                      P(f"{_range(res.get('total_low'), res.get('total_high'))} for {items[0].get('qty', q):,}")]
     elif kind == "needs_input":
         story += [P("Not priced yet", "h")]
     else:
@@ -93,15 +105,20 @@ def render(view: dict, info: dict, link: str, keep_days: int = 30, sheets: dict 
 
     items = res.get("items") or []
     if items:
-        rows = [[P("Item", "lab"), P("Description", "lab"), P("Each", "lab")]]
+        rows = [[P("Item", "lab"), P("Description", "lab"), P("Qty", "lab"), P("Each", "lab"), P("Line total", "lab")]]
         for it in items:
             price = (_money(it.get("unit_price")) if it.get("unit_price") is not None else
                      _range(it.get("unit_low"), it.get("unit_high")) if it.get("unit_low") is not None else "By review")
+            total = (_money(it.get("total")) if it.get("total") is not None else
+                     _range(it.get("total_low"), it.get("total_high")) if it.get("total_low") is not None else "")
             desc = it.get("desc") or ""
+            if it.get("finish") and it["finish"] != "none":
+                desc = f"{desc}, {it['finish']}"
             if it.get("note"):
                 desc = f"{desc}. {it['note']}" if desc else it["note"]
-            rows.append([P(it.get("name") or "", "cell"), P(desc, "cell"), P(price, "cell")])
-        t = Table(rows, colWidths=[width * 0.28, width * 0.5, width * 0.22], repeatRows=1)
+            name = (it.get("name") or "") + (f" ({it['group']})" if it.get("group") else "")
+            rows.append([P(name, "cell"), P(desc, "cell"), P(f"{int(it.get('qty') or 1):,}", "cell"), P(price, "cell"), P(total, "cell")])
+        t = Table(rows, colWidths=[width * 0.24, width * 0.38, width * 0.08, width * 0.15, width * 0.15], repeatRows=1)
         t.setStyle(TableStyle([("LINEBELOW", (0, 0), (-1, 0), 1, ink), ("LINEBELOW", (0, 1), (-1, -1), 0.4, rule), ("VALIGN", (0, 0), (-1, -1), "TOP"),
                                ("LEFTPADDING", (0, 0), (-1, -1), 2)]))
         story += [P("What we priced", "h"), t]

@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { api } from '../api'
-import { ItemReads } from '../public/PublicQuote'
+import { PartsTable } from '../public/PublicQuote'
 
 const usd = (n) => (n == null ? '' : `$${Number(n).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`)
 const STATUSES = ['submitted', 'reviewing', 'confirmed', 'declined', 'closed', 'draft']
@@ -10,8 +10,10 @@ const KIND_LABEL = { instant: 'Instant', estimate: 'Estimate', manual: 'Manual',
 
 function shown(r) {
   const p = r.public_result || {}
-  if (p.kind === 'instant') return `${usd(p.unit_price)} ea`
-  if (p.kind === 'estimate') return `${usd(p.unit_low)} to ${usd(p.unit_high)} ea`
+  const many = (p.items || []).length > 1
+  if (p.kind === 'instant') return many ? `${usd(p.total)} total` : `${usd(p.unit_price)} ea`
+  if (p.kind === 'estimate') return many ? `${usd(p.total_low)} to ${usd(p.total_high)} total` : `${usd(p.unit_low)} to ${usd(p.unit_high)} ea`
+  if (p.kind === 'processing') return 'reading model'
   return 'no price'
 }
 
@@ -124,19 +126,10 @@ function RequestDetail({ id, onChange, onClose }) {
       <h3>Shown to the customer</h3>
       <p className="small" style={{ margin: 0 }}><b>{KIND_LABEL[p.kind] || p.kind}</b>: {shown(r)}{p.kind === 'instant' ? `, ${usd(p.total)} total` : p.kind === 'estimate' ? `, ${usd(p.total_low)} to ${usd(p.total_high)} total` : ''}{p.lead_days ? `, about ${p.lead_days} days` : ''}</p>
       {r.internal?.shown_to_customer && <p className="small muted">Repriced since; the customer saw the earlier price.</p>}
-      <div className="pq pq-embed"><ItemReads req={{ ...r, result: p }} viewUrl={(key) => `/api/portal/requests/${id}/views/${key}.svg`} /></div>
-      <h3>Your numbers</h3>
-      <table className="small">
-        <thead><tr><th>Item</th><th>Route</th><th>Unit cost</th><th>Unit price</th><th>Margin</th></tr></thead>
-        <tbody>{items.map((it, i) => (
-          <tr key={i}>
-            <td><b>{it.name}</b><div className="muted">{it.desc}</div>
-              {it.internal_reasons?.length > 0 && <ul className="clean muted" style={{ marginTop: 4 }}>{it.internal_reasons.slice(0, 6).map((x, j) => <li key={j}>{x}</li>)}</ul>}</td>
-            <td>{it.route}{it.incomplete && <div className="due-soon">needs manual prices</div>}</td>
-            <td className="mono">{usd(it.unit_cost)}</td><td className="mono">{usd(it.unit_price)}</td><td className="mono">{it.margin_pct != null ? `${it.margin_pct}%` : ''}</td>
-          </tr>
-        ))}</tbody>
-      </table>
+      <h3>Your numbers, line by line</h3>
+      <p className="small muted" style={{ marginTop: 0 }}>Tool price is before calibration. A final price replaces the tool's for the customer and is saved as a calibration sample, so the tool learns from each job.</p>
+      <LineTable r={r} id={id} setR={setR} setMsg={setMsg} setErr={setErr} />
+      <div className="pq pq-embed"><PartsTable req={{ ...r, result: p, submitted: true }} info={{}} viewUrl={(key) => `/api/portal/requests/${id}/views/${key}.svg`} /></div>
       <h3>Review</h3>
       <div className="grid g2">
         <label className="f">Status<select value={r.status} onChange={(e) => put({ status: e.target.value })}>{STATUSES.map((s) => <option key={s} value={s}>{STATUS_LABEL[s]}</option>)}</select></label>
@@ -165,6 +158,54 @@ const fromFaq = (t) => String(t || '').split(/\n\s*\n/).map((b) => b.trim()).fil
 const siteText = (site) => ({ about: site.about || '', capabilities: toCaps(site.capabilities), experience: (site.experience || []).join('\n'),
   industries: (site.industries || []).join('\n'), quality: (site.quality || []).join('\n'), faq: toFaq(site.faq) })
 const siteFrom = (t) => ({ about: t.about, capabilities: fromCaps(t.capabilities), experience: lines(t.experience), industries: lines(t.industries), quality: lines(t.quality), faq: fromFaq(t.faq) })
+
+function LineTable({ r, id, setR, setMsg, setErr }) {
+  const items = r.internal?.items || []
+  const [finals, setFinals] = useState({})
+  const [open, setOpen] = useState({})
+  const save = async (key, value) => {
+    try {
+      const x = await api.put(`/api/portal/requests/${id}/lines`, { lines: { [key]: { final_unit_price: value === '' ? null : Number(value) } } })
+      setR(x); setMsg(value === '' ? 'Final price cleared.' : 'Final price saved. The customer sees it, and it was added to calibration.')
+    } catch (e) { setErr(e.message) }
+  }
+  const sum = (b) => Object.values(b?.per_part || {}).reduce((a, v) => a + v, 0)
+  if (!items.length) return <p className="small muted">No lines.</p>
+  return (
+    <div style={{ overflowX: 'auto' }}>
+      <table className="small">
+        <thead><tr><th>Line</th><th>Qty</th><th>Route</th><th>Setup (lot)</th><th>Run (each)</th><th>Cost each</th><th>Tool price</th><th>Calibration</th><th>Price each</th><th>Margin</th><th>Final price each</th></tr></thead>
+        <tbody>{items.map((it) => (
+          <tr key={it.key}>
+            <td style={{ minWidth: 200 }}><b>{it.name}</b>{it.group && <div className="muted">{it.group}</div>}<div className="muted">{it.desc}</div>
+              {it.internal_reasons?.length > 0 && (
+                <>
+                  <button className="link small" onClick={() => setOpen({ ...open, [it.key]: !open[it.key] })}>{open[it.key] ? 'Hide notes' : `${it.internal_reasons.length} note(s)`}</button>
+                  {open[it.key] && <ul className="clean muted" style={{ marginTop: 4 }}>{it.internal_reasons.slice(0, 8).map((x, j) => <li key={j}>{x}</li>)}</ul>}
+                </>
+              )}</td>
+            <td className="mono">{it.qty}{it.qty_per > 1 ? <div className="muted">{it.qty_per}/set</div> : null}</td>
+            <td>{it.route}{it.incomplete && <div className="due-soon">incomplete</div>}</td>
+            <td className="mono">{it.breakdown ? usd(it.breakdown.lot_cost) : ''}</td>
+            <td className="mono" title={it.breakdown ? Object.entries(it.breakdown.per_part).map(([k, v]) => `${k}: ${usd(v)}`).join('\n') : ''}>{it.breakdown ? usd(sum(it.breakdown)) : ''}</td>
+            <td className="mono">{usd(it.unit_cost)}</td>
+            <td className="mono">{usd(it.raw_unit_price)}</td>
+            <td className="small">{it.calibration ? <span title={it.calibration.why}>x{it.calibration.factor}</span> : <span className="muted">none</span>}</td>
+            <td className="mono"><b>{usd(it.unit_price)}</b></td>
+            <td className="mono">{it.margin_pct != null ? `${it.margin_pct}%` : ''}</td>
+            <td style={{ minWidth: 130 }}>
+              <div className="row" style={{ gap: 4, flexWrap: 'nowrap' }}>
+                <input type="number" min="0" step="0.01" style={{ width: 90 }} placeholder={it.final_unit_price ?? ''}
+                  value={finals[it.key] ?? (it.final_unit_price ?? '')} onChange={(e) => setFinals({ ...finals, [it.key]: e.target.value })} />
+                <button className="small-btn" onClick={() => save(it.key, finals[it.key] ?? '')}>Set</button>
+              </div>
+            </td>
+          </tr>
+        ))}</tbody>
+      </table>
+    </div>
+  )
+}
 
 function PortalSettings({ onSaved }) {
   const [s, setS] = useState(null)

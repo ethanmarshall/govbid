@@ -20,8 +20,29 @@ PROCESSES = {
     "cnc_mill": "CNC milling from plate or block",
     "cnc_lathe": "CNC turning from round bar",
     "sheet_metal": "Laser or waterjet cut, then formed on a press brake",
-    "3d_print": "3D printing: FDM, SLA, SLS or MJF",
+    "3d_print": "3D printing: FDM, SLA, SLS, MJF or metal (DMLS)",
 }
+
+# A machined alloy and the printable powder that comes closest (metal 3D printing alternative).
+PRINT_EQUIVALENT = {
+    "316 stainless": "316L stainless (DMLS)", "304 stainless": "316L stainless (DMLS)", "17-4 PH stainless": "17-4 PH stainless (DMLS)",
+    "6061-T6 aluminum": "AlSi10Mg aluminum (DMLS)", "7075-T6 aluminum": "AlSi10Mg aluminum (DMLS)", "5052-H32 aluminum": "AlSi10Mg aluminum (DMLS)",
+    "Inconel 718": "Inconel 718 (DMLS)", "titanium Ti-6Al-4V": "Ti-6Al-4V titanium (DMLS)",
+}
+PROCESS_LABEL = {"cnc_mill": "CNC milled", "cnc_5axis": "5-axis CNC milled", "cnc_lathe": "CNC turned", "sheet_metal": "Sheet metal",
+                 "3d_print": "3D printed"}
+
+
+def complexity_of(g: dict) -> dict:
+    """The geometry's complexity, or an estimate of it for models analyzed before complexity was measured."""
+    if g.get("complexity"):
+        return g["complexity"]
+    faces = g.get("faces") or {}
+    total = sum(faces.values()) or 1
+    share = faces.get("freeform", 0) / total
+    return {"level": "complex" if share > 0.05 else "simple", "freeform_share": round(share, 3),
+            "freeform_area_in2": round(share * (g.get("surface_area") or 0), 2), "five_axis": share > 0.05,
+            "reasons": [f"{faces.get('freeform', 0)} sculpted surfaces"] if share > 0.05 else [], "estimated": True}
 
 SHEET_GAUGES_IN = [0.020, 0.025, 0.032, 0.036, 0.040, 0.048, 0.050, 0.060, 0.063, 0.075, 0.080, 0.090, 0.100, 0.105, 0.120, 0.125,
                    0.135, 0.160, 0.188, 0.190, 0.250, 0.313, 0.375, 0.500]
@@ -193,16 +214,20 @@ def build_spec(geometry: dict, opts: dict, inserts_used: list[dict] | None = Non
         removed = max(stock_vol - g["volume"], 0)
         plain = max(len(holes) - threaded, 0)
         spec["stock"] = {"shape": "plate", "dims": {"length": sl, "width": sw, "thickness": st}}
+        cx = complexity_of(g)
+        five = bool(cx.get("five_axis")) if opts.get("five_axis") is None else bool(opts["five_axis"])
         spec["operations"].append({
             "type": "cnc_mill",
+            "five_axis": five,
             "setups": int(opts.get("setups") or g.get("estimated_setups") or 2),
             "features": {"holes": plain, "tapped_holes": min(threaded, len(holes)) if holes else threaded,
-                         "volume_removed_in3": round(removed, 3), "faces": g.get("face_total", 0)},
+                         "volume_removed_in3": round(removed, 3), "faces": g.get("face_total", 0),
+                         "freeform_area_in2": cx.get("freeform_area_in2") or 0},
         })
+        if five:
+            notes.append("Priced on a 5-axis machine: " + ("; ".join(cx.get("reasons") or []) or "sculpted surfaces") + ".")
         if threaded > len(holes):
             notes.append(f"{threaded} tapped holes requested but {len(holes)} holes found in the model.")
-        if (g.get("faces") or {}).get("freeform"):
-            notes.append("The model has freeform (3D contoured) surfaces: this estimate is likely low. Use your CAM time, or consider 3D printing.")
         if g.get("fill_ratio") and g["fill_ratio"] < 0.25:
             notes.append(f"Only {g['fill_ratio']:.0%} of the stock block remains in the part: heavy material removal.")
 
@@ -219,11 +244,32 @@ def build_spec(geometry: dict, opts: dict, inserts_used: list[dict] | None = Non
     if max(bb.values()) > 40:
         notes.append(f"Longest dimension {max(bb.values()):.1f} in: confirm it fits your machine travel or brake length.")
     spec["process"] = process
+    if process == "cnc_mill" and spec["operations"] and spec["operations"][0].get("five_axis"):
+        spec["process_label"] = "cnc_5axis"
     return spec, notes
 
 
+def _refresh(file_id: str, d: dict) -> dict:
+    """Models analyzed before complexity was measured get measured again once (small files only; big ones
+    use the estimate in complexity_of)."""
+    g = d.get("geometry") or {}
+    if g.get("complexity") or not (CAD_DIR / f"{file_id}.step").exists():
+        return d
+    if (CAD_DIR / f"{file_id}.step").stat().st_size > isolate.BIG_FILE:
+        return d
+    try:
+        fresh = cad.analyze_file(CAD_DIR / f"{file_id}.step", with_mesh=False)
+    except cad.CadError:
+        return d
+    meta_path = CAD_DIR / f"{file_id}.json"
+    full = json.loads(meta_path.read_text())
+    full["geometry"] = fresh["geometry"]
+    meta_path.write_text(json.dumps(full))
+    return {**d, "geometry": fresh["geometry"]}
+
+
 def quote(file_id: str, opts: dict, config: dict | None = None) -> dict:
-    d = load(file_id)
+    d = _refresh(file_id, load(file_id))
     geometry = d["geometry"]
     spec, notes = build_spec(geometry, opts, d.get("inserts"), config)
     spec["cad"] = {"file_id": file_id, "filename": opts.get("filename") or d["filename"],
@@ -237,3 +283,41 @@ def quote(file_id: str, opts: dict, config: dict | None = None) -> dict:
     result = pricing.estimate(spec, config)
     result["assumptions"] = notes + result["assumptions"]
     return {"process": spec["process"], "geometry": geometry, "spec": spec, "estimate": result}
+
+
+def process_options(file_id: str, opts: dict, config: dict | None = None) -> list[dict]:
+    """Every way this part could reasonably be made, priced at the requested quantities, cheapest first.
+
+    Each option: {process, label, material, five_axis, breaks, unit_price (first quantity), note}. A printed option
+    in metal uses the closest printable alloy and says so. Options that do not apply to the geometry are left out."""
+    d = load(file_id)
+    g = d["geometry"]
+    cfg = pricing.merged_config(config)
+    mat = opts.get("material") or "6061-T6 aluminum"
+    is_print_mat = mat in cfg["additive"]["materials"]
+    cands: list[tuple[str, str, str]] = []  # (process, material, note)
+    if not is_print_mat:
+        cands.append(("cnc_mill", mat, ""))
+        if g.get("turned"):
+            cands.append(("cnc_lathe", mat, ""))
+        if g.get("sheet_metal"):
+            cands.append(("sheet_metal", mat, ""))
+        pm = PRINT_EQUIVALENT.get(mat)
+        if pm and pm in cfg["additive"]["materials"]:
+            cands.append(("3d_print", pm, "" if pm.split(" (")[0].lower().startswith(mat.split()[0].lower()) else f"printed in {pm}, the closest printable alloy"))
+    else:
+        cands.append(("3d_print", mat, ""))
+    out = []
+    for proc, m, note in cands:
+        try:
+            r = quote(file_id, {**opts, "process": proc, "material": m}, config)
+        except (pricing.SpecError, cad.CadError, KeyError, ValueError) as exc:
+            continue
+        five = bool(r["spec"]["operations"] and r["spec"]["operations"][0].get("five_axis"))
+        pb = r["estimate"]["price_breaks"]
+        label = ("Metal 3D printed" if "DMLS" in m else "3D printed") if proc == "3d_print" else PROCESS_LABEL["cnc_5axis" if five else proc]
+        out.append({"process": proc, "label": label,
+                    "material": m, "five_axis": five, "breaks": pb, "unit_price": pb[0]["unit_price"], "note": note,
+                    "warnings": r["estimate"].get("warnings", [])[:3]})
+    out.sort(key=lambda o: o["unit_price"])
+    return out

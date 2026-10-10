@@ -39,6 +39,7 @@ class PortalRequest(Base):
     public_result: Mapped[dict] = mapped_column(JSON, default=dict)
     internal: Mapped[dict] = mapped_column(JSON, default=dict)
     internal_notes: Mapped[str] = mapped_column(Text, default="")
+    line_opts: Mapped[dict] = mapped_column(JSON, default=dict)  # per line: {qty, material, finish, process, final_unit_price}
     quote_ids: Mapped[list] = mapped_column(JSON, default=list)  # internal PartQuotes made from this request
     ip_hash: Mapped[str] = mapped_column(String(64), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)

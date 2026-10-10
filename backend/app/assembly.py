@@ -161,7 +161,7 @@ def bodies(file_id: str, with_mesh: bool = True) -> dict:
         for i in g["bodies"]:
             next(r for r in rows if r["index"] == i)["group"] = n
         out_groups.append({"group": n, "name": name, "qty": len(g["bodies"]), "bodies": g["bodies"], "representative": g["bodies"][0],
-                           "bought": bool(raw) and all(is_bought(x) for x in raw),
+                           "bought": bool(raw) and all(is_bought(x) for x in raw), "raw_names": sorted(set(raw))[:5],
                            "suggested_process": geo["suggested_process"], "volume": geo["volume"], "bounding_box": bb,
                            "holes": len(geo["holes"]), "sheet_thickness": (geo.get("sheet_metal") or {}).get("thickness")})
     joints = []

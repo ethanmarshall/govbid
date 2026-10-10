@@ -276,3 +276,98 @@ def test_assembly_part_names_and_bought_parts():
     assert part_name("04_compressor_outlet_guide_vanes") == "compressor outlet guide vanes"
     assert is_bought("08_bearing_608_reference") and is_bought("21_igniter_electrode_reference") and is_bought("M5 x 10 socket head screw")
     assert not is_bought("07_rear_bearing_spacer") and not is_bought("22_igniter_boss") and not is_bought("06_shaft")
+
+
+def test_several_files_give_one_line_each_with_their_own_options(client):
+    q = _quote(client, [FIX / "cad" / "machined_block.step", FIX / "cad" / "turned_shaft.step", FIX / "flat" / "plate_holes_slot.dxf"],
+               quantity=10, thickness="0.125").json()
+    res = q["result"]
+    keys = {ln["name"]: ln for ln in res["items"]}
+    assert {"machined_block", "turned_shaft"} <= set(keys) and any(ln["kind"] == "flat" for ln in res["items"])
+    for ln in res["items"]:
+        assert ln["qty"] == 10 and (ln.get("unit_price") or ln.get("unit_low"))
+    shaft = keys["turned_shaft"]
+    assert shaft["process"] == "cnc_lathe" and len(shaft["options"]["processes"]) >= 2  # turned, milled, printed
+    _no_secrets(q)
+    # change one line: 60 shafts in 304 stainless; the block keeps its quantity and material
+    r = client.post(f"/api/public/quote/{q['ref']}/options", json={"token": q["token"], "lines": {shaft["key"]: {"qty": 60, "material": "304 stainless"}}}).json()
+    lines = {ln["name"]: ln for ln in r["result"]["items"]}
+    assert lines["turned_shaft"]["qty"] == 60 and lines["turned_shaft"]["material"] == "304 stainless"
+    assert lines["machined_block"]["qty"] == 10 and lines["machined_block"]["material"] == "6061-T6 aluminum"
+    total = sum(ln.get("total") or 0 for ln in r["result"]["items"])
+    assert r["result"]["total"] == pytest.approx(total, abs=0.05)
+    # pick the milled option for the shaft
+    milled = next(p for p in lines["turned_shaft"]["options"]["processes"] if p["process"] == "cnc_mill")
+    r = client.post(f"/api/public/quote/{q['ref']}/options", json={"token": q["token"], "lines": {shaft["key"]: {"process": "cnc_mill"}}}).json()
+    s2 = next(ln for ln in r["result"]["items"] if ln["name"] == "turned_shaft")
+    assert s2["process"] == "cnc_mill" and s2["unit_price"] == pytest.approx(milled["unit_price"], rel=0.02)
+    bad = client.post(f"/api/public/quote/{q['ref']}/options", json={"token": q["token"], "lines": {shaft["key"]: {"process": "laser"}}})
+    assert bad.status_code == 400
+
+
+def test_drawing_is_paired_with_its_model(client, tmp_path):
+    import shutil
+
+    step = tmp_path / "55120-1.step"
+    shutil.copy(FIX / "cad" / "sheet_bracket.step", step)
+    pdf = tmp_path / "55120-1.pdf"
+    shutil.copy(FIX / "drawings" / "sheet_cover.pdf", pdf)
+    q = _quote(client, [step, pdf]).json()
+    items = q["result"]["items"]
+    assert len(items) == 1  # the drawing is read for the model, not priced as a second part
+    facts = {f["label"]: f["value"] for f in items[0]["facts"]}
+    assert "55120-1.pdf" in facts["Drawing"] and "5052" in items[0]["material"] and "powder coat" in items[0]["finish"]
+
+
+def test_assembly_lines_bought_parts_and_review_price(client):
+    from app import calibration
+    from app.db import SessionLocal
+    from app.models_hardware import CalibrationSample, HardwareItem
+
+    q = _quote(client, [FIX / "cad" / "weldment.step"], quantity=2).json()
+    items = q["result"]["items"]
+    parts = [ln for ln in items if ln["kind"] == "part"]
+    asm = [ln for ln in items if ln["kind"] == "assembly"]
+    assert len(parts) == 2 and len(asm) == 1 and {p["qty_per"] for p in parts} == {1, 2}
+    assert next(p for p in parts if p["qty_per"] == 2)["qty"] == 4  # 2 per assembly x 2 assemblies
+    # a part drawing for an assembly component is built when first opened
+    v = parts[0]["view"]
+    svg = client.get(f"/api/public/quote/{q['ref']}/views/{v['key']}.svg?token={q['token']}")
+    assert svg.status_code == 200 and "<path" in svg.text
+    # your final price in review: the customer sees it and the tool learns from it
+    rid = next(r["id"] for r in client.get("/api/portal/requests?include_drafts=true").json() if r["ref"] == q["ref"])
+    db = SessionLocal()
+    before = db.query(CalibrationSample).count()
+    key = parts[0]["key"]
+    d = client.put(f"/api/portal/requests/{rid}/lines", json={"lines": {key: {"final_unit_price": 123.45}}}).json()
+    line = next(ln for ln in d["public_result"]["items"] if ln["key"] == key)
+    assert line["unit_price"] == 123.45 and line["confirmed"]
+    assert db.query(CalibrationSample).count() == before + 1
+    db.query(CalibrationSample).filter(CalibrationSample.ref.like(f"{q['ref']}%")).delete(synchronize_session=False)
+    db.commit()
+    db.close()
+
+
+def test_bought_part_priced_from_the_library(client, monkeypatch):
+    from app import hardware, portal_lines
+    from app.db import SessionLocal
+    from app.models_hardware import HardwareItem
+
+    db = SessionLocal()
+    db.add(HardwareItem(part_number="5972K91", description="608 bearing", match="608 bearing", pack_price=6.5, pack_qty=1))
+    db.commit()
+    try:
+        class R:
+            quantity = 3
+            line_opts = {}
+        s = portal.get_settings(db)
+        from app import quotes
+        ctx = portal_lines.Ctx(db, R(), s, quotes.get_config(db), quotes.get_overrides(db))
+        ln = portal_lines.bought_line(ctx, "k", "bearing 608 reference", ["08_bearing_608_reference"], 2, "turbojet")
+        assert ln["route"] == "instant" and ln["qty"] == 6 and ln["unit_price"] > 6.5 and ln["unit_cost"] == 6.5
+        miss = portal_lines.bought_line(ctx, "k2", "igniter electrode reference", ["21_igniter_electrode_reference"], 1, "turbojet")
+        assert miss["route"] == "manual" and miss["incomplete"]
+    finally:
+        db.query(HardwareItem).delete()
+        db.commit()
+        db.close()

@@ -126,7 +126,7 @@ SVG_HEADERS = {"Content-Security-Policy": "default-src 'none'; style-src 'unsafe
 def _svg(req: PortalRequest, key: str) -> Response:
     from . import portal_views
 
-    sheet = portal.view_sheet(req, key)
+    sheet = portal.view_sheet(req, key) or portal.build_lazy_view(req, key)
     if not sheet:
         raise HTTPException(404, "No drawing for this item.")
     return Response(portal_views.to_svg(sheet), media_type="image/svg+xml", headers=SVG_HEADERS)
@@ -141,6 +141,7 @@ def quote_views(ref: str, key: str, request: Request, token: str = "", db: Sessi
 
 class OptionsIn(BaseModel):
     token: str
+    lines: dict | None = None  # {line key: {qty, material, finish, process, process_material}}
     quantity: int | None = None
     material: str | None = None
     finish: str | None = None
@@ -254,6 +255,32 @@ def download_file(rid: int, index: int, db: Session = Depends(get_db)):
 @internal.get("/requests/{rid}/views/{key}.svg")
 def request_views(rid: int, key: str, db: Session = Depends(get_db)):
     return _svg(_req(db, rid), key)
+
+
+class LinesIn(BaseModel):
+    lines: dict  # {line key: {final_unit_price | qty | material | finish | process}}; null clears a value
+
+
+@internal.put("/requests/{rid}/lines")
+async def set_lines(rid: int, body: LinesIn, db: Session = Depends(get_db)):
+    """Your changes to lines in review. A final unit price replaces the tool's for the customer and is recorded
+    as a calibration sample (real price next to the tool's), so the tool learns from every job."""
+    from . import calibration
+
+    r = _req(db, rid)
+    before = {ln["key"]: ln for ln in (r.internal or {}).get("items") or []}
+    r.line_opts = _guard(portal.merge_line_opts, r.line_opts or {}, body.lines, portal.get_settings(db).max_quantity * 100, True)
+    await run_in_threadpool(portal.price_request, db, r)
+    db.commit()
+    for key, ch in body.lines.items():
+        fp = (ch or {}).get("final_unit_price")
+        ln = before.get(key)
+        if fp and ln and ln.get("raw_unit_price"):
+            proc = (ln.get("calibration") or {}).get("process") or ("cnc_5axis" if (ln.get("process_label") or "").startswith("5-axis") else ln.get("process")) or ln["kind"]
+            calibration.add(db, source="review", process=proc, name=ln["name"], material=ln.get("material") or "", quantity=int(ln.get("qty") or 1),
+                            tool_unit_price=float(ln["raw_unit_price"]), actual_unit_price=float(fp), ref=f"{r.ref}#{key}"[:60],
+                            note="Final price set in review")
+    return portal.internal_dict(r, full=True)
 
 
 @internal.post("/requests/{rid}/to-quotes")

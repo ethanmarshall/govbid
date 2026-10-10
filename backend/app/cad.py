@@ -148,6 +148,48 @@ def _same_line(p1, d1, p2, d2, tol):
     return math.sqrt(_dot(perp, perp)) < tol
 
 
+def complexity(counts: dict, freeform_area: float, area: float, groups: list, holes: list, hole_axes: list,
+               dims: list, volume: float, thin_ratio: float) -> dict:
+    """How hard the part is to make, from its geometry. Drives 5-axis pricing and the process comparison.
+
+    freeform_share: sculpted surface area / total area (blades, impellers, molded shapes)
+    min_inside_radius_in: smallest inside fillet or slot radius (small cutters run slowly)
+    deep_holes: holes deeper than 6 x their diameter (gun drilling or EDM territory)
+    """
+    share = freeform_area / area if area else 0.0
+    inside = [g["r"] for g in groups if g["concave"] and g["span"] < 2 * math.pi - 0.05 and g["r"] > 0]
+    min_r = min(inside) if inside else None
+    deep = sum(1 for h in holes if h["diameter"] and h["depth"] / h["diameter"] > 6)
+    odd_axes = sum(1 for a in hole_axes if not any(abs(abs(c) - 1) < 1e-3 for c in a))  # holes not along X, Y or Z
+    fill = volume / (dims[0] * dims[1] * dims[2]) if all(dims) else 1
+    reasons = []
+    score = 0
+    if share > 0.25:
+        score += 3
+        reasons.append(f"{share:.0%} of the surface is sculpted (blades or contoured shapes)")
+    elif share > 0.05:
+        score += 2
+        reasons.append(f"{share:.0%} of the surface is sculpted")
+    if min_r is not None and min_r < 0.03:
+        score += 1
+        reasons.append(f"inside radius of {min_r:.3f} in needs a very small cutter")
+    if deep:
+        score += 1
+        reasons.append(f"{deep} hole(s) deeper than 6 x diameter")
+    if odd_axes:
+        score += 1
+        reasons.append(f"holes on {odd_axes} angled axis(es)")
+    if fill < 0.15:
+        score += 1
+        reasons.append(f"only {fill:.0%} of the stock block remains (heavy material removal)")
+    if thin_ratio and thin_ratio < 0.06 and not share:
+        reasons.append("thin walls")
+    level = "simple" if score == 0 else "moderate" if score <= 1 else "complex" if score <= 3 else "very complex"
+    return {"level": level, "score": score, "freeform_share": round(share, 3), "freeform_area_in2": round(freeform_area, 2),
+            "min_inside_radius_in": round(min_r, 4) if min_r is not None else None, "deep_holes": deep, "angled_hole_axes": odd_axes,
+            "five_axis": share > 0.05 or odd_axes > 0, "reasons": reasons}
+
+
 class _AxisIndex:
     """Cylinder groups bucketed by convexity, axis direction and where the axis line passes (1 mm cells),
     with radius checked by the caller. near() returns the groups that could share a line with (p, d)."""
@@ -221,6 +263,7 @@ def analyze(shape) -> dict:
     cyls = []  # (radius_in, axis_point_mm, axis_dir, concave, span_rad, area_in2)
     planes = []  # (normal, point_mm, area_in2)
     cyl_area = 0.0
+    freeform_area = 0.0  # B-spline and other sculpted surfaces: blades, blends, molded shapes
     for f in _faces(shape):
         s = BRepAdaptor_Surface(f)
         t = s.GetType()
@@ -259,6 +302,9 @@ def analyze(shape) -> dict:
             counts["torus"] += 1
         else:
             counts["freeform"] += 1
+            fp = GProp_GProps()
+            BRepGProp.SurfaceProperties_s(f, fp)
+            freeform_area += fp.Mass() * k ** 2
 
     tol_mm = 0.01
     # Merge cylinder faces that belong to the same feature (same axis line and radius).
@@ -357,8 +403,13 @@ def analyze(shape) -> dict:
     side_axes = [a for a in hole_axes if not _parallel(a, thin_dir, 0.05)]
     setups = min(2 + len(side_axes), 5)
 
+    cx = complexity(counts, freeform_area, area, groups, holes, hole_axes, dims, volume, thin_ratio)
+    if cx["five_axis"] and process == "cnc_mill":
+        setups = max(setups, 3)
+
     return {
         "units": "in",
+        "complexity": cx,
         "bounding_box": {"length": round(dims[0], 4), "width": round(dims[1], 4), "height": round(dims[2], 4)},
         "volume": round(volume, 4),
         "surface_area": round(area, 3),

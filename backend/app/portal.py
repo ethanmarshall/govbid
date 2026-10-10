@@ -352,6 +352,28 @@ def _iso_split(file_id: str) -> bool:
     return True
 
 
+def build_lazy_view(req: PortalRequest, key: str) -> dict | None:
+    """Parts of an assembly get their drawing when someone first looks at it (small part files only)."""
+    from . import cad, cad_quote
+    from . import portal_views as pv
+
+    if not re.fullmatch(r"[0-9a-f]{20}", key or ""):
+        return None
+    src = next(((it.get("view") or {}).get("src") for it in (req.public_result or {}).get("items") or []
+                if (it.get("view") or {}).get("key") == key), None)
+    if not src or not re.fullmatch(r"[0-9a-f]{8,64}", src):
+        return None
+    p = cad_quote.CAD_DIR / f"{src}.step"
+    if not p.exists() or p.stat().st_size > isolate.BIG_FILE:
+        return None
+    try:
+        sheet = pv.build_sheet(cad.load_step(p), kind="model")
+    except Exception:  # noqa: BLE001
+        return None
+    pv.save(req_dir(req) / "views", key, sheet)
+    return sheet
+
+
 def view_sheet(req: PortalRequest, key: str) -> dict | None:
     from . import portal_views as pv
 
@@ -404,17 +426,18 @@ def _read_pdfs(req: PortalRequest) -> tuple[list[dict], bool]:
 
 
 def price_request(db: Session, req: PortalRequest) -> None:
-    """Price the request from its stored files and options; fills req.kind, req.public_result and req.internal."""
-    from . import box_build, cad, cad_quote, drawing_assembly, drawing_quote, flat, pcb_files
+    """Price the request line by line from its stored files and options (see portal_lines.py).
+    Fills req.kind, req.public_result (what the customer sees) and req.internal (costs, margins, specs)."""
+    from . import box_build, cad, cad_quote, drawing_assembly, drawing_quote, pcb_files
+    from . import portal_lines as PL
     from . import portal_views as pv
 
     s = get_settings(db)
     cfg = quotes.get_config(db)
     over = quotes.get_overrides(db)
-    n = max(1, min(int(req.quantity or 1), s.max_quantity))
-    req.quantity = n
-    q = _qtys(n)
-    items: list[dict] = []
+    req.quantity = max(1, min(int(req.quantity or 1), s.max_quantity))
+    n = req.quantity
+    lines: list[dict] = []
 
     if req.export_controlled:
         _finish(req, s, [], manual_reason="You told us the project includes export-controlled technical data. Do not upload it here: "
@@ -426,226 +449,225 @@ def price_request(db: Session, req: PortalRequest) -> None:
         _finish(req, s, [], manual_reason="A drawing you uploaded is marked export-controlled or limited distribution, so we deleted it "
                                           "without reading further. Send your contact details and we will arrange a secure transfer.")
         return
+    ctx = PL.Ctx(db, req, s, cfg, over)
     drawing_mat = next((r["read"]["material"]["mapped"] for r in reads if r["read"] and (r["read"].get("material") or {}).get("mapped")), None)
     drawing_fin = [x["mapped"] for r in reads if r["read"] for x in (r["read"].get("finishes") or []) if x.get("mapped")]
     steps = [f for f in req.files if f["kind"] == "step" and not f["removed"]]
     dxfs = [f for f in req.files if f["kind"] == "dxf" and not f["removed"]]
     pcbs = [f for f in req.files if f["kind"] == "pcb" and not f["removed"]]
     refs = [f for f in req.files if f["kind"] == "ref" and not f["removed"]]
+    pairs, loose_reads = PL.pair_drawings(steps, reads)
 
     # ---- STEP models
     for f in steps:
         name = Path(f["name"]).stem
+        key = f["stored"]
         if f.get("size", 0) > isolate.BIG_FILE:  # big model: read in the background, the page updates when it is done
             st = _prep_state(req, f)
             if st.get("status") == "failed":
-                items.append(_item(name, "manual", "3D model", None, n, kind="step",
-                                   public_reason="Your model is too large or detailed to read automatically, so an engineer will price it.",
-                                   internal_reasons=[st.get("error", "")]))
+                lines.append(PL.new_line(key, name, "part", "manual", desc="3D model", qty=ctx.qty(key, 1),
+                                         public_reason="Your model is too large or detailed to read automatically, so an engineer will price it.",
+                                         internal_reasons=[st.get("error", "")]))
                 continue
             if st.get("status") != "done":
-                items.append(_item(name, "processing", "3D model", None, n, kind="step",
-                                   public_reason="Your model is large, so we are reading it now. This page updates on its own when it is ready, "
-                                                 "usually within a few minutes. You can also save the link and come back."))
+                lines.append(PL.new_line(key, name, "part", "processing", desc="3D model", qty=ctx.qty(key, 1),
+                                         public_reason="Your model is large, so we are reading it now. This page updates on its own when it is ready, "
+                                                       "usually within a few minutes. You can also save the link and come back."))
                 continue
         try:
             stored = cad_quote.store_upload(file_path(req, f).read_bytes(), f["name"])
         except (cad.CadError, Exception) as exc:  # noqa: BLE001
-            items.append(_item(name, "manual", "3D model", None, n, kind="step", public_reason="We could not read this model automatically.",
-                               internal_reasons=[str(exc)]))
+            lines.append(PL.new_line(key, name, "part", "manual", desc="3D model", qty=ctx.qty(key, 1),
+                                     public_reason="We could not read this model automatically.", internal_reasons=[str(exc)]))
             continue
-        solids = (stored.get("geometry") or {}).get("solids", 1) or 1
-        mat, is_print = _material(req, cfg, drawing_mat)
-        msrc = _mat_source(req, cfg, mat, drawing_mat)
+        geom = stored.get("geometry") or {}
+        solids = geom.get("solids", 1) or 1
+        paired = pairs.get(key)
+        pread = (paired or {}).get("read") or {}
+        pmat = (pread.get("material") or {}).get("mapped")
+        mat, _is_print = _material(req, cfg, pmat or drawing_mat)
+        msrc = _mat_source(req, cfg, mat, pmat or drawing_mat)
+        pfin = [x["mapped"] for x in (pread.get("finishes") or []) if x.get("mapped")] if paired else drawing_fin
+        fins = _finishes(req, cfg, _is_print, pfin)
+        defaults = {"material": mat, "material_source": msrc, "finishes": fins, "finish_source": _fin_source(req, fins)}
         step_path = file_path(req, f)
         big = f.get("size", 0) > isolate.BIG_FILE
-        view = None if big and pv.load(req_dir(req) / "views", pv.cache_key(stored["file_id"], "model", 2)) is None \
+        vkey = pv.cache_key(stored["file_id"], "model", 2)
+        view = None if big and pv.load(req_dir(req) / "views", vkey) is None \
             else _view(req, (stored["file_id"],), lambda p=step_path: cad.load_step(p), "model")
-        if solids > 1 and _prep_state(req, f).get("split_error"):
-            bb = (stored.get("geometry") or {}).get("bounding_box") or {}
+
+        if solids == 1:
+            lines.append(PL.part_line(ctx, key, stored["file_id"], name, defaults=defaults, paired=paired, geometry=geom, view=view))
+            continue
+
+        # an assembly: one line per part (identical bodies grouped), bought parts, and the assembly itself
+        if _prep_state(req, f).get("split_error"):
+            bb = geom.get("bounding_box") or {}
             facts = [portal_read.row("Overall size", portal_read._size(bb.get("length"), bb.get("width"), bb.get("height"))),
-                     portal_read.row("Parts in the model", solids), portal_read.material_row(mat, msrc)]
-            items.append(_item(name, "manual", f"Assembly ({solids} parts)", None, n, kind="assembly", view=view, facts=facts,
-                               public_reason=f"Your model has {solids} separate parts and is very large, so an engineer will price it.",
-                               internal_reasons=[_prep_state(req, f)["split_error"]]))
+                     portal_read.row("Parts in the model", solids)]
+            lines.append(PL.new_line(key, name, "assembly", "manual", desc=f"Assembly ({solids} parts)", qty=ctx.qty(key, 1), view=view, facts=facts,
+                                     public_reason=f"Your model has {solids} separate parts and is very large, so an engineer will price it.",
+                                     internal_reasons=[_prep_state(req, f)["split_error"]]))
             continue
-        if solids > 1:
-            try:
-                from .assembly import quote_assembly, split
-
-                sp = split(stored["file_id"])
-                made = [g for g in sp["groups"] if not g.get("bought")] or sp["groups"]
-                bought = [g for g in sp["groups"] if g.get("bought") and g not in made]
-                bodies = [{"file_id": g["file_id"], "name": g.get("name") or "body", "qty": g.get("qty", 1),
-                           "process": "3d_print" if is_print else g.get("suggested_process") or "auto", "material": mat,
-                           "finishes": _finishes(req, cfg, is_print, drawing_fin)} for g in made]
-                joining = {"weld_process": "mig", "weld_length_in": sp.get("weld_estimate_in") or 0, "assembly_minutes": 10 * len(bodies),
-                           "inspection_minutes": 10}
-                r = quote_assembly(bodies, joining, q, over)
-                spec = {"kind": "assembly", "name": name, "quantities": q, "bodies": bodies, "joining": joining,
-                        "cad": {"file_id": stored["file_id"], "filename": f["name"], "notes": [], "options": {"assembly": True}}}
-                note = f"Your model has {solids} separate parts, so an engineer will confirm how it goes together."
-                if bought:
-                    note += (" Bought parts (" + ", ".join(g["name"] for g in bought[:4]) + (" and more" if len(bought) > 4 else "")
-                             + ") are not in this price yet; we add them when we confirm.")
-                items.append(_item(name, "estimate", f"Assembly of {len(bodies)} made part types, {mat}", r["price_breaks"], n, kind="assembly", spec=spec,
-                                   public_reason=note,
-                                   internal_reasons=r.get("warnings", [])[:6] + [f"Bought parts not priced: {', '.join(g['name'] for g in bought)}"] * bool(bought),
-                                   incomplete=bool(r.get("incomplete")) or bool(bought),
-                                   facts=portal_read.step_assembly(stored.get("geometry") or {}, made, mat, msrc, bought=bought,
-                                                                   lines=r.get("lines") or r.get("bodies") or []), view=view))
-            except Exception as exc:  # noqa: BLE001
-                items.append(_item(name, "manual", f"Assembly ({solids} parts)", None, n, kind="assembly",
-                                   public_reason=f"Your model has {solids} separate parts; we will price it by hand.", internal_reasons=[str(exc)], view=view))
-            continue
-        opts = {"material": mat, "finishes": _finishes(req, cfg, is_print, drawing_fin), "quantities": q, "filename": f["name"], "name": name}
-        if is_print:
-            opts["process"] = "3d_print"
         try:
-            r = cad_quote.quote(stored["file_id"], opts, over)
-        except (pricing.SpecError, cad.CadError, KeyError, ValueError) as exc:
-            items.append(_item(name, "manual", "3D model", None, n, kind="step", public_reason="This part needs a quick look before we can price it.",
-                               internal_reasons=[str(exc)], view=view))
+            from .assembly import split
+
+            sp = split(stored["file_id"])
+        except Exception as exc:  # noqa: BLE001
+            lines.append(PL.new_line(key, name, "assembly", "manual", desc=f"Assembly ({solids} parts)", qty=ctx.qty(key, 1), view=view,
+                                     public_reason=f"Your model has {solids} separate parts; we will price it by hand.", internal_reasons=[str(exc)]))
             continue
-        est = r["estimate"]
-        plabel = PROCESS_LABEL.get(r["process"], r["process"])
-        facts = portal_read.step_part(stored.get("geometry") or {}, mat, msrc, opts["finishes"], _fin_source(req, opts["finishes"]), plabel,
-                                      (cfg["materials"].get(mat) or cfg["additive"]["materials"].get(mat) or {}).get("density"))
-        items.append(_item(name, "instant", f"{plabel}, {mat}"
-                           + (f", {', '.join(opts['finishes'])}" if opts["finishes"] else ""), est["price_breaks"], n, kind="part",
-                           spec=r["spec"], internal_reasons=est.get("warnings", [])[:6], facts=facts, view=view))
+        from .assembly import is_bought
 
-    # ---- drawings with no model: price the drawing itself
-    if not steps:
-        for rd in reads:
-            f, read = rd["file"], rd["read"]
-            name = Path(f["name"]).stem
-            if not read or not read.get("text_found", True):
-                items.append(_item(name, "manual", "Drawing", None, n, kind="drawing", public_reason="We will read this drawing by hand."))
-                continue
-            path = file_path(req, f)
-            try:
-                asm = drawing_assembly.analyze(path, read)
-            except Exception:  # noqa: BLE001
-                asm = None
-            if asm:
-                bb = asm["box_build"]
-                spec = {**{k: v for k, v in bb.items() if k not in ("evidence", "assumptions", "fabricated")}, "kind": "box_build", "quantities": q}
-                try:
-                    r = box_build.price(spec, over)
-                    enc = bb.get("enclosure") or {}
-                    view = None
-                    if enc.get("length_in") and enc.get("width_in"):
-                        dimsv = (enc["length_in"], enc["width_in"], enc.get("height_in") or 1)
-                        view = _view(req, ("env",) + tuple(dimsv), lambda d=dimsv: pv.box_shape(*d), "envelope")
-                    items.append(_item(bb.get("name") or name, "estimate", "Assembly from your drawing", r["price_breaks"], n, kind="box_build", spec=spec,
-                                       public_reason="Your drawing is an assembly with custom parts, so an engineer will confirm the build.",
-                                       internal_reasons=[i["item"] + ": " + i["reason"] for i in r.get("incomplete", [])][:8],
-                                       incomplete=bool(r.get("incomplete")), facts=portal_read.box_build(bb), view=view))
-                except Exception as exc:  # noqa: BLE001
-                    items.append(_item(name, "manual", "Assembly drawing", None, n, kind="box_build",
-                                       public_reason="Your drawing is an assembly; we will price it by hand.", internal_reasons=[str(exc)]))
-                continue
-            from . import drawing as drawing_mod
+        for g in sp["groups"]:  # decided now, not from the cache, so naming rules can improve
+            g["bought"] = all(is_bought(x) for x in (g.get("raw_names") or [g["name"]]))
+        made = [g for g in sp["groups"] if not g.get("bought")] or sp["groups"]
+        bought = [g for g in sp["groups"] if g.get("bought") and g not in made]
+        totals: dict[str, int] = {}
+        for g in made + bought:
+            totals[g["name"]] = totals.get(g["name"], 0) + 1
+        seen: dict[str, int] = {}
+        for g in made + bought:  # several bodies of one named part: "guide vanes, piece 2"
+            base = g["name"]
+            if totals[base] > 1:
+                seen[base] = seen.get(base, 0) + 1
+                g["name"] = f"{base}, piece {seen[base]}"
+        for g in made:
+            gkey = f"{key}#g{g['group']}"
+            gview = {"key": pv.cache_key(g["file_id"], "model", 2), "kind": "model", "note": VIEW_NOTES["model"], "src": g["file_id"]}
+            lines.append(PL.part_line(ctx, gkey, g["file_id"], g["name"], group=name, qty_per=int(g.get("qty", 1)), defaults=defaults,
+                                      paired=paired, view=gview, raw_names=g.get("raw_names")))
+        for g in bought:
+            lines.append(PL.bought_line(ctx, f"{key}#g{g['group']}", g["name"], g.get("raw_names") or [g["name"]], int(g.get("qty", 1)), name))
+        afacts = portal_read.step_assembly(geom, made, mat, msrc, bought=bought)
+        afacts = [r for r in afacts if not r["label"][:1].isdigit()]  # the part rows are lines of their own now
+        lines.append(PL.assembly_line(ctx, f"{key}#asm", name, made, bought, geom, view, afacts))
 
-            text, _ = drawing_mod.extract_pdf_text(path)
-            geom = drawing_quote.extract_geometry(read, text)
-            o = {"quantities": q}
-            if req.material in cfg["materials"]:
-                o["material"] = req.material
-            if req.finish and req.finish in cfg["finishes"]:
-                o["finishes"] = [req.finish]
-            try:
-                r = drawing_quote.quote(read, geom, o, over)
-            except (pricing.SpecError, ValueError) as exc:
-                items.append(_item(name, "manual", "Drawing", None, n, kind="drawing", public_reason="We will read this drawing by hand.",
-                                   internal_reasons=[str(exc)]))
-                continue
-            rv = r["review"]
-            route = "estimate" if rv["manual_required"] else "instant"
-            plabel = PROCESS_LABEL.get(r["spec"]["process"], r["spec"]["process"])
-            dmat = r["inputs"]["material"]
-            dsrc = "chosen" if o.get("material") else ("drawing" if (read.get("material") or {}).get("mapped") == dmat else "default")
-            dfin = r["spec"].get("finishes") or []
-            env = geom.get("envelope_in") or {}
+    # ---- drawings with no model
+    for rd in loose_reads:
+        f, read = rd["file"], rd["read"]
+        name = Path(f["name"]).stem
+        key = f["stored"]
+        qty = ctx.qty(key, 1)
+        o_line = ctx.opt(key)
+        if not read or not read.get("text_found", True):
+            lines.append(PL.new_line(key, name, "drawing", "manual", desc="Drawing", qty=qty, public_reason="We will read this drawing by hand."))
+            continue
+        path = file_path(req, f)
+        try:
+            asm = drawing_assembly.analyze(path, read)
+        except Exception:  # noqa: BLE001
+            asm = None
+        if asm:
+            bb = asm["box_build"]
+            spec = {**{k: v for k, v in bb.items() if k not in ("evidence", "assumptions", "fabricated")}, "kind": "box_build", "quantities": [qty]}
+            enc = bb.get("enclosure") or {}
             view = None
-            tg = geom.get("turned") or {}
-            if tg.get("max_diameter") and (tg.get("length") or env.get("length")):
-                dimsv = (tg["max_diameter"], tg.get("length") or env["length"])
-                view = _view(req, ("cyl",) + tuple(dimsv), lambda d=dimsv: pv.cylinder_shape(*d), "envelope")
-            elif env.get("length") and env.get("width"):
-                h = env.get("height") or geom.get("sheet_thickness") or 0.1
-                dimsv = (env["length"], env["width"], h)
+            if enc.get("length_in") and enc.get("width_in"):
+                dimsv = (enc["length_in"], enc["width_in"], enc.get("height_in") or 1)
                 view = _view(req, ("env",) + tuple(dimsv), lambda d=dimsv: pv.box_shape(*d), "envelope")
-            facts = portal_read.drawing_part(read, geom, dmat, dsrc, dfin, "chosen" if o.get("finishes") else ("drawing" if dfin else ""), plabel,
-                                             [("The size we read looks too large for one part." if "cost" in x else x) for x in rv.get("reasons") or []])
-            items.append(_item(name, route, f"{plabel}, {dmat} (from your drawing)",
-                               r["estimate"]["price_breaks"], n, kind="part", spec=r["spec"],
-                               public_reason="Some sizes on your drawing need to be confirmed by an engineer." if route == "estimate" else "",
-                               internal_reasons=rv["reasons"] + r["estimate"].get("warnings", [])[:4], facts=facts, view=view))
+            try:
+                r = box_build.price(spec, over)
+                lines.append(_item_line(ctx, key, _item(bb.get("name") or name, "estimate", "Assembly from your drawing", r["price_breaks"], qty,
+                                                        kind="box_build", spec=spec, view=view, facts=portal_read.box_build(bb),
+                                                        public_reason="Your drawing is an assembly with custom parts, so an engineer will confirm the build.",
+                                                        internal_reasons=[i["item"] + ": " + i["reason"] for i in r.get("incomplete", [])][:8],
+                                                        incomplete=bool(r.get("incomplete"))), qty, "box_build"))
+            except Exception as exc:  # noqa: BLE001
+                lines.append(PL.new_line(key, name, "box_build", "manual", desc="Assembly drawing", qty=qty, view=view,
+                                         public_reason="Your drawing is an assembly; we will price it by hand.", internal_reasons=[str(exc)]))
+            continue
+        from . import drawing as drawing_mod
+
+        text, _ = drawing_mod.extract_pdf_text(path)
+        geom = drawing_quote.extract_geometry(read, text)
+        o = {"quantities": [qty]}
+        lm = o_line.get("material") or req.material
+        if lm in cfg["materials"]:
+            o["material"] = lm
+        lf = o_line.get("finish") if o_line.get("finish") not in (None, "") else req.finish
+        if lf and lf in cfg["finishes"]:
+            o["finishes"] = [lf]
+        try:
+            r = drawing_quote.quote(read, geom, o, over)
+        except (pricing.SpecError, ValueError) as exc:
+            lines.append(PL.new_line(key, name, "drawing", "manual", desc="Drawing", qty=qty, public_reason="We will read this drawing by hand.",
+                                     internal_reasons=[str(exc)]))
+            continue
+        rv = r["review"]
+        route = "estimate" if rv["manual_required"] else "instant"
+        plabel = PROCESS_LABEL.get(r["spec"]["process"], r["spec"]["process"])
+        dmat = r["inputs"]["material"]
+        dsrc = "chosen" if o.get("material") else ("drawing" if (read.get("material") or {}).get("mapped") == dmat else "default")
+        dfin = r["spec"].get("finishes") or []
+        env = geom.get("envelope_in") or {}
+        view = None
+        tg = geom.get("turned") or {}
+        if tg.get("max_diameter") and (tg.get("length") or env.get("length")):
+            dimsv = (tg["max_diameter"], tg.get("length") or env["length"])
+            view = _view(req, ("cyl",) + tuple(dimsv), lambda d=dimsv: pv.cylinder_shape(*d), "envelope")
+        elif env.get("length") and env.get("width"):
+            h = env.get("height") or geom.get("sheet_thickness") or 0.1
+            dimsv = (env["length"], env["width"], h)
+            view = _view(req, ("env",) + tuple(dimsv), lambda d=dimsv: pv.box_shape(*d), "envelope")
+        facts = portal_read.drawing_part(read, geom, dmat, dsrc, dfin, "chosen" if o.get("finishes") else ("drawing" if dfin else ""), plabel,
+                                         [("The size we read looks too large for one part." if "cost" in x else x) for x in rv.get("reasons") or []])
+        ln = _item_line(ctx, key, _item(name, route, f"{plabel}, {dmat} (from your drawing)", r["estimate"]["price_breaks"], qty, kind="part",
+                                        spec=r["spec"], facts=facts, view=view,
+                                        public_reason="Some sizes on your drawing need to be confirmed by an engineer." if route == "estimate" else "",
+                                        internal_reasons=rv["reasons"] + r["estimate"].get("warnings", [])[:4]), qty, "drawing")
+        ln.update(material=dmat, process=r["spec"]["process"], process_label=plabel,
+                  editable={"qty": True, "material": True, "finish": True, "process": False})
+        lines.append(ln)
 
     # ---- DXF flat parts
     if dxfs:
-        if not req.thickness:
-            items.append(_item(", ".join(Path(f["name"]).stem for f in dxfs)[:80], "needs_input", "Flat parts (DXF)", None, n, kind="flat",
-                               public_reason="Choose the sheet thickness to price your DXF parts."))
-        else:
-            try:
-                parsed = flat.parse_files([(f["name"], file_path(req, f).read_bytes()) for f in dxfs], keep_shapes=True)
-                shapes = {p["id"]: p.pop("shape", None) for p in parsed["parts"]}
-                mats = flat.materials(cfg)
-                mat = req.material if req.material in mats else (drawing_mat if drawing_mat in mats else "A36 / 1018 steel")
-                cls = flat.material_class(mat)
-                process = "router" if cls in ("wood", "plastic", "composite") and "acrylic" not in mat.lower() else ("waterjet" if req.thickness > 0.75 else "laser_cut")
-                options = {"material": mat, "thickness": float(req.thickness), "process": process}
-                if req.finish and req.finish in cfg["finishes"]:
-                    options["finishes"] = [req.finish]
-                r = flat.estimate(parsed["parts"], options, q, over)
-                spec = {"kind": "flat_dxf", "name": "Flat parts", "quantities": q, "parts": [flat.clean_part(p) for p in parsed["parts"]],
-                        "options": options, "material": mat, "source": {"files": []}}
-                big = max(parsed["parts"], key=lambda p: p.get("outer_area") or 0, default=None)
-                view = None
-                if big and shapes.get(big["id"]):
-                    sh, t = shapes[big["id"]], float(req.thickness)
-                    view = _view(req, ("dxf", [f["stored"] for f in dxfs], big["id"], t),
-                                 lambda sh=sh, t=t: pv.flat_shape(sh["outer"], sh["holes"], t), "flat")
-                    if view and len(parsed["parts"]) > 1:
-                        view["note"] = f"{big.get('name')}, the largest of your {len(parsed['parts'])} parts. " + view["note"]
-                msrc = "chosen" if req.material == mat else ("drawing" if drawing_mat == mat else "default")
-                plabel = PROCESS_LABEL.get(process, process)
-                items.append(_item(f"{len(parsed['parts'])} flat part(s)", "instant", f"{plabel}, {mat}, {req.thickness:g} in",
-                                   r["price_breaks"], n, kind="flat", spec=spec, internal_reasons=r.get("warnings", [])[:6],
-                                   facts=portal_read.flat_parts(parsed["parts"], float(req.thickness), mat, msrc, plabel), view=view))
-            except Exception as exc:  # noqa: BLE001
-                items.append(_item("Flat parts (DXF)", "manual", "Flat parts", None, n, kind="flat",
-                                   public_reason="We could not read these DXF files automatically.", internal_reasons=[str(exc)]))
+        lines += PL.flat_lines(ctx, dxfs, {}, drawing_mat)
 
     # ---- circuit boards
     if pcbs:
+        key = "pcb"
+        qty = ctx.qty(key, 1)
         try:
             got = pcb_files.parse_files([(f["name"], file_path(req, f).read_bytes()) for f in pcbs])
             board = box_build.blank_pcb(name="Circuit board", **got["board"])
             board["bom_lines"] = got["bom_lines"]
-            spec = {"kind": "box_build", "name": "Circuit board assembly", "quantities": q, "enclosure": {"source": "none"}, "pcbs": [board]}
+            spec = {"kind": "box_build", "name": "Circuit board assembly", "quantities": [qty], "enclosure": {"source": "none"}, "pcbs": [board]}
             r = box_build.price(spec, over)
             view = None
             if board.get("width_in") and board.get("height_in"):
                 dimsv = (board["width_in"], board["height_in"], board.get("thickness_in") or 0.062)
                 view = _view(req, ("pcb",) + tuple(dimsv), lambda d=dimsv: pv.box_shape(*d), "envelope")
-            items.append(_item("Circuit board assembly", "estimate", f"{board['layers']} layer board" + (f", {board['width_in']:g} x {board['height_in']:g} in" if board.get("width_in") else ""),
-                               r["price_breaks"], n, kind="box_build", spec=spec, public_reason="Circuit boards are always reviewed by an engineer before we confirm.",
-                               internal_reasons=got["warnings"] + r.get("warnings", [])[:4],
-                               facts=portal_read.pcb(got["board"], got.get("found") or {}, len(got.get("bom_lines") or [])), view=view))
+            lines.append(_item_line(ctx, key, _item("Circuit board assembly", "estimate", f"{board['layers']} layer board" + (
+                f", {board['width_in']:g} x {board['height_in']:g} in" if board.get("width_in") else ""), r["price_breaks"], qty, kind="box_build",
+                spec=spec, public_reason="Circuit boards are always reviewed by an engineer before we confirm.",
+                internal_reasons=got["warnings"] + r.get("warnings", [])[:4],
+                facts=portal_read.pcb(got["board"], got.get("found") or {}, len(got.get("bom_lines") or [])), view=view), qty, "pcb"))
         except Exception as exc:  # noqa: BLE001
-            items.append(_item("Circuit board files", "manual", "Circuit board", None, n, kind="pcb",
-                               public_reason="We will review your board files by hand.", internal_reasons=[str(exc)]))
+            lines.append(PL.new_line(key, "Circuit board files", "pcb", "manual", desc="Circuit board", qty=qty,
+                                     public_reason="We will review your board files by hand.", internal_reasons=[str(exc)]))
 
-    if refs and not items:
-        items.append(_item("Reference files", "manual", "Images or documents", None, n, kind="ref", public_reason="We will review the files you sent."))
-    if not req.files and not items:
+    if refs and not lines:
+        lines.append(PL.new_line("refs", "Reference files", "ref", "manual", desc="Images or documents", qty=n,
+                                 public_reason="We will review the files you sent."))
+    if not req.files and not lines:
         _finish(req, s, [], manual_reason="Tell us about the project in the notes and send your contact details; we will get back to you.")
         return
-    _finish(req, s, items)
+    _finish(req, s, lines)
+
+
+def _item_line(ctx, key: str, it: dict, qty: int, process: str) -> dict:
+    """An older-style priced item as a line (drawings, boards): calibrated, with the customer's final price applied."""
+    from . import portal_lines as PL
+
+    raw = it.get("unit_price")
+    price, f, why = (PL._price_calibrated(ctx.fs, process, raw) if raw is not None else (None, 1.0, ""))
+    ln = PL.new_line(key, it["name"], it["kind"], it["route"], qty=qty, desc=it["desc"], raw_unit_price=raw, unit_price=price,
+                     unit_cost=it.get("unit_cost"), margin_pct=round((price - it["unit_cost"]) / price * 100, 1) if price and it.get("unit_cost") else None,
+                     lead_days=it.get("lead_days"), calibration={"factor": f, "why": why, "process": process} if f != 1 else None,
+                     facts=it.get("facts") or [], view=it.get("view"), public_reason=it.get("public_reason") or "",
+                     internal_reasons=it.get("internal_reasons") or [], spec=it.get("spec"), incomplete=bool(it.get("incomplete")))
+    return PL.apply_final(ctx, ln)
 
 
 def _round_est(v: float) -> float:
@@ -656,49 +678,63 @@ def _round_est(v: float) -> float:
     return round(v, 2)
 
 
-def _finish(req: PortalRequest, s: PortalSettings, items: list[dict], manual_reason: str = "") -> None:
+def _finish(req: PortalRequest, s: PortalSettings, lines: list[dict], manual_reason: str = "") -> None:
+    """Totals and the customer's view from the priced lines. A line's estimate range uses the portal settings;
+    lines priced by an engineer (manual) or waiting (processing, needs_input) carry no price."""
     n = req.quantity
-    routes = {i["route"] for i in items}
-    if "processing" in routes and not manual_reason:
-        kind = "processing"
-    elif manual_reason or not items or "manual" in routes:
+    routes = {ln["route"] for ln in lines}
+    priced = [ln for ln in lines if ln.get("unit_price") is not None and ln["route"] in ("instant", "estimate")]
+    if manual_reason or not lines:
         kind = "manual"
+    elif "processing" in routes:
+        kind = "processing"
     elif "needs_input" in routes:
         kind = "needs_input"
-    elif "estimate" in routes:
+    elif not priced:
+        kind = "manual"
+    elif routes - {"instant"}:
         kind = "estimate"
     else:
         kind = "instant"
-    priced = [i for i in items if i["unit_price"] is not None]
-    unit = sum(i["unit_price"] for i in priced)
-    lead = max([i["lead_days"] or 0 for i in priced] or [0])
-    pub_items = []
-    low = high = 0.0
-    for i in items:
-        row = {"name": i["name"], "desc": i["desc"], "route": i["route"], "note": i["public_reason"], "facts": i.get("facts") or [],
-               "view": i.get("view")}
-        if i["unit_price"] is not None:
-            if i["route"] == "estimate":
-                hi_pct = s.incomplete_high_pct if i["incomplete"] else s.estimate_high_pct
-                lo, hi = i["unit_price"] * (1 - s.estimate_low_pct / 100), i["unit_price"] * (1 + hi_pct / 100)
-                row.update(unit_low=_round_est(lo), unit_high=_round_est(hi))
-                low += lo
-                high += hi
-            else:
-                row.update(unit_price=i["unit_price"])
-                low += i["unit_price"]
-                high += i["unit_price"]
-        pub_items.append(row)
-    out = {"kind": kind, "quantity": n, "items": pub_items, "review_days": s.review_days, "lead_days": None}
+    low = high = exact = 0.0
+    pub = []
+    for ln in lines:
+        row = {k: ln.get(k) for k in ("key", "name", "group", "kind", "route", "qty", "qty_per", "material", "finish", "process", "process_label",
+                                       "desc", "facts", "view", "lead_days")}
+        row["note"] = ln.get("public_reason") or ""
+        row["editable"] = ln.get("editable") or {}
+        row["options"] = {"processes": [{k: x.get(k) for k in ("process", "material", "label", "unit_price", "note")}
+                                        for x in ((ln.get("options") or {}).get("processes") or [])]}
+        row["confirmed"] = ln.get("final_unit_price") is not None
+        u = ln.get("unit_price")
+        q = int(ln.get("qty") or 1)
+        if u is not None and ln["route"] == "estimate":
+            hi_pct = s.incomplete_high_pct if ln.get("incomplete") else s.estimate_high_pct
+            lo_u, hi_u = u * (1 - s.estimate_low_pct / 100), u * (1 + hi_pct / 100)
+            row.update(unit_low=_round_est(lo_u), unit_high=_round_est(hi_u), total_low=_round_est(lo_u * q), total_high=_round_est(hi_u * q))
+            low += lo_u * q
+            high += hi_u * q
+        elif u is not None and ln["route"] == "instant":
+            row.update(unit_price=round(u, 2), total=round(u * q, 2))
+            low += u * q
+            high += u * q
+            exact += u * q
+        pub.append(row)
+    lead = max([ln.get("lead_days") or 0 for ln in priced] or [0])
+    unpriced = [ln for ln in lines if ln["route"] == "manual"]
+    out = {"kind": kind, "quantity": n, "items": pub, "lines": len(pub), "review_days": s.review_days, "lead_days": None,
+           "unpriced_lines": len(unpriced)}
+    days = f"{s.review_days} business day{'s' if s.review_days != 1 else ''}"
     if kind == "instant":
-        out.update(unit_price=round(unit, 2), total=round(unit * n, 2), lead_days=int(lead),
+        out.update(total=round(exact, 2), unit_price=round(exact / n, 2), lead_days=int(lead),
                    message="This is an instant quote. Submit it and we will confirm the order with you before we start.")
     elif kind == "estimate":
-        out.update(unit_low=_round_est(low), unit_high=_round_est(high), total_low=_round_est(low * n), total_high=_round_est(high * n),
+        out.update(total_low=_round_est(low), total_high=_round_est(high), unit_low=_round_est(low / n), unit_high=_round_est(high / n),
                    lead_days=int(lead + s.review_days),
-                   message=f"This is a complex build, so this is an estimate. An engineer will review your files and reach out within "
-                           f"{s.review_days} business day{'s' if s.review_days != 1 else ''} to confirm your project needs and the final cost "
-                           "before we complete the order.")
+                   message=("This is a complex build, so this is an estimate. " if not unpriced else
+                            f"{len(unpriced)} line{'s' if len(unpriced) != 1 else ''} will be priced by an engineer, so this is an estimate for the rest. ")
+                           + f"An engineer will review your files and reach out within {days} to confirm your project needs and the final cost "
+                             "before we complete the order.")
     elif kind == "needs_input":
         out.update(message="Almost there: answer the question below to see your price.")
     elif kind == "processing":
@@ -706,11 +742,11 @@ def _finish(req: PortalRequest, s: PortalSettings, items: list[dict], manual_rea
                            "usually within a few minutes. You can save the link and come back.")
     else:
         out.update(message=manual_reason or "We need to look at this one by hand. Submit it with your contact details and an engineer will "
-                                            f"reach out within {s.review_days} business day{'s' if s.review_days != 1 else ''} with a price.")
+                                            f"reach out within {days} with a price.")
     req.kind = kind
     req.public_result = out
-    req.internal = {"priced_at": datetime.utcnow().isoformat(timespec="seconds"), "unit_total": round(unit, 2),
-                    "items": [{k: v for k, v in i.items()} for i in items]}
+    req.internal = {"priced_at": datetime.utcnow().isoformat(timespec="seconds"), "total": round(low, 2),
+                    "items": [dict(ln) for ln in lines]}
 
 
 # ================================================================ big models in the background
@@ -877,6 +913,56 @@ def _clean_opts(req: PortalRequest, data: dict, max_qty: int) -> None:
         req.thickness = t
     if "notes" in data and data["notes"] is not None:
         req.customer_notes = str(data["notes"])[:MAX_NOTES]
+    if data.get("lines"):
+        req.line_opts = merge_line_opts(req.line_opts or {}, data["lines"], max_qty)
+
+
+LINE_PROCESSES = {"cnc_mill", "cnc_lathe", "sheet_metal", "3d_print"}
+
+
+def merge_line_opts(current: dict, changes: dict, max_qty: int, internal: bool = False) -> dict:
+    """Validate and merge per-line choices {line key: {qty, material, finish, process, process_material}}.
+    internal adds final_unit_price (your price in review). A value of null removes that choice."""
+    if not isinstance(changes, dict) or len(changes) > 300:
+        raise PortalError("Line options are not valid.")
+    out = {k: dict(v) for k, v in (current or {}).items()}
+    for key, ch in changes.items():
+        key = str(key)[:120]
+        if not isinstance(ch, dict):
+            continue
+        cur = out.get(key, {})
+        for k, v in ch.items():
+            if v is None or v == "":
+                cur.pop(k, None)
+                continue
+            if k == "qty":
+                try:
+                    v = int(float(v))
+                except (TypeError, ValueError):
+                    raise PortalError("Quantity must be a whole number.")
+                if not 1 <= v <= max_qty:
+                    raise PortalError(f"Quantity must be between 1 and {max_qty:,}.")
+            elif k in ("material", "finish", "process_material"):
+                v = str(v)[:80]
+            elif k == "process":
+                if v not in LINE_PROCESSES:
+                    raise PortalError("Unknown process.")
+            elif k == "thickness":
+                v = float(v)
+                if not 0.005 <= v <= 6:
+                    raise PortalError("Thickness must be between 0.005 and 6 inches.")
+            elif k == "final_unit_price" and internal:
+                v = round(float(v), 2)
+                if v <= 0:
+                    raise PortalError("The price must be above zero.")
+            else:
+                continue
+            cur[k] = v
+        if cur:
+            out[key] = cur
+        else:
+            out.pop(key, None)
+    return out
 
 
 def create(db: Session, uploads: list[tuple[str, bytes]], data: dict, ip: str, preview: bool = False) -> PortalRequest:
@@ -990,7 +1076,7 @@ def internal_dict(req: PortalRequest, full: bool = False) -> dict:
          "public_result": req.public_result or {}, "files": req.files or []}
     if full:
         d.update(material=req.material, finish=req.finish, thickness=req.thickness, customer_notes=req.customer_notes,
-                 internal=req.internal or {}, internal_notes=req.internal_notes, token=req.token)
+                 internal=req.internal or {}, internal_notes=req.internal_notes, token=req.token, line_opts=req.line_opts or {})
     return d
 
 
@@ -1003,7 +1089,7 @@ def to_quotes(db: Session, req: PortalRequest) -> list[int]:
             continue
         spec = {**spec, "name": spec.get("name") or it["name"]}
         try:
-            q = quotes.save_quote(db, spec, status="draft", quoted_quantity=req.quantity,
+            q = quotes.save_quote(db, spec, status="draft", quoted_quantity=int(it.get("qty") or req.quantity),
                                   notes=f"From customer request {req.ref} ({req.contact_name or 'not submitted'}{', ' + req.company if req.company else ''}).",
                                   created_by="portal")
             ids.append(q["id"])

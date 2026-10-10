@@ -28,6 +28,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "rates": {
         "programming": 85.0,
         "cnc_mill": 95.0,
+        "cnc_5axis": 150.0,  # simultaneous 5-axis milling: blades, impellers, sculpted surfaces
         "cnc_lathe": 85.0,
         "manual_machining": 70.0,
         "laser_cut": 120.0,
@@ -44,6 +45,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     # Setup hours per setup / per lot
     "setup_hours": {
         "cnc_mill": 1.0,
+        "cnc_5axis": 1.5,
         "cnc_lathe": 0.75,
         "manual_machining": 0.5,
         "laser_cut": 0.25,
@@ -52,7 +54,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "weld_fixture": 1.5,
     },
     # Programming hours per setup (CAM), scaled by tolerance
-    "programming_hours_per_setup": {"cnc_mill": 1.0, "cnc_lathe": 0.5, "laser_cut": 0.25, "waterjet": 0.25},
+    "programming_hours_per_setup": {"cnc_mill": 1.0, "cnc_5axis": 3.0, "cnc_lathe": 0.5, "laser_cut": 0.25, "waterjet": 0.25},
     "tolerance_multiplier": {"standard": 1.0, "tight": 1.35, "precision": 1.8},
     # Materials: density lb/in^3, price per lb, machinability (1 = 6061 Al; higher = slower), cut factor for laser/waterjet
     "materials": {
@@ -67,6 +69,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "copper 110": {"density": 0.323, "price_per_lb": 9.00, "machinability": 1.6, "cut_factor": 2.0},
         "delrin (acetal)": {"density": 0.0513, "price_per_lb": 7.00, "machinability": 0.7, "cut_factor": 0.6},
         "G10 / FR4": {"density": 0.065, "price_per_lb": 12.00, "machinability": 1.5, "cut_factor": 0.9},
+        "17-4 PH stainless": {"density": 0.282, "price_per_lb": 5.50, "machinability": 3.2, "cut_factor": 1.3},
+        "titanium Ti-6Al-4V": {"density": 0.160, "price_per_lb": 25.00, "machinability": 4.0, "cut_factor": 1.4},
+        "Inconel 718": {"density": 0.296, "price_per_lb": 30.00, "machinability": 6.0, "cut_factor": 1.6},
     },
     "scrap_factor": 0.15,  # extra stock for saw kerf, facing, drops
     "sheet_nest_efficiency": 0.80,  # fraction of a sheet used by nested blanks
@@ -75,7 +80,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "waterjet_ipm_at_0125": 25.0,
     "pierce_minutes": 0.05,
     # Cycle-time model for machining when no cycle time is given (minutes, before machinability and tolerance)
-    "mill_minutes": {"base": 3.0, "per_hole": 0.5, "per_tapped_hole": 0.8, "per_pocket": 4.0, "per_inch_profile": 0.15, "per_cubic_inch_removed": 0.6, "per_face": 0.1},
+    "mill_minutes": {"base": 3.0, "per_hole": 0.5, "per_tapped_hole": 0.8, "per_pocket": 4.0, "per_inch_profile": 0.15, "per_cubic_inch_removed": 0.6, "per_face": 0.1,
+                    "per_sq_in_freeform": 2.5},  # 3D surfacing passes over sculpted surfaces
     "lathe_minutes": {"base": 2.0, "per_diameter": 1.0, "per_thread": 1.5, "per_groove": 0.7, "per_cross_hole": 1.0},
     "brake_minutes_per_bend": 0.4,
     "handling_minutes": 0.5,  # load/unload per part per operation
@@ -104,6 +110,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
                     "setup_minutes": 20.0, "post_minutes": 8.0, "support_factor": 0.0, "max_in": [6.3, 6.3, 12.6], "packs_build": True},
             "mjf": {"label": "MJF (nylon powder)", "machine_rate": 45.0, "cm3_per_hour": 200.0, "minutes_per_inch_height": 0.0,
                     "setup_minutes": 20.0, "post_minutes": 6.0, "support_factor": 0.0, "max_in": [14.9, 11.2, 14.9], "packs_build": True},
+            # Metal powder bed (DMLS / SLM), usually bought from a service bureau: price as their rate plus your handling
+            "dmls": {"label": "Metal 3D print (DMLS)", "machine_rate": 90.0, "cm3_per_hour": 10.0, "minutes_per_inch_height": 30.0,
+                     "setup_minutes": 60.0, "post_minutes": 45.0, "support_factor": 0.25, "max_in": [9.8, 9.8, 12.8], "packs_build": True},
         },
         # price per cm3 of printed material (incl. waste), density g/cm3, which technology prints it
         "materials": {
@@ -121,6 +130,11 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "Nylon 11 (SLS)": {"tech": "sls", "price_per_cm3": 0.15, "density": 1.05},
             "Nylon 12 (MJF)": {"tech": "mjf", "price_per_cm3": 0.10, "density": 1.01},
             "Nylon 12 glass filled (MJF)": {"tech": "mjf", "price_per_cm3": 0.13, "density": 1.30},
+            "316L stainless (DMLS)": {"tech": "dmls", "price_per_cm3": 1.20, "density": 7.99},
+            "17-4 PH stainless (DMLS)": {"tech": "dmls", "price_per_cm3": 1.30, "density": 7.80},
+            "AlSi10Mg aluminum (DMLS)": {"tech": "dmls", "price_per_cm3": 0.90, "density": 2.67},
+            "Inconel 718 (DMLS)": {"tech": "dmls", "price_per_cm3": 2.50, "density": 8.19},
+            "Ti-6Al-4V titanium (DMLS)": {"tech": "dmls", "price_per_cm3": 3.00, "density": 4.43},
         },
         # in-house post-processing, minutes per part, plus purchased consumables per part
         "finishes": {
@@ -188,7 +202,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
 }
 
 OPERATION_TYPES = {
-    "cnc_mill": "CNC milling. Params: setups, cycle_minutes OR features {holes, tapped_holes, pockets, profile_in, volume_removed_in3, faces}, tolerance",
+    "cnc_mill": "CNC milling. Params: setups, five_axis (bool), cycle_minutes OR features {holes, tapped_holes, pockets, profile_in, volume_removed_in3, "
+                "faces, freeform_area_in2}, tolerance",
     "cnc_lathe": "CNC turning. Params: setups, cycle_minutes OR features {diameters, threads, grooves, cross_holes}, tolerance",
     "manual_machining": "Manual mill/lathe/drill press. Params: minutes_per_part, setups",
     "laser_cut": "Laser cutting of sheet or plate. Params: cut_length_in, pierces",
@@ -199,7 +214,7 @@ OPERATION_TYPES = {
     "assembly": "Assembly or wiring labor. Params: minutes_per_part",
     "deburr": "Deburr and edge break. Params: minutes_per_part",
     "fabrication": "Other fabrication labor (sawing, grinding, fitting). Params: minutes_per_part",
-    "additive": "3D printing. Params: technology (fdm|sla|sls|mjf), part_volume_in3, bbox_in [l, w, h], infill (FDM, 0.1 to 1), "
+    "additive": "3D printing. Params: technology (fdm|sla|sls|mjf|dmls), part_volume_in3, bbox_in [l, w, h], infill (FDM, 0.1 to 1), "
                 "support (bool). Material must be a 3D print material from config additive.materials. No stock needed.",
 }
 
@@ -345,10 +360,11 @@ def estimate(spec: dict, config: dict | None = None) -> dict:
 
         if t in ("cnc_mill", "cnc_lathe"):
             setups = max(1, int(_num(op, "setups", 1)))
-            prog = cfg["programming_hours_per_setup"][t] * setups * op_tol
-            per_lot.append(_line("programming", f"{t} CAM programming, {setups} setup(s)", prog * rates["programming"], basis="per_lot", hours=prog, rate=rates["programming"]))
-            su = cfg["setup_hours"][t] * setups
-            per_lot.append(_line("setup", f"{t} setup, {setups} setup(s)", su * rates[t], basis="per_lot", hours=su, rate=rates[t]))
+            mk = "cnc_5axis" if t == "cnc_mill" and op.get("five_axis") and "cnc_5axis" in rates else t  # machine and rate used
+            prog = cfg["programming_hours_per_setup"].get(mk, cfg["programming_hours_per_setup"][t]) * setups * op_tol
+            per_lot.append(_line("programming", f"{mk} CAM programming, {setups} setup(s)", prog * rates["programming"], basis="per_lot", hours=prog, rate=rates["programming"]))
+            su = cfg["setup_hours"].get(mk, cfg["setup_hours"][t]) * setups
+            per_lot.append(_line("setup", f"{mk} setup, {setups} setup(s)", su * rates[mk], basis="per_lot", hours=su, rate=rates[mk]))
             if op.get("cycle_minutes") is not None:
                 minutes = _num(op, "cycle_minutes")
                 note = "cycle time given"
@@ -358,7 +374,8 @@ def estimate(spec: dict, config: dict | None = None) -> dict:
                 if t == "cnc_mill":
                     raw = (m["base"] + _num(f, "holes") * m["per_hole"] + _num(f, "tapped_holes") * m["per_tapped_hole"]
                            + _num(f, "pockets") * m["per_pocket"] + _num(f, "profile_in") * m["per_inch_profile"]
-                           + _num(f, "volume_removed_in3") * m["per_cubic_inch_removed"] + _num(f, "faces") * m.get("per_face", 0))
+                           + _num(f, "volume_removed_in3") * m["per_cubic_inch_removed"] + _num(f, "faces") * m.get("per_face", 0)
+                           + _num(f, "freeform_area_in2") * m.get("per_sq_in_freeform", 0))
                 else:
                     raw = (m["base"] + _num(f, "diameters") * m["per_diameter"] + _num(f, "threads") * m["per_thread"]
                            + _num(f, "grooves") * m["per_groove"] + _num(f, "cross_holes") * m["per_cross_hole"])
@@ -367,7 +384,7 @@ def estimate(spec: dict, config: dict | None = None) -> dict:
                 assumptions.append(f"{t} cycle time estimated from features ({minutes:.1f} min/part); replace with your CAM time when known.")
             minutes += cfg["handling_minutes"] * setups
             h = minutes / 60
-            per_part.append(_line("machining", f"{t} run time", h * rates[t], hours=h, rate=rates[t], note=note))
+            per_part.append(_line("machining", f"{mk} run time", h * rates[mk], hours=h, rate=rates[mk], note=note))
 
         elif t == "manual_machining":
             setups = max(1, int(_num(op, "setups", 1)))

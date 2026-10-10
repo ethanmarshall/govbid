@@ -48,8 +48,9 @@ export function loadSaved() {
 function writeSaved(list) { try { localStorage.setItem(SAVED_KEY, JSON.stringify(list.slice(0, 30))) } catch { /* private mode */ } }
 function priceText(res) {
   if (!res) return ''
-  if (res.kind === 'instant') return `${money(res.unit_price)} each`
-  if (res.kind === 'estimate') return `${range(res.unit_low, res.unit_high)} each (estimate)`
+  const many = (res.items || []).length > 1
+  if (res.kind === 'instant') return many ? `${money(res.total)} total` : `${money(res.unit_price)} each`
+  if (res.kind === 'estimate') return many ? `${range(res.total_low, res.total_high)} total (estimate)` : `${range(res.unit_low, res.unit_high)} each (estimate)`
   if (res.kind === 'needs_input') return 'Needs one more detail'
   if (res.kind === 'processing') return 'Reading your model'
   return 'Priced by an engineer'
@@ -337,6 +338,27 @@ function QuoteForm({ info }) {
     return () => clearTimeout(timer.current)
   }, [qty, material, finish, thickness, busy])
 
+  // one part's own choices: quantity, material, finish, process. Sent together after a short pause.
+  const [linePending, setLinePending] = useState(false)
+  const lineQueue = useRef({})
+  const lineTimer = useRef()
+  const changeLine = (key, patch) => {
+    const mine = current.current
+    if (!mine) return
+    lineQueue.current[key] = { ...(lineQueue.current[key] || {}), ...patch }
+    setLinePending(true)
+    clearTimeout(lineTimer.current)
+    lineTimer.current = setTimeout(async () => {
+      const lines = lineQueue.current
+      lineQueue.current = {}
+      try {
+        const r = await call('POST', `/api/public/quote/${mine.ref}/options`, { token: mine.token, lines })
+        if (current.current?.ref === mine.ref) { remember(r, mine.token); setReq({ ...r, token: mine.token }); setErr('') }
+      } catch (e) { setErr(e.message) }
+      setLinePending(false)
+    }, 600)
+  }
+
   // a big model is read in the background: check back until the price is ready
   useEffect(() => {
     if (req?.result?.kind !== 'processing' || stale) return
@@ -425,7 +447,7 @@ function QuoteForm({ info }) {
         {req && !stale && res?.kind !== 'needs_input' && res?.kind !== 'processing' && <SubmitForm req={req} setReq={setReq} info={info} />}
       </aside>
     </div>
-    {req && !stale && <ItemReads req={req} token={req.token} />}
+    {req && !stale && <PartsTable req={req} token={req.token} info={info} onLine={changeLine} pending={linePending} />}
     </>
   )
 }
@@ -434,14 +456,17 @@ function TitleBlock({ req, info, qty, material, busy, progress }) {
   const res = req?.result
   const kind = res?.kind
   const q = res?.quantity || Math.max(1, parseInt(qty, 10) || 1)
+  const items = res?.items || []
+  const nLines = items.length
+  const single = nLines === 1 ? items[0] : null
   return (
     <div className={`pq-tb ${kind ? `k-${kind}` : ''}`}>
       <div className="pq-tb-row">
         <div className="pq-cell"><span>Quote</span><b>{req?.ref || 'Not priced yet'}</b></div>
-        <div className="pq-cell"><span>Quantity</span><b>{q.toLocaleString()}</b></div>
+        <div className="pq-cell"><span>{nLines > 1 ? 'Parts' : 'Quantity'}</span><b>{nLines > 1 ? nLines : q.toLocaleString()}</b></div>
       </div>
       <div className="pq-tb-row">
-        <div className="pq-cell wide"><span>Material</span><b>{req?.material || material || 'From your files'}</b></div>
+        <div className="pq-cell wide"><span>Material</span><b>{nLines > 1 ? 'Set for each part below' : (single?.material || req?.material || material || 'From your files')}</b></div>
       </div>
       <div className="pq-tb-price">
         {busy && !res && (
@@ -454,15 +479,33 @@ function TitleBlock({ req, info, qty, material, busy, progress }) {
         {kind === 'instant' && (
           <>
             <span className="pq-kind">Instant quote</span>
-            <div className="pq-big">{money(res.unit_price)}<small> each</small></div>
-            <div className="pq-total">{money(res.total)} for {q.toLocaleString()}</div>
+            {single ? (
+              <>
+                <div className="pq-big">{money(single.unit_price)}<small> each</small></div>
+                <div className="pq-total">{money(res.total)} for {single.qty.toLocaleString()}</div>
+              </>
+            ) : (
+              <>
+                <div className="pq-big">{money(res.total)}<small> total</small></div>
+                <div className="pq-total">{nLines} parts{q > 1 ? `, ${money(res.unit_price)} per set of ${q.toLocaleString()}` : ''}</div>
+              </>
+            )}
           </>
         )}
         {kind === 'estimate' && (
           <>
             <span className="pq-kind">Estimate, confirmed after review</span>
-            <div className="pq-big pq-range">{range(res.unit_low, res.unit_high)}<small> each</small></div>
-            <div className="pq-total">{range(res.total_low, res.total_high)} for {q.toLocaleString()}</div>
+            {single && single.unit_low != null ? (
+              <>
+                <div className="pq-big pq-range">{range(single.unit_low, single.unit_high)}<small> each</small></div>
+                <div className="pq-total">{range(res.total_low, res.total_high)} for {single.qty.toLocaleString()}</div>
+              </>
+            ) : (
+              <>
+                <div className="pq-big pq-range">{range(res.total_low, res.total_high)}<small> total</small></div>
+                <div className="pq-total">{nLines} parts{q > 1 ? `, ${range(res.unit_low, res.unit_high)} per set` : ''}{res.unpriced_lines ? `, ${res.unpriced_lines} priced by an engineer` : ''}</div>
+              </>
+            )}
           </>
         )}
         {(kind === 'manual' || kind === 'needs_input') && <span className="pq-kind">{kind === 'manual' ? 'Priced by an engineer' : 'One more detail'}</span>}
@@ -475,18 +518,6 @@ function TitleBlock({ req, info, qty, material, busy, progress }) {
         {res?.message && <p className="pq-msg">{res.message}</p>}
       </div>
       {res?.lead_days ? <div className="pq-tb-row"><div className="pq-cell wide"><span>Ships in about</span><b>{res.lead_days} days after the order is confirmed</b></div></div> : null}
-      {res?.items?.length > 0 && (
-        <ul className="pq-items">
-          {res.items.map((it, i) => (
-            <li key={i}>
-              <div className="pq-item-top"><b>{it.name}</b>
-                <span>{it.unit_price != null ? money(it.unit_price) : it.unit_low != null ? range(it.unit_low, it.unit_high) : 'by review'}</span></div>
-              <div className="pq-muted">{it.desc}</div>
-              {it.note && <div className="pq-note">{it.note}</div>}
-            </li>
-          ))}
-        </ul>
-      )}
     </div>
   )
 }
@@ -542,7 +573,6 @@ function SubmitForm({ req, setReq, info }) {
 }
 
 // What we read from each file, plus a three-view drawing, so the customer can catch a misread before ordering.
-const FLAG = { assumed: 'Assumed. Check this', check: 'Please check' }
 export function ItemReads({ req, token, viewUrl }) {
   const items = (req?.result?.items || []).filter((it) => it.facts?.length || it.view)
   if (!items.length) return null
@@ -578,6 +608,125 @@ export function ItemReads({ req, token, viewUrl }) {
         </article>
       ))}
     </section>
+  )
+}
+
+// One row per part: its quantity, material, finish and how it is made can each be changed, and its price.
+// "Details" shows what we read from the files and the three-view drawing.
+export function PartsTable({ req, token, info, onLine, pending, viewUrl }) {
+  const items = req?.result?.items || []
+  const [open, setOpen] = useState(() => (items.length === 1 ? { [items[0]?.key]: true } : {}))
+  if (!items.length) return null
+  const editable = !!onLine && !req.submitted
+  const src = (key) => (viewUrl ? viewUrl(key) : `/api/public/quote/${req.ref}/views/${key}.svg?token=${encodeURIComponent(token)}`)
+  const flagged = items.some((it) => (it.facts || []).some((f) => f.flag))
+  const groups = [...new Set(items.map((it) => it.group || ''))]
+  return (
+    <section className="pq-parts" aria-labelledby="parts-h">
+      <div className="pq-parts-head">
+        <h2 id="parts-h">{items.length === 1 ? 'Your part' : `Your parts (${items.length})`}</h2>
+        {pending && <span className="pq-muted" role="status">Updating prices…</span>}
+      </div>
+      <p className="pq-secnote pq-muted">{editable ? 'Change the quantity, material, finish or how a part is made, and its price updates. ' : ''}
+        Open Details to check what we read from your files{flagged ? ': lines marked for checking are guesses or things we could not find' : ''}.</p>
+      {groups.map((g) => (
+        <div key={g || 'none'} className="pq-group">
+          {g && <h3 className="pq-group-name">{g}</h3>}
+          <ul className="pq-lines">
+            {items.filter((it) => (it.group || '') === g).map((it) => (
+              <PartRow key={it.key} it={it} info={info} editable={editable} onLine={onLine} open={!!open[it.key]}
+                toggle={() => setOpen({ ...open, [it.key]: !open[it.key] })} src={src} />
+            ))}
+          </ul>
+        </div>
+      ))}
+    </section>
+  )
+}
+
+const FLAG = { assumed: 'Assumed. Check this', check: 'Please check' }
+function PartRow({ it, info, editable, onLine, open, toggle, src }) {
+  const ed = it.editable || {}
+  const [qty, setQty] = useState(String(it.qty))
+  useEffect(() => { setQty(String(it.qty)) }, [it.qty])
+  const mats = it.kind === 'flat' ? info.sheet_materials || [] : [...(info.materials || []), ...(info.print_materials || [])]
+  const procs = it.options?.processes || []
+  const procVal = `${it.process}|${it.material}`
+  const price = it.unit_price != null ? money(it.unit_price) : it.unit_low != null ? range(it.unit_low, it.unit_high) : null
+  const total = it.total != null ? money(it.total) : it.total_low != null ? range(it.total_low, it.total_high) : null
+  const flagged = (it.facts || []).some((f) => f.flag)
+  return (
+    <li className={`pq-line r-${it.route}`}>
+      <div className="pq-line-main">
+        <div className="pq-line-name">
+          <b>{it.name}</b>
+          <span className="pq-muted">{it.desc}{it.qty_per > 1 && it.group ? `, ${it.qty_per} per assembly` : ''}</span>
+          {it.note && <span className="pq-note">{it.note}</span>}
+        </div>
+        <label className="pq-mini">Qty
+          {editable && ed.qty ? (
+            <input type="number" min="1" step="1" inputMode="numeric" value={qty}
+              onChange={(e) => setQty(e.target.value)}
+              onBlur={() => { const v = parseInt(qty, 10); if (v > 0 && v !== it.qty) onLine(it.key, { qty: v }); else setQty(String(it.qty)) }}
+              onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur() }} />
+          ) : <b>{it.qty.toLocaleString()}</b>}
+        </label>
+        <label className="pq-mini">Material
+          {editable && ed.material ? (
+            <select value={it.material || ''} onChange={(e) => onLine(it.key, { material: e.target.value, process: null, process_material: null })}>
+              {!mats.includes(it.material) && it.material && <option>{it.material}</option>}
+              {mats.map((m) => <option key={m}>{m}</option>)}
+            </select>
+          ) : <b>{it.material || '—'}</b>}
+        </label>
+        <label className="pq-mini">Finish
+          {editable && ed.finish ? (
+            <select value={it.finish && it.finish !== 'none' ? it.finish : 'none'} onChange={(e) => onLine(it.key, { finish: e.target.value })}>
+              <option value="none">None</option>
+              {(info.finishes || []).map((f) => <option key={f}>{f}</option>)}
+            </select>
+          ) : <b>{it.finish && it.finish !== 'none' ? it.finish : 'None'}</b>}
+        </label>
+        <label className="pq-mini pq-mini-wide">Made by
+          {editable && ed.process && procs.length > 1 ? (
+            <select value={procVal} onChange={(e) => { const [process, material] = e.target.value.split('|'); onLine(it.key, { process, process_material: material }) }}>
+              {procs.map((o) => <option key={`${o.process}|${o.material}`} value={`${o.process}|${o.material}`}>{o.label}{o.material !== it.material && o.process === '3d_print' ? ` (${o.material.replace(/ \(DMLS\)/, '')})` : ''}, {money(o.unit_price)}</option>)}
+            </select>
+          ) : <b>{it.process_label || '—'}</b>}
+        </label>
+        <div className="pq-line-price">
+          {price ? <><b>{price}</b><span className="pq-muted"> each</span>{total && <div className="pq-muted">{total}</div>}</> : <span className="pq-muted">{it.route === 'processing' ? 'Reading…' : 'By review'}</span>}
+          {it.confirmed && <div className="pq-ok">Confirmed</div>}
+        </div>
+      </div>
+      {(it.facts?.length > 0 || it.view) && (
+        <button type="button" className="pq-link pq-details" aria-expanded={open} onClick={toggle}>
+          {open ? 'Hide details' : 'Details'}{flagged && !open ? <span className="pq-flagdot"> (check)</span> : null}
+        </button>
+      )}
+      {open && (
+        <div className={`pq-read ${it.view ? '' : 'no-view'}`}>
+          {it.view && (
+            <figure className="pq-views">
+              <a href={src(it.view.key)} target="_blank" rel="noopener" title="Open full size">
+                <img src={src(it.view.key)} alt={`Front, top, right and isometric views of ${it.name}`} loading="lazy" />
+              </a>
+              <figcaption className="pq-muted">{it.view.note} Tap the drawing to open it full size.</figcaption>
+            </figure>
+          )}
+          <div className="pq-facts">
+            <dl>
+              {(it.facts || []).map((f, j) => (
+                <div key={j} className={f.flag ? `flag-${f.flag}` : ''}>
+                  <dt>{f.label}</dt>
+                  <dd>{f.value}{f.flag && <span className="pq-flag">{FLAG[f.flag]}</span>}</dd>
+                </div>
+              ))}
+            </dl>
+          </div>
+        </div>
+      )}
+    </li>
   )
 }
 
@@ -624,6 +773,20 @@ function Status({ refId, token, info }) {
     }, 450)
     return () => clearTimeout(timer.current)
   }, [qty])
+  const [linePending, setLinePending] = useState(false)
+  const lineQueue = useRef({})
+  const lineTimer = useRef()
+  const changeLine = (key, patch) => {
+    lineQueue.current[key] = { ...(lineQueue.current[key] || {}), ...patch }
+    setLinePending(true)
+    clearTimeout(lineTimer.current)
+    lineTimer.current = setTimeout(async () => {
+      const lines = lineQueue.current
+      lineQueue.current = {}
+      try { const v = await call('POST', `/api/public/quote/${refId}/options`, { token, lines }); setR(v); remember(v, token); setErr('') } catch (e) { setErr(e.message) }
+      setLinePending(false)
+    }, 600)
+  }
   useEffect(() => {
     if (r?.result?.kind !== 'processing') return
     const t = setInterval(() => {
@@ -662,7 +825,7 @@ function Status({ refId, token, info }) {
           : <p><a href={pdfLink(r.ref, token)} target="_blank" rel="noopener">Save a PDF copy</a></p>}
       </aside>
     </div>
-    <ItemReads req={r} token={token} />
+    <PartsTable req={r} token={token} info={info} onLine={draft ? changeLine : null} pending={linePending} />
     </>
   )
 }
