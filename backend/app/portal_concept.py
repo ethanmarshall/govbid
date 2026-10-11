@@ -35,7 +35,7 @@ MUST_HAVE_HINTS = ["Fits within a size limit", "Weighs less than a limit", "Runs
 
 TEXT = {"title": 120, "description": 4000, "goals": 3000, "users": 1000, "environment_notes": 1500, "standards_other": 500,
         "size_limits": 800, "interfaces": 1500, "quantity_annual": 120, "nice_to_haves": 3000, "contract_ref": 200, "end_customer": 200,
-        "best_time": 120, "heard": 200, "notes": 3000, "budget_notes": 300}
+        "best_time": 120, "heard": 200, "notes": 3000, "budget_notes": 300, "design": 3000}
 CHOICE = {"stage": "stages", "quantity_first": "volumes", "budget": "budgets", "contact_method": "contact_methods"}
 MULTI = {"help": "help", "environment": "environments", "standards": "standards", "power": "power"}
 FLAGS = ("deadline_firm", "government", "nda")
@@ -47,7 +47,7 @@ SECTION_LABELS = {
     "quantity_annual": "Later, per year", "budget": "Budget", "budget_notes": "Budget notes", "needed_by": "Needed by",
     "deadline_firm": "Deadline is firm", "help": "Help wanted", "government": "For a government contract", "contract_ref": "Contract or solicitation",
     "end_customer": "End customer", "nda": "Wants an NDA first", "contact_method": "Contact by", "best_time": "Best time", "heard": "Heard about us",
-    "notes": "Anything else",
+    "notes": "Anything else", "design": "Design made on the site",
 }
 
 
@@ -98,7 +98,7 @@ def brief_lines(c: dict) -> list[tuple[str, str]]:
     for k in ("title", "stage", "description", "goals", "users", "must_haves", "nice_to_haves", "environment", "environment_notes",
               "standards", "standards_other", "power", "size_limits", "interfaces", "quantity_first", "quantity_annual", "budget",
               "budget_notes", "needed_by", "deadline_firm", "help", "government", "contract_ref", "end_customer", "nda",
-              "contact_method", "best_time", "heard", "notes"):
+              "contact_method", "best_time", "heard", "notes", "design"):
         v = c.get(k)
         if v in (None, "", [], False):
             continue

@@ -82,4 +82,7 @@ class PortalSettings(Base):
     pay_instructions: Mapped[str] = mapped_column(Text, default="")
     # the order agreement customers sign before an invoice order starts (blank: agreement.DEFAULT_TEMPLATE)
     agreement_template: Mapped[str] = mapped_column(Text, default="")
+    # the design assistant (needs ANTHROPIC_API_KEY): on or off, and how many chat messages a day at most
+    design_ai: Mapped[bool] = mapped_column(Boolean, default=True)
+    design_ai_daily: Mapped[int] = mapped_column(Integer, default=300)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

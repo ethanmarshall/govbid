@@ -119,8 +119,18 @@ async def new_concept(request: Request, background: BackgroundTasks, payload: st
         if total > portal.MAX_TOTAL + portal.MAX_FILE:
             raise HTTPException(413, "The files are too large.")
         uploads.append((f.filename or "file", data))
+    concept = body.get("concept") or {}
+    if isinstance(body.get("design"), dict) and not (body.get("contact") or {}).get("export_controlled"):
+        from . import design as _design
+
+        try:  # a part made with the design tool: the server builds the STEP itself and adds its sizes to the brief
+            name, data, spec = await run_in_threadpool(_design.step_for, body["design"])
+        except _design.DesignError as exc:
+            raise HTTPException(400, f"The attached design: {exc}")
+        uploads.append((name, data))
+        concept = {**concept, "design": "\n".join(f"{a}: {b}" for a, b in _design.summary(spec))}
     try:
-        req = await run_in_threadpool(portal_concept.create, db, body.get("concept") or {}, body.get("contact") or {}, uploads, _client(request))
+        req = await run_in_threadpool(portal_concept.create, db, concept, body.get("contact") or {}, uploads, _client(request))
     except (portal_concept.ConceptError, portal.PortalError) as exc:
         raise HTTPException(400, str(exc))
     cust = _customer_of(request, db)
@@ -375,6 +385,85 @@ def pay_invoice(ref: str, body: TokenIn, request: Request, db: Session = Depends
         return {"redirect": checkout.pay_invoice(db, req, _base(request))}
     except checkout.CheckoutError as exc:
         raise HTTPException(400, str(exc))
+
+
+# ================================================================ design a part
+DESIGN_LIMIT = portal.Limiter(per_ip=240, per_all=4000, window_s=3600)  # building previews as sizes change
+ASSIST_LIMIT = portal.Limiter(per_ip=40, per_all=600, window_s=3600)  # chat messages to the AI
+
+
+class DesignIn(BaseModel):
+    spec: dict
+
+
+@public.post("/design/preview")
+async def design_preview(body: DesignIn, request: Request):
+    """Build the part: 3D mesh, three-view drawing with dimensions, and its sizes in words."""
+    from . import design
+
+    _limit(DESIGN_LIMIT, request)
+    try:
+        return await run_in_threadpool(design.render, body.spec)
+    except design.DesignError as exc:
+        raise HTTPException(400, str(exc))
+
+
+class AssistIn(BaseModel):
+    messages: list[dict]
+    spec: dict | None = None
+
+
+@public.post("/design/assistant")
+async def design_assistant(body: AssistIn, request: Request, db: Session = Depends(get_db)):
+    """One chat turn with the design assistant. Returns its reply and, when it made or changed the design, the model."""
+    from . import design, design_ai
+
+    s = portal.get_settings(db)
+    if not design_ai.available(s):
+        raise HTTPException(404, "The design assistant is not available. Fill in the sizes instead.")
+    _limit(ASSIST_LIMIT, request)
+    try:
+        out = await run_in_threadpool(design_ai.chat, body.messages, body.spec, portal.public_info(db)["name"], s.design_ai_daily or 300)
+    except design_ai.AssistantError as exc:
+        raise HTTPException(400, str(exc))
+    except Exception as exc:  # noqa: BLE001  (the AI service is down or slow)
+        log.warning("Design assistant failed: %s", exc)
+        raise HTTPException(502, "The design assistant is not answering right now. Try again in a minute, or fill in the sizes yourself.")
+    if out["spec"]:
+        try:
+            out["render"] = await run_in_threadpool(design.render, out["spec"])
+        except design.DesignError as exc:
+            out["spec"], out["reply"] = None, out["reply"] + f" (I could not draw that: {exc})"
+    return out
+
+
+class DesignQuoteIn(BaseModel):
+    spec: dict
+    quantity: int = 1
+    material: str = ""
+    finish: str = ""
+    notes: str = ""
+    preview: bool = False
+
+
+@public.post("/design/quote")
+async def design_quote(body: DesignQuoteIn, request: Request, db: Session = Depends(get_db)):
+    """Price the designed part: the server builds the STEP and runs it through the normal quote."""
+    from . import design
+
+    _limit(portal.QUOTE_LIMIT, request)
+    try:
+        name, data, spec = await run_in_threadpool(design.step_for, body.spec)
+    except design.DesignError as exc:
+        raise HTTPException(400, str(exc))
+    notes = (body.notes.strip() + "\n\n" if body.notes.strip() else "") + "Designed on the website:\n" + "\n".join(f"{a}: {b}" for a, b in design.summary(spec))
+    data_in = {"quantity": body.quantity, "material": body.material, "finish": body.finish, "notes": notes[:3000]}
+    req = await run_in_threadpool(_guard, portal.create, db, [(name, data)], data_in, _client(request), body.preview and _owner(request))
+    cust = _customer_of(request, db)
+    if cust:
+        req.customer_id = cust.id
+        db.commit()
+    return {**portal.public_view(req), "token": req.token}
 
 
 # ================================================================ order agreement

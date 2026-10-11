@@ -317,6 +317,12 @@ function PortalSettings({ onSaved }) {
         <label className="f">How to pay, printed on invoices<textarea value={s.pay_instructions || ''} onChange={(e) => setS({ ...s, pay_instructions: e.target.value })} style={{ minHeight: 80 }} placeholder={'Bank transfer (ACH): bank name, routing and account number.\nChecks payable to Valley Power Systems LLC, mailed to the address above.'} /></label>
       </div>
       <p className="small muted" style={{ margin: '4px 0 0' }}>Only customers with an order see these, on their invoice. Approve net terms per customer in Customer accounts.</p>
+      <h3>Design assistant</h3>
+      <label className="check"><input type="checkbox" checked={s.design_ai !== false} onChange={(e) => setS({ ...s, design_ai: e.target.checked })} /> Let customers describe a part to the AI on Design a part (needs ANTHROPIC_API_KEY in Render; without it they still get the sizes form, 3D model and price)</label>
+      <div className="grid g2" style={{ marginTop: 6 }}>
+        <label className="f">Most AI messages a day, all customers<input type="number" min="0" value={s.design_ai_daily ?? 300} onChange={(e) => setS({ ...s, design_ai_daily: Number(e.target.value) })} /></label>
+      </div>
+      <p className="small muted" style={{ margin: '4px 0 0' }}>Each message costs a few cents of API use. Each visitor is also limited to 40 messages an hour.</p>
       <h3>Order agreement</h3>
       <p className="small muted" style={{ marginTop: 0 }}>Customers who choose an invoice sign this online before you start. Schedule A (every line, price, PO and ship-to) is added automatically. Placeholders: {Object.entries(s.agreement_placeholders || {}).map(([k, v]) => `{${k}} ${v}`).join(', ')}. This is a starting point, not legal advice: have a business attorney in your state review it.</p>
       <textarea value={s.agreement_template || s.agreement_default || ''} onChange={(e) => setS({ ...s, agreement_template: e.target.value })} style={{ width: '100%', minHeight: 260, fontSize: 13 }} />

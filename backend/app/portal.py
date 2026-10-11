@@ -74,7 +74,7 @@ def get_settings(db: Session) -> PortalSettings:
 
 SETTINGS_FIELDS = ("enabled", "display_name", "tagline", "intro", "contact_email", "contact_phone", "notify_email", "estimate_low_pct",
                    "estimate_high_pct", "incomplete_high_pct", "review_days", "max_quantity", "terms", "show_codes",
-                   "pay_instructions", "agreement_template")
+                   "pay_instructions", "agreement_template", "design_ai", "design_ai_daily")
 
 # What the customer site says about you until you change it in Portal settings. Written to be true of a small
 # veteran-owned shop that designs, builds and tests; edit every line so it matches what you actually do.
@@ -110,7 +110,7 @@ DEFAULT_SITE = {
         {"q": "Why did I get an estimate instead of a price?", "a": "Assemblies, box builds, circuit boards and drawings our software cannot read with confidence get a price range. An engineer reviews your files and confirms the price with you within {review_days} business days."},
         {"q": "How do I save my quote?", "a": "Every quote gets a reference number and a private link. Use Save as PDF or Copy link next to your price. This browser also keeps a list under Your saved quotes. Quotes you have not sent to us are kept for 30 days."},
         {"q": "Is there a minimum order?", "a": "No. One part is fine, and the price per part drops as the quantity goes up."},
-        {"q": "Are my files kept private?", "a": "Your files are stored on our server for quoting and for building your order. They are not sent to any outside service. Quotes you do not send to us are deleted with their files after 30 days."},
+        {"q": "Are my files kept private?", "a": "Your files are stored on our server for quoting and for building your order. They are not sent to any outside service. Quotes you do not send to us are deleted with their files after 30 days. If you use the design assistant, what you type in its chat is sent to Anthropic, the maker of the Claude AI, to build the model; your files never are."},
         {"q": "Can you take export-controlled (ITAR or EAR) work?", "a": "Do not upload controlled data here. Check the export-controlled box, send your contact details, and we will talk with you about whether we can take the work and how to transfer the data."},
         {"q": "How do I pay?", "a": "Quotes with a firm price can be ordered online by card or purchase order. Card payments go through Stripe, so your card number never reaches us. For jobs that need a review, we agree on payment terms when we confirm the order. Purchase orders are welcome."},
     ],
@@ -168,13 +168,13 @@ def update_settings(db: Session, changes: dict) -> dict:
             continue
         if k not in SETTINGS_FIELDS or v is None:
             continue
-        if k in ("enabled", "show_codes"):
+        if k in ("enabled", "show_codes", "design_ai"):
             v = bool(v)
         elif k in ("estimate_low_pct", "estimate_high_pct", "incomplete_high_pct"):
             v = float(v)
             if not 0 <= v <= 300:
                 raise PortalError(f"{k} must be between 0 and 300")
-        elif k in ("review_days", "max_quantity"):
+        elif k in ("review_days", "max_quantity", "design_ai_daily"):
             v = int(v)
             if v < 0 or (k == "max_quantity" and v < 1):
                 raise PortalError(f"{k} must be a positive number")
@@ -211,7 +211,8 @@ def public_info(db: Session) -> dict:
             "accept": ACCEPT, "max_files": MAX_FILES, "max_file_mb": MAX_FILE // (1024 * 1024), "keep_days": DRAFT_DAYS,
             "site": site_content(s), "company": _company_codes(prof) if s.show_codes else None,
             "concept_options": portal_concept.OPTIONS, "must_have_hints": portal_concept.MUST_HAVE_HINTS,
-            "checkout_methods": checkout.methods()}
+            "checkout_methods": checkout.methods(),
+            "design": {"ai": __import__("app.design_ai", fromlist=["available"]).available(s), "templates": __import__("app.design", fromlist=["templates"]).templates()}}
 
 
 def _company_codes(prof) -> dict | None:

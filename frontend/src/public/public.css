@@ -391,4 +391,57 @@
 .pq-signform .pq-btn { margin-top: 16px; min-width: 260px; }
 .pq-codebtn { display: flex; flex-direction: column; justify-content: flex-end; gap: 4px; }
 .pq-sigline { font-family: 'Brush Script MT', 'Segoe Script', cursive; font-size: 30px; margin: 18px 0 0; padding-bottom: 4px; border-bottom: 1px solid var(--ink); max-width: 420px; color: var(--ink); }
+.pq-paths.three { grid-template-columns: repeat(3, 1fr); }
+/* Design a part */
+.pq-design h1 { margin-bottom: 4px; }
+.pq-design-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr); gap: 32px; margin-top: 18px; align-items: start; }
+.pq-d-assist, .pq-design-form { grid-column: 1; min-width: 0; }
+.pq-design-right { grid-column: 2; grid-row: 1 / span 2; position: sticky; top: 64px; min-width: 0; }
+.pq-design h2 { font-size: 20px; margin: 0 0 10px; }
+.pq-design-form .pq-fields { margin-top: 12px; }
+.pq-assist { border: 1.5px solid var(--ink); padding: 14px 16px 12px; background: #fbfcfc; }
+.pq-chat { max-height: 300px; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; padding: 2px 0 8px; }
+.pq-chat p { margin: 0; padding: 8px 12px; border-radius: 3px; max-width: 88%; font-size: 15.5px; line-height: 1.45; white-space: pre-wrap; }
+.pq-msg-assistant { background: #eef3fc; align-self: flex-start; }
+.pq-msg-user { background: var(--ink); color: #fff; align-self: flex-end; }
+.pq-starters { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 10px; }
+.pq-starters .pq-chip { font: inherit; font-size: 14px; cursor: pointer; background: #fff; }
+.pq-chatform { display: flex; gap: 8px; align-items: flex-end; margin-top: 6px; }
+.pq-chatform textarea { min-height: 48px; resize: vertical; }
+.pq-chatform .pq-btn { flex: none; }
+.pq-rows { margin-top: 16px; }
+.pq-rows-head { display: flex; justify-content: space-between; align-items: baseline; border-bottom: 1px solid var(--rule); }
+.pq-rows-head h3 { font-size: 16px; margin: 0 0 4px; }
+.pq-rows table { width: 100%; border-collapse: collapse; margin-top: 6px; }
+.pq-rows th { font-size: 12.5px; font-weight: 500; color: var(--ink-3); text-align: left; padding: 0 4px 2px; }
+.pq-rows td { padding: 2px 4px; }
+.pq-rows td input { min-height: 38px; padding: 6px 8px; font-size: 15px; }
+.pq-design-view { border: 1.5px solid var(--ink); background: #fff; }
+.pq-viewtabs { display: flex; align-items: center; gap: 4px; border-bottom: 1px solid var(--rule); padding: 0 10px; }
+.pq-viewtabs button { font: inherit; font-family: var(--cond); font-weight: 600; font-size: 16px; background: none; border: 0; border-bottom: 2px solid transparent; padding: 9px 8px 7px; cursor: pointer; color: var(--ink-2); }
+.pq-viewtabs button.on { color: var(--ink); border-bottom-color: var(--dye); }
+.pq-viewtabs span { margin-left: auto; font-variant-numeric: tabular-nums; }
+.pq-design-view .viewer { border: 0; border-radius: 0; background: linear-gradient(#f7f9fa, #e9eef1); }
+.pq-design-drawing { display: block; width: 100%; height: 360px; object-fit: contain; background: #fff; }
+.pq-design-empty { height: 360px; display: grid; place-items: center; }
+.pq-design-sum { margin: 14px 0 0; display: grid; gap: 4px; }
+.pq-design-sum div { display: grid; grid-template-columns: 150px 1fr; gap: 10px; font-size: 14.5px; border-bottom: 1px solid #edf0ef; padding-bottom: 4px; }
+.pq-design-sum dt { color: var(--ink-3); }
+.pq-design-sum dd { margin: 0; }
+.pq-design-price { margin-top: 16px; padding-top: 14px; border-top: 1.5px solid var(--ink); }
+.pq-design-price .pq-fields { margin-top: 0; }
+.pq-attached { display: flex; gap: 14px; align-items: center; border: 1.5px solid var(--dye); background: #eef3fc; padding: 10px 14px; margin: 10px 0 16px; }
+.pq-attached img { width: 150px; height: 100px; object-fit: contain; background: #fff; border: 1px solid var(--rule); flex: none; }
+.pq-attached p { margin: 2px 0; }
+@media (max-width: 899px) {
+  .pq-paths.three { grid-template-columns: 1fr; }
+  .pq-design-grid { grid-template-columns: minmax(0, 1fr); gap: 22px; }
+  .pq-d-assist, .pq-design-form, .pq-design-right { grid-column: 1; grid-row: auto; }
+  .pq-design-right { position: static; order: 1; }
+  .pq-design-form { order: 2; }
+  .pq-design-sum div { grid-template-columns: 110px 1fr; }
+  .pq-rows td input { min-width: 56px; }
+  .pq-rows { overflow-x: auto; }
+  .pq-attached { flex-direction: column; align-items: flex-start; }
+}
 @media (prefers-reduced-motion: reduce) { .pq * { transition: none !important; animation: none !important; scroll-behavior: auto !important; } }

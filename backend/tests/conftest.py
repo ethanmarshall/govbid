@@ -24,7 +24,10 @@ def _drop_website_invoices():
         from app.models_finance import Invoice
     except Exception:  # noqa: BLE001
         return
-    with SessionLocal() as db:
-        for inv in db.query(Invoice).filter(Invoice.notes.like("Website order%")).all():
-            db.delete(inv)
-        db.commit()
+    try:
+        with SessionLocal() as db:
+            for inv in db.query(Invoice).filter(Invoice.notes.like("Website order%")).all():
+                db.delete(inv)
+            db.commit()
+    except Exception:  # noqa: BLE001  (no tables yet: the test did not use the database)
+        pass

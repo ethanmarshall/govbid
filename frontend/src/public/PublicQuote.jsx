@@ -3,6 +3,7 @@ import { useLocation, useNavigate } from 'react-router-dom'
 import './public.css'
 import { accountHref, call, loadSaved, money, pdfLink, range, statusLink, statusPath, useAccount, writeSaved } from './shared'
 import Account from './Account'
+import DesignStudio from './Design'
 import Checkout, { OrderPanel, SignAgreement } from './Checkout'
 
 export { loadSaved }
@@ -65,12 +66,12 @@ function Sheet({ info, children, home = false, onPath }) {
   const go = (id) => (e) => {
     if (!home) return
     e.preventDefault()
-    if (onPath && (id === 'idea' || id === 'quote')) onPath(id === 'idea' ? 'idea' : 'files')
-    setTimeout(() => document.getElementById(id === 'idea' ? 'quote' : id)?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 30)
+    if (onPath && (id === 'idea' || id === 'quote' || id === 'design')) onPath(id === 'quote' ? 'files' : id)
+    setTimeout(() => document.getElementById(id === 'idea' || id === 'design' ? 'quote' : id)?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 30)
     history.replaceState(null, '', `#${id}`)
   }
   const site = info?.site
-  const links = [['quote', 'Get a quote'], ['idea', 'Start with an idea'], site?.capabilities?.length && ['capabilities', 'Capabilities'], (site?.about || site?.experience?.length) && ['about', 'About us'],
+  const links = [['quote', 'Get a quote'], info?.design && ['design', 'Design a part'], ['idea', 'Start with an idea'], site?.capabilities?.length && ['capabilities', 'Capabilities'], (site?.about || site?.experience?.length) && ['about', 'About us'],
     site?.quality?.length && ['quality', 'Quality'], site?.faq?.length && ['questions', 'Questions'], saved.length && ['saved', `Saved quotes (${saved.length})`]].filter(Boolean)
   return (
     <div className="pq">
@@ -107,7 +108,8 @@ function Sheet({ info, children, home = false, onPath }) {
 
 export default function PublicQuote() {
   const loc = useLocation()
-  const [path, setPath] = useState(() => (loc.hash === '#idea' ? 'idea' : 'files'))
+  const [path, setPath] = useState(() => (loc.hash === '#idea' ? 'idea' : loc.hash === '#design' ? 'design' : 'files'))
+  const [attached, setAttached] = useState(null) // a part made with the design tool, sent with a project idea
   const [info, setInfo] = useState(null)
   const [err, setErr] = useState('')
   useEffect(() => { document.title = 'Get a quote'; call('GET', '/api/public/info').then(setInfo).catch((e) => setErr(e.message)) }, [])
@@ -125,7 +127,9 @@ export default function PublicQuote() {
       <div id="quote" className="pq-anchor">
         <PathChooser path={path} setPath={setPath} />
         <div id="idea" className="pq-anchor" />
-        {path === 'idea' ? <ConceptForm info={info} /> : open ? <QuoteForm info={info} /> : (
+        {path === 'idea' ? <ConceptForm info={info} attached={attached} onDetach={() => setAttached(null)} />
+          : path === 'design' ? <DesignStudio info={info} onSendIdea={(d) => { setAttached(d); setPath('idea'); history.replaceState(null, '', '#idea'); setTimeout(() => document.getElementById('quote')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 30) }} />
+          : open ? <QuoteForm info={info} /> : (
           <div className="pq-closed">
             <h1>Send us your files for a price</h1>
             <p>Online pricing is not open yet. Email your drawings or models{info.contact_email ? <> to <a href={`mailto:${info.contact_email}`}>{info.contact_email}</a></> : ''} with the quantity you need, and we will reply with a price.</p>
@@ -141,20 +145,21 @@ export default function PublicQuote() {
 function PathChooser({ path, setPath }) {
   const opt = (key, title, text) => (
     <button type="button" role="tab" aria-selected={path === key} className={`pq-path ${path === key ? 'on' : ''}`}
-      onClick={() => { setPath(key); history.replaceState(null, '', key === 'idea' ? '#idea' : '#quote') }}>
+      onClick={() => { setPath(key); history.replaceState(null, '', key === 'files' ? '#quote' : `#${key}`) }}>
       <b>{title}</b><span>{text}</span>
     </button>
   )
   return (
-    <div className="pq-paths" role="tablist" aria-label="How do you want to start?">
+    <div className="pq-paths three" role="tablist" aria-label="How do you want to start?">
       {opt('files', 'I have drawings or models', 'Upload STEP, PDF, DXF or board files and get a price now.')}
+      {opt('design', 'Design it here', 'A simple part like a plate, bracket or spacer? Describe it or enter sizes, see it in 3D, and get a price.')}
       {opt('idea', 'I have an idea', 'No drawings yet? Tell us what you need and an engineer will help you get there.')}
     </div>
   )
 }
 
 // A project without drawings: the idea, goals, must-haves, conditions, quantities, budget, timing and contact.
-function ConceptForm({ info }) {
+function ConceptForm({ info, attached, onDetach }) {
   const o = info.concept_options || {}
   const [c, setC] = useState({ title: '', stage: '', description: '', goals: '', users: '', must_haves: [''], nice_to_haves: '',
     environment: [], environment_notes: '', power: [], standards: [], standards_other: '', size_limits: '', interfaces: '',
@@ -183,7 +188,7 @@ function ConceptForm({ info }) {
   const send = async (e) => {
     e.preventDefault(); setErr(''); setBusy(true); setProgress(0)
     const form = new FormData()
-    form.append('payload', JSON.stringify({ concept: { ...c, must_haves: must.filter((x) => x.trim()) }, contact: who }))
+    form.append('payload', JSON.stringify({ concept: { ...c, must_haves: must.filter((x) => x.trim()) }, contact: who, ...(attached && !who.export_controlled ? { design: attached.spec } : {}) }))
     form.append('website', '')
     if (!who.export_controlled) files.forEach((f) => form.append('files', f))
     try {
@@ -218,6 +223,13 @@ function ConceptForm({ info }) {
   return (
     <form className="pq-concept" onSubmit={send}>
       <h1>Tell us about your project</h1>
+      {attached && (
+        <div className="pq-attached">
+          {attached.view?.drawing && <img alt="" src={`data:image/svg+xml;charset=utf-8,${encodeURIComponent(attached.view.drawing)}`} />}
+          <div><b>Your design is attached: {attached.spec.name || attached.view?.summary?.[0]?.text || 'part'}</b><p className="pq-muted pq-small">{(attached.view?.summary || []).slice(1, 4).map((r) => `${r.label} ${r.text}`).join(', ')}. We send it to the engineer as a 3D model.</p>
+            <button type="button" className="pq-link" onClick={onDetach}>Remove it</button></div>
+        </div>
+      )}
       <p className="pq-intro">No drawings needed. The more you tell us, the better our first answer, but only the parts marked required are needed. An engineer reads every project and replies within {info.review_days} business day{info.review_days === 1 ? '' : 's'}.</p>
 
       <fieldset className="pq-step">
