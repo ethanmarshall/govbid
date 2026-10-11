@@ -6,7 +6,7 @@ import { PartsTable } from '../public/PublicQuote'
 const usd = (n) => (n == null ? '' : `$${Number(n).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`)
 const STATUSES = ['submitted', 'reviewing', 'confirmed', 'ordered', 'in_production', 'shipped', 'declined', 'closed', 'draft']
 const STATUS_LABEL = { draft: 'Not submitted', submitted: 'New', reviewing: 'In review', confirmed: 'Confirmed', ordered: 'Ordered', in_production: 'In production', shipped: 'Shipped', declined: 'Declined', closed: 'Closed' }
-const ORDER_LABEL = { awaiting_payment: 'Waiting for card payment', paid: 'Paid', po_received: 'PO received', invoiced: 'Invoiced, on terms', invoice_due: 'Invoice due before we start', cancelled: 'Cancelled', payment_review: 'Payment to check' }
+const ORDER_LABEL = { awaiting_payment: 'Waiting for card payment', paid: 'Paid', po_received: 'PO received', invoiced: 'Invoiced, on terms', invoice_due: 'Invoice due before we start', cancelled: 'Cancelled', payment_review: 'Payment to check', awaiting_signature: 'Waiting for signature' }
 const KIND_LABEL = { instant: 'Instant', estimate: 'Estimate', manual: 'Manual', needs_input: 'Needs input', processing: 'Reading model', concept: 'Project idea' }
 
 function shown(r) {
@@ -161,6 +161,25 @@ function RequestDetail({ id, onChange, onClose }) {
   )
 }
 
+function Agreement({ o, id, setR, setMsg, setErr, onChange }) {
+  const ag = o.agreement
+  const sig = ag.signed || {}
+  const waive = async () => {
+    const note = prompt('Release this order without the online signature. Why? (for example: signed on paper, or government contract)')
+    if (!note) return
+    try { setR(await api.post(`/api/portal/requests/${id}/agreement/waive`, { note })); setMsg('Released. The invoice is made.'); onChange() } catch (e) { setErr(e.message) }
+  }
+  return (
+    <p className="small" style={{ margin: '6px 0' }}>
+      {ag.status === 'pending' && <><b>Do not start: waiting for the customer to sign the order agreement</b> (sent {(ag.sent_at || '').slice(0, 10)}). The invoice is made when they sign. </>}
+      {ag.status === 'signed' && <>Agreement signed by <b>{sig.name}</b>, {sig.title}{sig.company ? `, ${sig.company}` : ''} on {(sig.at || '').replace('T', ' ').slice(0, 16)} UTC from {sig.ip}{sig.email_verified ? ', email code confirmed' : ''}. </>}
+      {ag.status === 'waived' && <>Agreement not signed online: {ag.waived?.note}. </>}
+      <a href={`/api/portal/requests/${id}/agreement.pdf`} target="_blank" rel="noreferrer">Agreement PDF</a>
+      {ag.status === 'pending' && <> · <button className="link" onClick={waive}>Release without online signature</button></>}
+    </p>
+  )
+}
+
 function OrderBox({ r, id, setR, setMsg, setErr, onChange }) {
   const o = r.order
   const a = o.ship_to || {}
@@ -190,6 +209,7 @@ function OrderBox({ r, id, setR, setMsg, setErr, onChange }) {
         {['invoiced', 'invoice_due', 'po_received', 'payment_review'].includes(o.status) && <button className="primary" onClick={() => set('paid')}>Mark paid</button>}
         {o.status && o.status !== 'cancelled' && <button className="link" onClick={() => set('cancelled')}>Cancel order</button>}
       </div>
+      {o.agreement && <Agreement o={o} id={id} setR={setR} setMsg={setMsg} setErr={setErr} onChange={onChange} />}
       {o.status === 'invoice_due' && <p className="small" style={{ margin: '6px 0' }}><b>Do not start yet:</b> this customer has no terms, so the work starts when the invoice is paid. Mark it paid when the money arrives.</p>}
       <p className="small muted" style={{ marginBottom: 0 }}>Move the request status to In production and Shipped below as the job moves; the customer sees it on their status page and in their account.</p>
     </div>
@@ -297,6 +317,10 @@ function PortalSettings({ onSaved }) {
         <label className="f">How to pay, printed on invoices<textarea value={s.pay_instructions || ''} onChange={(e) => setS({ ...s, pay_instructions: e.target.value })} style={{ minHeight: 80 }} placeholder={'Bank transfer (ACH): bank name, routing and account number.\nChecks payable to Valley Power Systems LLC, mailed to the address above.'} /></label>
       </div>
       <p className="small muted" style={{ margin: '4px 0 0' }}>Only customers with an order see these, on their invoice. Approve net terms per customer in Customer accounts.</p>
+      <h3>Order agreement</h3>
+      <p className="small muted" style={{ marginTop: 0 }}>Customers who choose an invoice sign this online before you start. Schedule A (every line, price, PO and ship-to) is added automatically. Placeholders: {Object.entries(s.agreement_placeholders || {}).map(([k, v]) => `{${k}} ${v}`).join(', ')}. This is a starting point, not legal advice: have a business attorney in your state review it.</p>
+      <textarea value={s.agreement_template || s.agreement_default || ''} onChange={(e) => setS({ ...s, agreement_template: e.target.value })} style={{ width: '100%', minHeight: 260, fontSize: 13 }} />
+      {s.agreement_template && <button className="link" onClick={() => setS({ ...s, agreement_template: '' })}>Use the default text</button>}
 
       <h3 style={{ marginTop: 22 }}>What the site says about you</h3>
       <p className="small due-soon">This is suggested text. Read every line and change it so it matches what you actually do, in house or through partners. Customers will hold you to it.</p>

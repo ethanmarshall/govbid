@@ -268,6 +268,20 @@ def _order_placed(req_id: int, base: str) -> None:
         db.close()
 
 
+def _ask_to_sign(req_id: int, base: str) -> None:
+    """Email the customer the link to sign the order agreement (only when email is set up)."""
+    db = SessionLocal()
+    try:
+        req = db.get(PortalRequest, req_id)
+        if req:
+            try:
+                portal.confirm_to_customer(req, portal.get_settings(db), f"{base}/quote/status/{req.ref}?t={req.token}")
+            except Exception as exc:  # noqa: BLE001
+                log.info("Signing request for %s not sent: %s", req.ref, exc)
+    finally:
+        db.close()
+
+
 class CheckoutIn(BaseModel):
     token: str
     expected_total: float | None = None
@@ -297,8 +311,8 @@ async def do_checkout(ref: str, body: CheckoutIn, request: Request, background: 
             raise HTTPException(409, {"message": "The price changed since you last looked. Check the new total and place the order again.",
                                       "total": float(msg.split(":", 1)[1]), "view": portal.public_view(req)})
         raise HTTPException(400, msg)
-    if out["order"]["status"] in ("invoiced", "invoice_due"):
-        background.add_task(_order_placed, req.id, _base(request))
+    if out["order"]["status"] == "awaiting_signature":
+        background.add_task(_ask_to_sign, req.id, _base(request))
     return {"view": portal.public_view(req), "redirect": out["redirect"]}
 
 
@@ -361,6 +375,74 @@ def pay_invoice(ref: str, body: TokenIn, request: Request, db: Session = Depends
         return {"redirect": checkout.pay_invoice(db, req, _base(request))}
     except checkout.CheckoutError as exc:
         raise HTTPException(400, str(exc))
+
+
+# ================================================================ order agreement
+def _agreement_pdf(db: Session, req: PortalRequest) -> Response:
+    from . import agreement
+
+    if not (req.order or {}).get("agreement"):
+        raise HTTPException(404, "There is no agreement for this order.")
+    pdf = agreement.render(req, req.order, portal.public_info(db))
+    return Response(pdf, media_type="application/pdf", headers={"Content-Disposition": f'inline; filename="Agreement {req.ref}.pdf"',
+                                                                 "Cache-Control": "no-store"})
+
+
+@public.get("/quote/{ref}/agreement.pdf")
+def agreement_pdf(ref: str, request: Request, token: str = "", db: Session = Depends(get_db)):
+    _limit(portal.REPRICE_LIMIT, request)
+    return _agreement_pdf(db, _customer(db, ref, token))
+
+
+@public.post("/quote/{ref}/agreement/code")
+def agreement_code(ref: str, body: TokenIn, request: Request, db: Session = Depends(get_db)):
+    """Email a one-time code to the order's address, to confirm who signs."""
+    from . import agreement, customers
+
+    _limit(portal.SIGN_LIMIT, request)
+    req = _customer(db, ref, body.token)
+    if ((req.order or {}).get("agreement") or {}).get("status") != "pending":
+        raise HTTPException(400, "There is nothing to sign.")
+    try:
+        agreement.send_code(req, customers.email_enabled())
+    except agreement.AgreementError as exc:
+        raise HTTPException(400, str(exc))
+    except Exception as exc:  # noqa: BLE001
+        log.warning("Signing code for %s not sent: %s", ref, exc)
+        raise HTTPException(502, "We could not send the code right now. Try again in a few minutes.")
+    e = req.email
+    return {"sent_to": e[0] + "***" + e[e.index("@"):] if "@" in e else ""}
+
+
+class SignIn(BaseModel):
+    token: str
+    sha256: str
+    name: str
+    title: str
+    company: str = ""
+    code: str = ""
+    authority: bool = False
+    consent: bool = False
+    agree: bool = False
+
+
+@public.post("/quote/{ref}/agreement/sign")
+def agreement_sign(ref: str, body: SignIn, request: Request, background: BackgroundTasks, db: Session = Depends(get_db)):
+    from . import agreement, checkout, customers
+
+    _limit(portal.SIGN_LIMIT, request)
+    req = _customer(db, ref, body.token)
+    o = dict(req.order or {})
+    if o.get("status") != "awaiting_signature":
+        raise HTTPException(400, "There is nothing to sign on this order.")
+    try:
+        agreement.sign(o, req, body.model_dump(), _client(request), request.headers.get("user-agent", ""), customers.email_enabled())
+    except agreement.AgreementError as exc:
+        raise HTTPException(400, str(exc))
+    req.order = o
+    checkout.after_signing(db, req)
+    background.add_task(_order_placed, req.id, _base(request))
+    return portal.public_view(req)
 
 
 # ================================================================ customer accounts
@@ -636,6 +718,32 @@ def set_order(rid: int, body: OrderIn, db: Session = Depends(get_db)):
 @internal.get("/requests/{rid}/invoice.pdf")
 def internal_invoice_pdf(rid: int, request: Request, db: Session = Depends(get_db)):
     return _invoice_pdf(db, _req(db, rid), _base(request))
+
+
+@internal.get("/requests/{rid}/agreement.pdf")
+def internal_agreement_pdf(rid: int, db: Session = Depends(get_db)):
+    return _agreement_pdf(db, _req(db, rid))
+
+
+class WaiveIn(BaseModel):
+    note: str = ""
+
+
+@internal.post("/requests/{rid}/agreement/waive")
+def waive_agreement(rid: int, body: WaiveIn, db: Session = Depends(get_db)):
+    """Release an invoice order without the online signature (signed on paper, or a government order on its own contract)."""
+    from . import agreement, checkout
+
+    r = _req(db, rid)
+    o = dict(r.order or {})
+    if o.get("status") != "awaiting_signature":
+        raise HTTPException(400, "This order is not waiting for a signature.")
+    if len(body.note.strip()) < 3:
+        raise HTTPException(400, "Say why, for the record (for example: signed on paper, or government contract).")
+    agreement.waive(o, body.note.strip())
+    r.order = o
+    checkout.after_signing(db, r)
+    return portal.internal_dict(r, full=True)
 
 
 @internal.get("/customers")

@@ -3,7 +3,7 @@ import { useLocation, useNavigate } from 'react-router-dom'
 import './public.css'
 import { accountHref, call, loadSaved, money, pdfLink, range, statusLink, statusPath, useAccount, writeSaved } from './shared'
 import Account from './Account'
-import Checkout, { OrderPanel } from './Checkout'
+import Checkout, { OrderPanel, SignAgreement } from './Checkout'
 
 export { loadSaved }
 
@@ -662,6 +662,7 @@ function QuoteForm({ info }) {
         {req && !stale && <NextStep req={req} token={req.token} setReq={setReq} info={info} />}
       </aside>
     </div>
+    {req && !stale && <SignAgreement req={req} token={req.token} onSigned={setReq} />}
     {req && !stale && <PartsTable req={req} token={req.token} info={info} onLine={changeLine} pending={linePending} />}
     </>
   )
@@ -1043,9 +1044,10 @@ function Status({ refId, token, info }) {
     <>
     <div className="pq-body">
       <section className="pq-form">
-        <h1>{r.order && r.status !== 'draft' ? `Order ${r.ref}` : draft ? `Saved quote ${r.ref}` : `Request ${r.ref}`}</h1>
-        <p className="pq-intro"><b>{r.status_label}.</b> {draft
+        <h1>{r.order?.number && r.status !== 'draft' ? `Order ${r.ref}` : draft ? `Saved quote ${r.ref}` : `Request ${r.ref}`}</h1>
+        <p className="pq-intro"><b>{r.order?.number ? r.order.status_label : r.status_label}.</b> {draft
           ? (r.checkout?.eligible ? 'Change the quantity to see a new price, then place your order when you are ready.' : 'Change the quantity to see a new price, then send it to us when you are ready.')
+          : r.order?.status === 'awaiting_signature' ? 'Sign the order agreement below to release your order. We send the invoice and start once it is signed.'
           : r.status === 'ordered' ? 'We have your order and will confirm the ship date by email.'
           : r.status === 'submitted' || r.status === 'reviewing' ? `We will contact you within ${info.review_days} business day${info.review_days === 1 ? '' : 's'}.` : ''}</p>
         {draft && res.kind !== 'manual' && (
@@ -1068,6 +1070,7 @@ function Status({ refId, token, info }) {
           : <p><a href={pdfLink(r.ref, token)} target="_blank" rel="noopener">Save a PDF copy</a></p>}
       </aside>
     </div>
+    <SignAgreement req={r} token={token} onSigned={(v) => setR(v)} />
     {r.result?.kind === 'concept' ? <ConceptBrief r={r} /> : <PartsTable req={r} token={token} info={info} onLine={draft ? changeLine : null} pending={linePending} />}
     </>
   )

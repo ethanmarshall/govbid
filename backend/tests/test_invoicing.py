@@ -17,7 +17,7 @@ SHIP = {"name": "Dana Lee", "company": "Acme", "line1": "1 Main St", "city": "Ba
 
 @pytest.fixture
 def client(monkeypatch):
-    for lim in (portal.QUOTE_LIMIT, portal.REPRICE_LIMIT, portal.SUBMIT_LIMIT):
+    for lim in (portal.QUOTE_LIMIT, portal.REPRICE_LIMIT, portal.SUBMIT_LIMIT, portal.SIGN_LIMIT):
         lim.clear()
     customers._fails.clear()
     monkeypatch.setattr(portal, "notify", lambda req, s: None)
@@ -34,10 +34,26 @@ def _quote(c, qty=1):
                   files=[("files", ("block.step", (FIX / "cad" / "machined_block.step").read_bytes()))]).json()
 
 
-def _order(c, q, **kw):
+class _R:  # the checkout reply, after signing the agreement for invoice orders
+    def __init__(self, view):
+        self.status_code, self._v = 200, view
+
+    def json(self):
+        return {"view": self._v}
+
+
+def _order(c, q, sign=True, **kw):
     body = {"token": q["token"], "method": "invoice", "contact": {"name": "Dana", "email": "dana@example.com", "company": "Acme"},
             "ship_to": SHIP, "accept_terms": True, **kw}
-    return c.post(f"/api/public/quote/{q['ref']}/checkout", json=body)
+    r = c.post(f"/api/public/quote/{q['ref']}/checkout", json=body)
+    assert r.status_code == 200, r.text
+    v = r.json()["view"]
+    if not sign or v["order"]["status"] != "awaiting_signature":
+        return r
+    s = c.post(f"/api/public/quote/{q['ref']}/agreement/sign", json={"token": q["token"], "sha256": v["order"]["agreement"]["sha256"],
+                                                                   "name": "Dana Lee", "title": "Purchasing", "authority": True, "consent": True, "agree": True})
+    assert s.status_code == 200, s.text
+    return _R(s.json())
 
 
 def _text(pdf: bytes) -> str:

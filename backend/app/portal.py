@@ -74,7 +74,7 @@ def get_settings(db: Session) -> PortalSettings:
 
 SETTINGS_FIELDS = ("enabled", "display_name", "tagline", "intro", "contact_email", "contact_phone", "notify_email", "estimate_low_pct",
                    "estimate_high_pct", "incomplete_high_pct", "review_days", "max_quantity", "terms", "show_codes",
-                   "pay_instructions")
+                   "pay_instructions", "agreement_template")
 
 # What the customer site says about you until you change it in Portal settings. Written to be true of a small
 # veteran-owned shop that designs, builds and tests; edit every line so it matches what you actually do.
@@ -149,7 +149,10 @@ def settings_dict(s: PortalSettings) -> dict:
 
     db = object_session(s)
     remit = (finance_settings(db).remit_to or "") if db is not None else ""
-    return {**{k: getattr(s, k) for k in SETTINGS_FIELDS}, "remit_to": remit, "site": site_content(s), "site_defaults": DEFAULT_SITE}
+    from .agreement import DEFAULT_TEMPLATE, PLACEHOLDERS
+
+    return {**{k: getattr(s, k) for k in SETTINGS_FIELDS}, "remit_to": remit, "site": site_content(s), "site_defaults": DEFAULT_SITE,
+            "agreement_default": DEFAULT_TEMPLATE, "agreement_placeholders": PLACEHOLDERS}
 
 
 def update_settings(db: Session, changes: dict) -> dict:
@@ -175,6 +178,15 @@ def update_settings(db: Session, changes: dict) -> dict:
             v = int(v)
             if v < 0 or (k == "max_quantity" and v < 1):
                 raise PortalError(f"{k} must be a positive number")
+        elif k == "agreement_template":
+            v = str(v)[:20000]
+            if v.strip():
+                try:
+                    from .agreement import _Safe
+
+                    v.format_map(_Safe())
+                except (ValueError, IndexError) as exc:
+                    raise PortalError("The order agreement has a stray { or }. Use them only around placeholders like {buyer}.") from exc
         else:
             v = str(v)[:3000]
         setattr(s, k, v)
@@ -243,6 +255,7 @@ class Limiter:
 QUOTE_LIMIT = Limiter(per_ip=20, per_all=300, window_s=3600)
 REPRICE_LIMIT = Limiter(per_ip=120, per_all=2000, window_s=3600)
 SUBMIT_LIMIT = Limiter(per_ip=5, per_all=60, window_s=3600)
+SIGN_LIMIT = Limiter(per_ip=20, per_all=300, window_s=3600)  # signing the order agreement (typos happen)
 
 
 def ip_hash(ip: str) -> str:
@@ -1177,6 +1190,12 @@ def confirm_to_customer(req: PortalRequest, s: PortalSettings, status_url: str) 
     from .cli import send_email
 
     o = req.order or {}
+    if o.get("status") == "awaiting_signature":
+        body = (f"Thank you for your order {req.ref} (${o.get('amount', 0):,.2f}).\n\nBefore we start, please read and sign the order agreement. "
+                f"It takes a minute, online:\n{status_url}\n\nWe send the invoice and start your order once it is signed.\n\n"
+                f"{s.display_name or ''}\n{s.contact_email or ''} {s.contact_phone or ''}\n")
+        send_email(f"Please sign the order agreement for {req.ref}", body, to=req.email, allow_customer=True)
+        return
     how = ("Your payment was received." if o.get("status") == "paid"
            else f"Invoice {o.get('invoice_number', '')} is attached to your order page. Terms: net {o.get('terms_days')}, due {o.get('due_date', '')}."
            if o.get("status") == "invoiced"

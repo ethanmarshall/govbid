@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { accountHref, call, money, pdfLink, statusPath, useAccount } from './shared'
 
 // Ordering an instant quote: contact, ship-to, card (Stripe's page) or purchase order, terms.
@@ -37,7 +37,7 @@ export default function Checkout({ req, token, setReq, info }) {
       const r = await call('POST', `/api/public/quote/${req.ref}/checkout`, {
         token, expected_total: total, method: f.method, po_number: f.po_number, billing_email: f.billing_email, needed_by: f.needed_by,
         notes: f.notes, accept_terms: f.accept_terms, save_address: !!me && pick === 'new' && f.save_address,
-        contact: { name: f.name, company: f.company, email: f.email, phone: f.phone }, ship_to: ship,
+        contact: { name: f.name, company: f.company, email: f.email, phone: f.phone }, ship_to: { ...ship, name: ship.name || f.name, company: ship.company || f.company },
       })
       if (r.redirect) { window.location.assign(r.redirect); return }
       setReq({ ...r.view, token })
@@ -85,7 +85,7 @@ export default function Checkout({ req, token, setReq, info }) {
           </label>
         )}
         <div className="pq-fields two">
-          <label>Attention<input required autoComplete="shipping name" value={ship.name} onChange={setS('name')} /></label>
+          <label>Attention<input autoComplete="shipping name" placeholder={f.name} value={ship.name} onChange={setS('name')} /></label>
           <label>Company<input autoComplete="shipping organization" value={ship.company} onChange={setS('company')} /></label>
           <label className="pq-span2">Street<input required autoComplete="shipping address-line1" value={ship.line1} onChange={setS('line1')} /></label>
           <label className="pq-span2">Suite, building, room<input autoComplete="shipping address-line2" value={ship.line2} onChange={setS('line2')} /></label>
@@ -110,8 +110,8 @@ export default function Checkout({ req, token, setReq, info }) {
           <label className={`pq-method ${f.method === 'invoice' ? 'on' : ''}`}>
             <input type="radio" name="method" value="invoice" checked={f.method === 'invoice'} onChange={set('method')} />
             <span><b>Invoice my company</b><span className="pq-muted">{terms
-              ? `Your account has net ${terms} terms. We start right away and you pay within ${terms} days.`
-              : 'You get an invoice right away. Pay it by bank transfer or check' + (methods.includes('card') ? ', or online' : '') + ', and we start when it is paid.'}</span></span>
+              ? `Your account has net ${terms} terms. You sign a short order agreement online, then we start and you pay within ${terms} days.`
+              : 'You sign a short order agreement online and get the invoice. Pay it by bank transfer or check' + (methods.includes('card') ? ', or online' : '') + ', and we start when it is paid.'}</span></span>
           </label>
         </div>
         {f.method === 'invoice' && (
@@ -140,15 +140,76 @@ export default function Checkout({ req, token, setReq, info }) {
       <p className="pq-muted pq-small">This total does not include shipping or sales tax. We confirm shipping with you before the parts go out.</p>
       {changed != null && <p className="pq-err" role="alert">The price changed since you last looked. The new total is {money(changed)}. Check it and place the order again.</p>}
       {err && <p className="pq-err" role="alert">{err}</p>}
-      <button className="pq-btn" disabled={busy}>{busy ? 'Placing your order…' : f.method === 'card' ? `Continue to payment, ${money(total)}` : `Place order and get the invoice, ${money(total)}`}</button>
+      <button className="pq-btn" disabled={busy}>{busy ? 'Placing your order…' : f.method === 'card' ? `Continue to payment, ${money(total)}` : `Place order and sign, ${money(total)}`}</button>
       <button type="button" className="pq-link" onClick={() => setOpen(false)}>Not now</button>
       <p className="pq-muted pq-small"><a href={pdfLink(req.ref, token)} target="_blank" rel="noopener">Save the quote as a PDF</a> for your purchasing team first.</p>
     </form>
   )
 }
 
-const STEP = { awaiting_payment: 'Waiting for payment', paid: 'Paid', po_received: 'PO received', invoiced: 'Invoiced', invoice_due: 'Invoice sent', cancelled: 'Cancelled' }
+const STEP = { awaiting_signature: 'Sign the order agreement', awaiting_payment: 'Waiting for payment', paid: 'Paid', po_received: 'PO received', invoiced: 'Invoiced', invoice_due: 'Invoice sent', cancelled: 'Cancelled' }
 export const invoiceLink = (ref, token) => `/api/public/quote/${ref}/invoice.pdf?token=${encodeURIComponent(token)}`
+export const agreementLink = (ref, token) => `/api/public/quote/${ref}/agreement.pdf?token=${encodeURIComponent(token)}`
+
+// Full width under the order: the agreement text, then the signature. Invoice orders start only once it is signed.
+export function SignAgreement({ req, token, onSigned }) {
+  const ag = req.order?.agreement
+  const me = useAccount()?.customer
+  const [f, setF] = useState({ name: '', title: '', company: '', code: '', authority: false, consent: false, agree: false })
+  const [read, setRead] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState('')
+  const [sent, setSent] = useState('')
+  const box = useRef()
+  useEffect(() => { const t = box.current; if (t && t.scrollHeight <= t.clientHeight + 40) setRead(true) }, [ag?.sha256])
+  const buyer = req.order?.buyer || {}
+  useEffect(() => { setF((x) => ({ ...x, name: x.name || buyer.name || me?.name || '', company: x.company || buyer.company || me?.company || '' })) }, [me?.id, ag?.sha256])
+  if (!ag || ag.status !== 'pending') return null
+  const set = (k) => (e) => setF({ ...f, [k]: e.target.type === 'checkbox' ? e.target.checked : e.target.value })
+  const code = async () => {
+    setErr('')
+    try { setSent((await call('POST', `/api/public/quote/${req.ref}/agreement/code`, { token })).sent_to) } catch (x) { setErr(x.message) }
+  }
+  const sign = async (e) => {
+    e.preventDefault(); setBusy(true); setErr('')
+    try { onSigned({ ...(await call('POST', `/api/public/quote/${req.ref}/agreement/sign`, { token, sha256: ag.sha256, ...f })), token }); window.scrollTo({ top: 0, behavior: 'smooth' }) } catch (x) { setErr(x.message) }
+    setBusy(false)
+  }
+  if (ag.expired) return <section id="sign" className="pq-sec pq-anchor"><h2>Order agreement</h2><p className="pq-err">This agreement was not signed within 30 days and has expired. Contact us and we will send a new one at current prices.</p></section>
+  const company = f.company || 'my company'
+  return (
+    <section id="sign" className="pq-sec pq-anchor pq-sign" aria-labelledby="sign-h">
+      <div className="pq-sign-head">
+        <h2 id="sign-h">Order agreement</h2>
+        <a href={agreementLink(req.ref, token)} target="_blank" rel="noopener">Download as PDF</a>
+      </div>
+      <p className="pq-muted pq-secnote">Read it, then sign below. Questions or changes before you sign? Contact us; nothing starts until it is signed.</p>
+      <div className="pq-agreement" ref={box} tabIndex={0} onScroll={(e) => { const t = e.currentTarget; if (t.scrollTop + t.clientHeight >= t.scrollHeight - 40) setRead(true) }}>
+        {ag.text.split('\n\n').map((para, i) => <p key={i}>{para.split('\n').map((ln, j) => <span key={j}>{j > 0 && <br />}{ln}</span>)}</p>)}
+      </div>
+      {!read && <p className="pq-muted pq-small">Scroll to the end of the agreement to sign.</p>}
+      <form onSubmit={sign} className="pq-signform">
+        <div className="pq-fields">
+          <label>Full name<input required autoComplete="name" value={f.name} onChange={set('name')} /></label>
+          <label>Title<input required autoComplete="organization-title" placeholder="Purchasing manager" value={f.title} onChange={set('title')} /></label>
+          <label>Company<input autoComplete="organization" value={f.company} onChange={set('company')} /></label>
+        </div>
+        <label className="pq-check"><input type="checkbox" checked={f.authority} onChange={set('authority')} /><span>I am authorized to sign for {company}.</span></label>
+        <label className="pq-check"><input type="checkbox" checked={f.consent} onChange={set('consent')} /><span>I agree to sign electronically and to receive this agreement and related records electronically.</span></label>
+        <label className="pq-check"><input type="checkbox" checked={f.agree} onChange={set('agree')} /><span>I have read and agree to this order agreement for order {req.ref}.</span></label>
+        {ag.needs_code && (
+          <div className="pq-fields two">
+            <label>Code from your email<input inputMode="numeric" autoComplete="one-time-code" maxLength={6} value={f.code} onChange={set('code')} /></label>
+            <div className="pq-codebtn"><button type="button" className="pq-btn ghost" onClick={code}>{sent ? 'Send another code' : 'Email me a code'}</button>{sent && <span className="pq-muted pq-small">Sent to {sent}</span>}</div>
+          </div>
+        )}
+        {f.name && <p className="pq-sigline" aria-hidden="true">{f.name}</p>}
+        {err && <p className="pq-err" role="alert">{err}</p>}
+        <button className="pq-btn" disabled={busy || !read}>{busy ? 'Signing…' : 'Sign the agreement'}</button>
+      </form>
+    </section>
+  )
+}
 
 export function OrderPanel({ order, info, token, fresh = false }) {
   const o = order
@@ -166,6 +227,12 @@ export function OrderPanel({ order, info, token, fresh = false }) {
     <div className="pq-done pq-order">
       <h2>{fresh ? 'Order placed' : 'Your order'}</h2>
       <p>Order <b>{o.number}</b>, {money(o.amount)}. <span className={`pq-ostat s-${o.status}`}>{o.status_label || STEP[o.status] || o.status}</span></p>
+      {o.status === 'awaiting_signature' && (
+        <div className="pq-signnote">
+          <p><b>One more step: sign the order agreement.</b> It sets out payment, changes and cancellations. We send the invoice and start once it is signed.</p>
+          <a className="pq-btn" href="#sign" onClick={(e) => { e.preventDefault(); document.getElementById('sign')?.scrollIntoView({ behavior: 'smooth', block: 'start' }) }}>Read and sign</a>
+        </div>
+      )}
       {fresh && o.status === 'invoice_due' && <p>Thank you. Your invoice is ready below. We start your order when it is paid{o.lead_days ? `, and parts ship about ${o.lead_days} days after that` : ''}.</p>}
       {fresh && o.status === 'invoiced' && <p>Thank you. We are starting your order{o.lead_days ? `; parts ship in about ${o.lead_days} days` : ''}. Your invoice is due {o.due_date}.</p>}
       {fresh && o.method === 'card' && <p>Thank you. We confirm the ship date by email{o.lead_days ? `; parts ship in about ${o.lead_days} days` : ''}.</p>}
@@ -175,6 +242,9 @@ export function OrderPanel({ order, info, token, fresh = false }) {
         <div><dt>Ship to</dt><dd>{[a.name, a.company, a.line1, a.line2, `${a.city}, ${a.state} ${a.zip}`].filter(Boolean).join('\n')}</dd></div>
         <div><dt>Placed</dt><dd>{(o.placed_at || '').slice(0, 10)}</dd></div>
       </dl>
+      {o.agreement && o.agreement.status !== 'pending' && token && (
+        <p className="pq-small">Order agreement {o.agreement.status === 'signed' ? `signed by ${o.agreement.signed?.name}, ${(o.agreement.signed?.at || '').slice(0, 10)}` : 'on file'}. <a href={agreementLink(o.number, token)} target="_blank" rel="noopener">Download it</a></p>
+      )}
       {o.invoice_number && token && (
         <div className="pq-save-row">
           <a className="pq-btn ghost" href={invoiceLink(o.number, token)} target="_blank" rel="noopener">{o.status === 'paid' && o.method === 'card' ? 'Download receipt' : 'Download invoice'}</a>

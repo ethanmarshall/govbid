@@ -25,8 +25,8 @@ from sqlalchemy.orm import Session
 STRIPE_API = "https://api.stripe.com/v1"
 ORDER_LABEL = {"awaiting_payment": "Waiting for card payment", "paid": "Paid", "po_received": "Purchase order received",
                "invoiced": "Invoiced", "invoice_due": "Invoice sent, we start when it is paid", "cancelled": "Cancelled",
-               "payment_review": "Payment received, we are checking it"}
-PLACED = ("paid", "po_received", "invoiced", "invoice_due", "payment_review")
+               "payment_review": "Payment received, we are checking it", "awaiting_signature": "Sign the order agreement"}
+PLACED = ("paid", "po_received", "invoiced", "invoice_due", "payment_review", "awaiting_signature")
 
 
 class CheckoutError(ValueError):
@@ -118,12 +118,15 @@ def place(db: Session, req, data: dict, customer=None, base_url: str = "") -> di
              "lines": lines, "ship_to": ship, "po_number": po, "billing_email": str(data.get("billing_email") or "").strip()[:160],
              "notes": str(data.get("notes") or "").strip()[:2000], "lead_days": (req.public_result or {}).get("lead_days")}
     redirect = None
-    if method == "invoice":
-        terms = invoicing.terms_for(customer)
-        order["status"] = "invoiced" if terms else "invoice_due"
-        req.status = "ordered"
+    if method == "invoice":  # held until the customer signs the order agreement; then the invoice is made
+        from . import agreement
+
+        order["terms_days"] = invoicing.terms_for(customer)
+        order["status"] = "awaiting_signature"
+        req.status = "submitted"
         req.submitted_at = req.submitted_at or datetime.utcnow()
-        invoicing.create(db, req, order, terms)
+        seller, state = _seller(db)
+        agreement.start(order, agreement.build(req, order, portal.get_settings(db), seller, state))
     else:
         sess = create_stripe_session(req, lines, email, base_url)
         order.update(status="awaiting_payment", stripe_session_id=sess["id"])
@@ -170,6 +173,27 @@ def create_stripe_session(req, lines: list[dict], email: str, base_url: str) -> 
         if l["desc"]:
             data[f"line_items[{i}][price_data][product_data][description]"] = l["desc"][:500]
     return _stripe("POST", "/checkout/sessions", data, _transport)
+
+
+def _seller(db: Session) -> tuple[str, str]:
+    from . import portal
+    from .models import CompanyProfile
+
+    prof = db.query(CompanyProfile).first()
+    return portal.public_info(db)["name"], (prof.state if prof else "") or ""
+
+
+def after_signing(db: Session, req) -> None:
+    """The agreement is signed (or you waived it): make the invoice and release the order."""
+    from . import invoicing
+
+    o = dict(req.order or {})
+    terms = int(o.get("terms_days") or 0)
+    o["status"] = "invoiced" if terms else "invoice_due"
+    req.status = "ordered"
+    invoicing.create(db, req, o, terms)
+    req.order = o
+    db.commit()
 
 
 def pay_invoice(db: Session, req, base_url: str) -> str:
@@ -292,5 +316,6 @@ def public_order(req) -> dict | None:
     if not o.get("number"):
         return None
     return {k: o.get(k) for k in ("number", "method", "status", "placed_at", "amount", "lines", "ship_to", "po_number", "paid_at", "lead_days",
-                                  "invoice_number", "terms_days", "due_date", "invoice_date")} | {"pay_online": stripe_enabled() and o.get("status") in ("invoiced", "invoice_due"), 
+                                  "invoice_number", "terms_days", "due_date", "invoice_date")} | {"pay_online": stripe_enabled() and o.get("status") in ("invoiced", "invoice_due"),
+        "agreement": __import__("app.agreement", fromlist=["public"]).public(o), "buyer": {"name": req.contact_name or "", "company": req.company or ""}, 
         "status_label": ORDER_LABEL.get(o.get("status"), o.get("status"))}

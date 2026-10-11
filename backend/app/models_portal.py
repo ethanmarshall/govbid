@@ -80,4 +80,6 @@ class PortalSettings(Base):
     show_codes: Mapped[bool] = mapped_column(Boolean, default=True)  # UEI, CAGE, NAICS and held certifications on the page
     # printed on invoices: how to pay (bank transfer details, where to mail a check)
     pay_instructions: Mapped[str] = mapped_column(Text, default="")
+    # the order agreement customers sign before an invoice order starts (blank: agreement.DEFAULT_TEMPLATE)
+    agreement_template: Mapped[str] = mapped_column(Text, default="")
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

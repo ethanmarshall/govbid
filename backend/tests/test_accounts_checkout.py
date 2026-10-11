@@ -18,7 +18,7 @@ SHIP = {"name": "Dana Lee", "company": "Navy school", "line1": "1 Main St", "cit
 
 @pytest.fixture
 def client():
-    for lim in (portal.QUOTE_LIMIT, portal.REPRICE_LIMIT, portal.SUBMIT_LIMIT):
+    for lim in (portal.QUOTE_LIMIT, portal.REPRICE_LIMIT, portal.SUBMIT_LIMIT, portal.SIGN_LIMIT):
         lim.clear()
     customers._fails.clear()
     with TestClient(app) as c:
@@ -104,6 +104,10 @@ def test_checkout_by_invoice(client, monkeypatch):
     r = client.post(f"/api/public/quote/{q['ref']}/checkout", json={**base, "po_number": "PO-1", "expected_total": total})
     assert r.status_code == 200, r.text
     v = r.json()["view"]
+    assert v["order"]["status"] == "awaiting_signature" and v["status"] == "submitted" and not v["order"].get("invoice_number")
+    ag = v["order"]["agreement"]
+    v = client.post(f"/api/public/quote/{q['ref']}/agreement/sign", json={"token": q["token"], "sha256": ag["sha256"], "name": "Dana Lee",
+                                                                         "title": "Buyer", "authority": True, "consent": True, "agree": True}).json()
     assert v["status"] == "ordered" and v["order"]["status"] == "invoice_due" and v["order"]["amount"] == pytest.approx(total)
     assert v["order"]["invoice_number"] and v["order"]["po_number"] == "PO-1"
     assert v["order"]["lines"][0]["qty"] == 5 and not v["checkout"]["eligible"]

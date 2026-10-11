@@ -17,7 +17,7 @@ SHIP = {"name": "Dana Lee", "line1": "1 Main St", "city": "Ballston Spa", "state
 
 @pytest.fixture
 def client():
-    for lim in (portal.QUOTE_LIMIT, portal.REPRICE_LIMIT, portal.SUBMIT_LIMIT):
+    for lim in (portal.QUOTE_LIMIT, portal.REPRICE_LIMIT, portal.SUBMIT_LIMIT, portal.SIGN_LIMIT):
         lim.clear()
     customers._fails.clear()
     with TestClient(app) as c:
