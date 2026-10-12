@@ -381,9 +381,10 @@ def build(f: dict, parts: dict | None = None):
         px, py = f["_post"]
         hgt = f["caster_height"]
         for cx, cy in ((px / 2, py / 2), (f["width"] - px / 2, py / 2), (px / 2, f["depth"] - py / 2), (f["width"] - px / 2, f["depth"] - py / 2)):
-            cx, cy = min(max(cx, 1.25), f["width"] - 1.25), min(max(cy, 1.25), f["depth"] - 1.25)  # keep the caster plate under the frame
+            wheel = min(hgt * 0.7, 6)
+            ey = max(1.25, wheel / 2) if f["base"] == "casters" else 0.75
+            cx, cy = min(max(cx, 1.25), f["width"] - 1.25), min(max(cy, ey), f["depth"] - ey)  # keep the casters under the frame
             if f["base"] == "casters":
-                wheel = min(hgt * 0.7, 6)
                 shapes.append(design._box(cx - 1.25, cy - 1.25, -0.25, 2.5, 2.5, 0.25))  # mounting plate
                 shapes.append(design._box(cx - 0.9, cy - 0.6, -(hgt - wheel / 2), 1.8, 1.2, hgt - wheel / 2 - 0.25))  # fork
                 shapes.append(design._cyl((cx - 0.5, cy, -(hgt - wheel / 2)), (1, 0, 0), wheel / 2, 1.0))  # wheel
