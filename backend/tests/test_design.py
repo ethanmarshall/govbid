@@ -291,6 +291,8 @@ def test_corner_notches_leave_one_piece_and_price_as_one_part(client):
     q = client.post("/api/public/design/quote", json={"spec": NOTCHED, "quantity": 1, "preview": True}).json()
     items = q["result"]["items"]
     assert len(items) == 1 and items[0]["kind"] == "part" and q["result"]["kind"] == "instant", items
+    procs = [o["process"] for o in items[0]["options"]["processes"]]
+    assert "3d_print" not in procs  # a 30 in plate printed in metal is not a real choice
     # a cut that splits the part is refused instead of quoted as pieces
     split = {**NOTCHED, "params": {**NOTCHED["params"], "holes": [], "pockets": [{"x": 15, "y": 11.875, "length": 1, "width": 23.75, "depth": 0}]}}
     with pytest.raises(design.DesignError):

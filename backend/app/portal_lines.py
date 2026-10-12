@@ -67,6 +67,9 @@ def _breakdown(est: dict, qty: int) -> dict:
     return {"lot_cost": round(lot, 2), "per_part": {k: round(v, 2) for k, v in per.items()}, "qty": qty}
 
 
+ALT_MAX_RATIO = 5  # other processes offered to the customer: up to this many times the best price
+
+
 class Ctx:
     def __init__(self, db: Session, req, s, cfg: dict, over: dict):
         self.db, self.req, self.s, self.cfg, self.over = db, req, s, cfg, over
@@ -170,6 +173,10 @@ def part_line(ctx: Ctx, key: str, file_id: str, name: str, *, group: str = "", q
                                                       "consider Inconel 718 or stainless steel for this line.", "check"))
     alts = [{"process": x["process"], "material": x["material"], "label": x["label"], "unit_price": _price_calibrated(
         ctx.fs, "cnc_5axis" if x["five_axis"] else x["process"], x["unit_price"])[0], "note": x["note"]} for x in options]
+    # don't offer a process that costs many times the best one (a large flat plate 3D printed in metal, say)
+    best = min((a["unit_price"] for a in alts if a["unit_price"]), default=None)
+    if best:
+        alts = [a for a in alts if a["process"] == chosen["process"] or not a["unit_price"] or a["unit_price"] <= best * ALT_MAX_RATIO]
     route = "instant"
     reason = ""
     if cx.get("level") in ("complex", "very complex") or five:
