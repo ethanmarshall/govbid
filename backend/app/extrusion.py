@@ -898,10 +898,38 @@ def normalize_lines(lines: list[dict]) -> list[dict]:
     return out
 
 
+def with_quote_prices(cfg: dict, options: dict | None) -> dict:
+    """The config with this quote's own prices (options prices and cut_charge) laid over the shop's catalog prices."""
+    over = (options or {}).get("prices") or {}
+    cut = (options or {}).get("cut_charge")
+    if not over and cut in (None, ""):
+        return cfg
+    import copy
+
+    cfg = copy.deepcopy(cfg)
+    ext = cfg["extrusion"]
+    prices = ext.setdefault("prices", {})
+    for kind in ("profiles", "hardware", "panels"):
+        for k, v in (over.get(kind) or {}).items():
+            if v not in (None, ""):
+                prices.setdefault(kind, {})[k] = float(v)
+    for op, v in (over.get("machining") or {}).items():
+        if v not in (None, ""):
+            ext.setdefault("machining", {})[op] = float(v)
+    if cut not in (None, ""):
+        ext["cut_charge"] = float(cut)
+    return cfg
+
+
 def price_build(lines: list[dict], config: dict | None = None, quantities: list[int] | None = None, options: dict | None = None) -> dict:
     """Price a T-slot build. Returns the pricing.estimate shape (per_part_lines are per build) plus nesting,
-    cut list and purchase list data."""
+    cut list and purchase list data.
+
+    options (all optional): pricing_mode, joints, and prices for this quote only, from a distributor quote or web
+    cart: prices = {profiles: {id: $/in}, hardware: {id: $/each}, panels: {id: $/sq ft}, machining: {op: $/op}},
+    cut_charge = $/cut. A profile line with a unit_price is one supplier piece at that price (material and cut)."""
     cfg = pricing.merged_config(config)  # saved overrides or a full config; both merge onto the defaults
+    cfg = with_quote_prices(cfg, options)
     ext = cfg["extrusion"]
     rates = cfg["rates"]
     opts = dict(options or {})
@@ -918,6 +946,7 @@ def price_build(lines: list[dict], config: dict | None = None, quantities: list[
     if not qtys:
         raise ExtrusionError("Give at least one build quantity")
     mode = opts.get("pricing_mode") or ext.get("pricing_mode", "cut_to_length")
+    cut_charge = ext["cut_charge"]
     if mode not in ("cut_to_length", "stock"):
         raise ExtrusionError("pricing_mode must be cut_to_length or stock")
     warnings: list[str] = []
@@ -929,6 +958,7 @@ def price_build(lines: list[dict], config: dict | None = None, quantities: list[
     pieces_by_profile: dict[str, list[tuple[float, int, dict]]] = defaultdict(list)
     cut_rows = []
     n_pieces = 0
+    piece_priced = []  # supplier pieces with a price entered for this quote
     weight = 0.0
     for ln in lines:
         if ln["kind"] != "profile" or ln["qty"] <= 0:
@@ -940,8 +970,11 @@ def price_build(lines: list[dict], config: dict | None = None, quantities: list[
         if not ln["length_in"] or ln["length_in"] <= 0:
             warnings.append(f"{p['id']} line {ln['item'] or ''} has no length; left out.".replace("  ", " "))
             continue
-        pieces_by_profile[p["id"]].append((ln["length_in"], ln["qty"], ln))
-        n_pieces += ln["qty"]
+        if ln["unit_price"] is not None:
+            piece_priced.append((p, ln))
+        else:
+            pieces_by_profile[p["id"]].append((ln["length_in"], ln["qty"], ln))
+            n_pieces += ln["qty"]
         if p.get("weight_lb_per_in"):
             weight += p["weight_lb_per_in"] * ln["length_in"] * ln["qty"]
         cut_rows.append(ln)
@@ -981,6 +1014,11 @@ def price_build(lines: list[dict], config: dict | None = None, quantities: list[
         per_build.append(_line_obj("material", f"{pid} profile", cost, rate=p["price_per_in"], note=note))
         if any(nest0[pid]["oversize"]):
             warnings.append(f"{pid}: {len(nest0[pid]['oversize'])} piece(s) longer than a {nest0[pid]['stock_length_in']:g} in stick. Special order or splice.")
+    piece_cost = 0.0
+    for p, ln in piece_priced:
+        piece_cost += ln["qty"] * ln["unit_price"]
+        per_build.append(_line_obj("material", f"{p['id']} profile, {ln['qty']} piece(s) at {ln['length_in']:g} in", ln["qty"] * ln["unit_price"],
+                                   rate=ln["unit_price"], note="piece price entered (material and cut)"))
     if mode == "stock" and len(qtys) > 1:
         assumptions.append("Stock mode: pieces for the whole lot are nested into full sticks, so material per build changes with quantity. "
                            f"The material lines show quantity {qtys[0]}; price breaks use each quantity's nesting.")
@@ -990,7 +1028,7 @@ def price_build(lines: list[dict], config: dict | None = None, quantities: list[
             h = ext["inhouse_cut_minutes"] * n_pieces / 60
             per_build.append(_line_obj("cutting", f"saw cuts in house, {n_pieces} piece(s)", h * rates["fabrication"], hours=h, rate=rates["fabrication"]))
         else:
-            per_build.append(_line_obj("cutting", f"supplier cut charge, {n_pieces} cut(s)", n_pieces * ext["cut_charge"], rate=ext["cut_charge"]))
+            per_build.append(_line_obj("cutting", f"supplier cut charge, {n_pieces} cut(s)", n_pieces * cut_charge, rate=cut_charge))
 
     # ---- machining
     op_counts: Counter = Counter()
@@ -1095,13 +1133,13 @@ def price_build(lines: list[dict], config: dict | None = None, quantities: list[
     for q in qtys:
         mat, nest = (mat0, nest0) if q == qtys[0] else material_for(q)
         nest_by_q[q] = nest
-        cost = (build_cost_ex_mat * q) + mat + lot_cost
+        cost = (build_cost_ex_mat + piece_cost) * q + mat + lot_cost
         price = max(cost * (1 + ga) * (1 + profit), cfg["min_lot_charge"])
         days = cfg["lead_time"]["base_days"] + int(ext["supplier_lead_days"]) + lead_extra + math.ceil(q / max(ext["builds_per_day"], 1))
         breaks.append({"quantity": q, "total_cost": round(cost, 2), "unit_cost": round(cost / q, 2),
                        "unit_price": round(price / q, 2), "total_price": round(price, 2),
                        "margin_pct": round((price - cost) / price * 100, 1) if price else 0.0, "lead_time_days": days})
-    if not pieces_by_profile:
+    if not pieces_by_profile and not piece_priced:
         warnings.append("No priced extrusion profiles in this build.")
     assumptions.append(f"Profile pricing: {'full sticks nested first-fit decreasing, cut in house' if mode == 'stock' else 'supplier cuts to length, price per inch plus a cut charge'}.")
     assumptions.append("Catalog prices are placeholders until you enter your distributor's prices in the Extrusion rates panel.")

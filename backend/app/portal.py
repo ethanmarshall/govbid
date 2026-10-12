@@ -782,8 +782,10 @@ def _tslot_frame(ctx, req: PortalRequest, key: str, name: str, groups: list[dict
     lines += [{"kind": "panel", "catalog_id": pid, "qty": q, "width_in": a, "height_in": b, "description": nm} for (pid, a, b, nm), q in pan.items()]
     tkey = f"{key}#tslot"
     qty = ctx.qty(tkey, 1)
+    model_lines = lines
+    lines, bom_opts, edits = _bom(ctx, tkey, lines)
     try:
-        r = extrusion.price_build(lines, cfg, [qty])
+        r = extrusion.price_build(lines, cfg, [qty], bom_opts)
     except Exception as exc:  # noqa: BLE001
         from . import portal_lines as PL
 
@@ -801,14 +803,15 @@ def _tslot_frame(ctx, req: PortalRequest, key: str, name: str, groups: list[dict
     facts.append({"label": "Joining", "value": (f"{anchors_total} anchor fasteners, one per joined member end and two on a 1530-size end (measured from the model)" if joints
                                                 else "Estimated at one anchor fastener and counterbore per member end; the model does not show the fasteners."),
                   **({} if joints else {"flag": "assumed"})})
-    confident = joints is not None
+    confident = joints is not None or edits.get("lines") is not None
     route = "instant" if (confident and not s.frame_review) else "estimate"
     ln = _item_line(ctx, tkey, _item("T-slot extrusion frame", route, f"{pieces} members cut to length, {', '.join(sorted({c['profile'] for _, c in members}))}, with hardware",
-                                     r["price_breaks"], qty, kind="frame", spec={"lines": lines, "costs": r.get("per_part_lines"), "lot": r.get("per_lot_lines"),
+                                     r["price_breaks"], qty, kind="frame", spec={"lines": lines, "model_lines": model_lines, "bom": edits,
+                                                                                  "costs": r.get("per_part_lines"), "lot": r.get("per_lot_lines"),
                                                                                   "joints_measured": confident}, facts=facts,
                                      public_reason=("Priced from the parts list in your model; an engineer confirms it before the order." if confident else
                                                     "Frame members are priced as cut-to-length extrusion. An engineer confirms the joining hardware."),
-                                     internal_reasons=[x for x in r.get("warnings", [])[:4] + [r.get("config_note") or ""] if x]), qty, "extrusion")
+                                     internal_reasons=_bom_notes(edits) + [x for x in r.get("warnings", [])[:4] + [r.get("config_note") or ""] if x]), qty, "extrusion")
     ln["group"] = name
     if confident:
         ln["band"] = [0.0, float(s.frame_band_pct or 0)]
@@ -827,8 +830,9 @@ def _frame_line(ctx, req: PortalRequest, f: dict, cfg: dict) -> dict:
         spec = design.clean(json.loads(file_path(req, f).read_bytes()))
         P = spec["params"]
         parts = frame_mod.members(P)
-        lines = frame_mod.extrusion_lines(parts, P["family"])
-        r = extrusion.price_build(lines, cfg, [qty])
+        model_lines = frame_mod.extrusion_lines(parts, P["family"])
+        lines, bom_opts, edits = _bom(ctx, key, model_lines)
+        r = extrusion.price_build(lines, cfg, [qty], bom_opts)
     except Exception as exc:  # noqa: BLE001
         from . import portal_lines as PL
 
@@ -841,11 +845,12 @@ def _frame_line(ctx, req: PortalRequest, f: dict, cfg: dict) -> dict:
     s = ctx.s
     route = "estimate" if s.frame_review else "instant"
     ln = _item_line(ctx, key, _item(spec["name"], route, desc, r["price_breaks"], qty, kind="frame",
-                                    spec={"frame": P, "lines": lines, "costs": r.get("per_part_lines"), "lot": r.get("per_lot_lines"), "joints_measured": True},
+                                    spec={"frame": P, "lines": lines, "model_lines": model_lines, "bom": edits, "costs": r.get("per_part_lines"),
+                                          "lot": r.get("per_lot_lines"), "joints_measured": True},
                                     facts=facts, view=view,
                                     public_reason=("Priced from the parts list of your design. An engineer checks door hardware and latches before we confirm the order."
                                                    if s.frame_review else ""),
-                                    internal_reasons=[x for x in r.get("warnings", [])[:4] + [r.get("config_note") or ""] if x]), qty, "extrusion")
+                                    internal_reasons=_bom_notes(edits) + [x for x in r.get("warnings", [])[:4] + [r.get("config_note") or ""] if x]), qty, "extrusion")
     ln["band"] = [0.0, float(s.frame_band_pct or 0)]
     return ln
 
@@ -1117,7 +1122,101 @@ def _clean_opts(req: PortalRequest, data: dict, max_qty: int) -> None:
 LINE_PROCESSES = {"cnc_mill", "cnc_lathe", "sheet_metal", "3d_print"}
 
 
-def merge_line_opts(current: dict, changes: dict, max_qty: int, internal: bool = False) -> dict:
+BOM_KINDS = ("profile", "hardware", "panel", "custom")
+
+
+def clean_bom(v, cfg: dict | None = None) -> dict:
+    """Your edits to a T-slot frame line in review: {lines: [...] to replace the parts list read from the model (left
+    out: use the model's), prices: {profiles|hardware|panels|machining: {id: price}} for this quote only, cut_charge}."""
+    from .extrusion import ExtrusionError, normalize_lines
+    from .extrusion_catalog import MACHINING_OPS, catalog
+
+    if not isinstance(v, dict):
+        raise PortalError("The parts list is not valid.")
+    cat = catalog((cfg or {}).get("extrusion") and cfg)
+    ids = {"profile": {p["id"] for p in cat["profiles"]}, "hardware": {h["id"] for h in cat["hardware"]},
+           "panel": {p["id"] for p in cat["panels"]}}
+    out: dict = {}
+
+    def money(x, what):
+        try:
+            x = round(float(x), 4)
+        except (TypeError, ValueError):
+            raise PortalError(f"{what}: enter a number.")
+        if not 0 <= x <= 100000:
+            raise PortalError(f"{what}: the price must be between 0 and 100,000.")
+        return x
+
+    if v.get("lines") is not None:
+        raw = v["lines"]
+        if not isinstance(raw, list) or len(raw) > 300:
+            raise PortalError("The parts list is not valid (300 lines at most).")
+        try:
+            lines = normalize_lines([{k: ln.get(k) for k in ("kind", "catalog_id", "qty", "length_in", "width_in", "height_in", "unit_price",
+                                                            "machining", "description")} for ln in raw if isinstance(ln, dict)])
+        except ExtrusionError as exc:
+            raise PortalError(str(exc)) from exc
+        clean = []
+        for i, ln in enumerate(lines, 1):
+            kind = ln.get("kind")
+            if kind not in BOM_KINDS:
+                raise PortalError(f"Parts list line {i}: unknown kind.")
+            if not 0 <= ln["qty"] <= 100000:
+                raise PortalError(f"Parts list line {i}: quantity must be between 0 and 100,000.")
+            if kind == "custom":
+                if not str(ln.get("description") or "").strip():
+                    raise PortalError(f"Parts list line {i}: describe the item.")
+                if ln["unit_price"] is None:
+                    raise PortalError(f"Parts list line {i}: enter a price for {ln['description'][:40]}.")
+            elif ln.get("catalog_id") not in ids[kind]:
+                raise PortalError(f"Parts list line {i}: pick an item from the catalog.")
+            if kind == "profile" and not (ln["length_in"] and 0 < ln["length_in"] <= 600):
+                raise PortalError(f"Parts list line {i}: enter a length up to 600 in.")
+            if kind == "panel" and not (ln["width_in"] and ln["height_in"] and ln["width_in"] <= 240 and ln["height_in"] <= 240):
+                raise PortalError(f"Parts list line {i}: enter the panel width and height (up to 240 in).")
+            if ln["unit_price"] is not None:
+                ln["unit_price"] = money(ln["unit_price"], f"Parts list line {i}")
+            ops = [o for o in ln["machining"] if o["op"] in MACHINING_OPS and 0 < o["count"] <= 100]
+            clean.append({"kind": kind, "catalog_id": ln.get("catalog_id") or "", "qty": ln["qty"], "length_in": ln["length_in"],
+                          "width_in": ln["width_in"], "height_in": ln["height_in"], "unit_price": ln["unit_price"], "machining": ops,
+                          "description": str(ln.get("description") or "")[:200]})
+        out["lines"] = clean
+    prices = {}
+    known = {"profiles": ids["profile"], "hardware": ids["hardware"], "panels": ids["panel"], "machining": set(MACHINING_OPS)}
+    for kind, vals in (v.get("prices") or {}).items():
+        if kind not in known or not isinstance(vals, dict):
+            continue
+        got = {str(k): money(x, str(k)) for k, x in vals.items() if str(k) in known[kind] and x not in (None, "")}
+        if got:
+            prices[kind] = got
+    if prices:
+        out["prices"] = prices
+    if v.get("cut_charge") not in (None, ""):
+        out["cut_charge"] = money(v["cut_charge"], "Cut charge")
+    if v.get("note"):
+        out["note"] = str(v["note"])[:300]
+    return out
+
+
+def _bom(ctx, key: str, lines: list[dict]) -> tuple[list[dict], dict, dict]:
+    """(lines to price, price_build options, the saved edits) for a frame line, with your review edits applied."""
+    b = ctx.opt(key).get("bom") or {}
+    return (b["lines"] if b.get("lines") is not None else lines), {k: b[k] for k in ("prices", "cut_charge") if k in b}, b
+
+
+def _bom_notes(edits: dict) -> list[str]:
+    out = []
+    if edits.get("lines") is not None:
+        out.append("Priced from the parts list you edited in review, not the one read from the model.")
+    n = sum(len(x) for x in (edits.get("prices") or {}).values()) + (1 if edits.get("cut_charge") is not None else 0)
+    if n:
+        out.append(f"{n} distributor price(s) entered for this quote replace your catalog prices.")
+    if edits.get("note"):
+        out.append(f"Price source: {edits['note']}")
+    return out
+
+
+def merge_line_opts(current: dict, changes: dict, max_qty: int, internal: bool = False, cfg: dict | None = None) -> dict:
     """Validate and merge per-line choices {line key: {qty, material, finish, process, process_material}}.
     internal adds final_unit_price (your price in review). A value of null removes that choice."""
     if not isinstance(changes, dict) or len(changes) > 300:
@@ -1148,6 +1247,11 @@ def merge_line_opts(current: dict, changes: dict, max_qty: int, internal: bool =
                 v = float(v)
                 if not 0.005 <= v <= 6:
                     raise PortalError("Thickness must be between 0.005 and 6 inches.")
+            elif k == "bom" and internal:  # a frame's parts list and prices edited in review
+                v = clean_bom(v, cfg)
+                if not v:
+                    cur.pop(k, None)
+                    continue
             elif k == "final_unit_price" and internal:
                 v = round(float(v), 2)
                 if v <= 0:

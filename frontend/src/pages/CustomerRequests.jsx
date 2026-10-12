@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { Fragment, useEffect, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { api } from '../api'
 import { PartsTable } from '../public/PublicQuote'
@@ -227,24 +227,172 @@ const siteText = (site) => ({ about: site.about || '', capabilities: toCaps(site
   industries: (site.industries || []).join('\n'), quality: (site.quality || []).join('\n'), faq: toFaq(site.faq) })
 const siteFrom = (t) => ({ about: t.about, capabilities: fromCaps(t.capabilities), experience: lines(t.experience), industries: lines(t.industries), quality: lines(t.quality), faq: fromFaq(t.faq) })
 
-// What a T-slot frame line was priced from: the cut list and hardware read from the model, then each cost.
-function FrameBom({ it }) {
-  const facts = (it.facts || []).filter((f) => f.label !== 'Overall size')
+// A T-slot frame line in review: the parts list read from the model (or your edited copy), the prices it uses, and
+// what each cost came to. Prices entered here apply to this quote only, unless you also save them as your rates.
+const BOM_KIND = { profile: 'Extrusion cut', hardware: 'Hardware', panel: 'Panel', custom: 'Other item' }
+const OPS = { counterbore: 'cbore', miter_cut: 'miter', end_tap: 'end tap', access_hole: 'access hole', drill_thru: 'drill', drill_thru_cbore: 'drill + cbore', miter_cbore: 'miter cbore', central_connector_cbore: 'central conn.' }
+let catalogCache = null
+const loadCatalog = () => (catalogCache ||= api.get('/api/extrusion/catalog').catch((e) => { catalogCache = null; throw e }))
+
+function FrameBom({ it, id, setR, setMsg, setErr }) {
+  const bom = it.spec.bom || {}
+  const [cat, setCat] = useState(null)
+  const [lines, setLines] = useState(() => structuredClone(bom.lines ?? it.spec.model_lines ?? it.spec.lines ?? []))
+  const [prices, setPrices] = useState(() => structuredClone(bom.prices || {}))
+  const [cut, setCut] = useState(bom.cut_charge ?? '')
+  const [note, setNote] = useState(bom.note || '')
+  const [saveRates, setSaveRates] = useState(false)
+  const [busy, setBusy] = useState(false)
+  useEffect(() => { loadCatalog().then(setCat).catch((e) => setErr(e.message)) }, [])
+  useEffect(() => { // the server's copy after each save
+    const b = it.spec.bom || {}
+    setLines(structuredClone(b.lines ?? it.spec.model_lines ?? it.spec.lines ?? [])); setPrices(structuredClone(b.prices || {})); setCut(b.cut_charge ?? ''); setNote(b.note || '')
+  }, [it.spec])
+  if (!cat) return <p className="small muted">Loading the catalog…</p>
+
+  const byId = {
+    profile: Object.fromEntries(cat.profiles.map((p) => [p.id, p])),
+    hardware: Object.fromEntries(cat.hardware.map((h) => [h.id, h])),
+    panel: Object.fromEntries(cat.panels.map((p) => [p.id, p])),
+  }
+  const group = { profile: 'profiles', hardware: 'hardware', panel: 'panels' }
+  const rateOf = (kind, cid) => { const x = byId[kind]?.[cid]; return kind === 'profile' ? x?.price_per_in : kind === 'panel' ? x?.price_per_sqft : x?.unit_price }
+  const unit = { profile: '$/in', hardware: '$/each', panel: '$/sq ft' }
+  const setLine = (i, ch) => setLines(lines.map((l, j) => (j === i ? { ...l, ...ch } : l)))
+  const setOp = (i, op, n) => {
+    const ops = (lines[i].machining || []).filter((o) => o.op !== op)
+    setLine(i, { machining: n > 0 ? [...ops, { op, count: n }] : ops })
+  }
+  const setPrice = (g, k, v) => setPrices((old) => {
+    const out = structuredClone(old)
+    out[g] = { ...(out[g] || {}) }
+    if (v === '') delete out[g][k]; else out[g][k] = Number(v)
+    if (!Object.keys(out[g]).length) delete out[g]
+    return out
+  })
+  const fam = (() => { const p = lines.find((l) => l.kind === 'profile'); return byId.profile[p?.catalog_id]?.family || '15' })()
+  const add = (kind) => setLines([...lines, kind === 'profile' ? { kind, catalog_id: lines.find((l) => l.kind === 'profile')?.catalog_id || '1515', qty: 1, length_in: 12, machining: [] }
+    : kind === 'hardware' ? { kind, catalog_id: cat.hardware.find((h) => h.family === fam)?.id || cat.hardware[0].id, qty: 1 }
+      : kind === 'panel' ? { kind, catalog_id: cat.panels[0].id, qty: 1, width_in: 12, height_in: 12 } : { kind, description: '', qty: 1, unit_price: '' }])
+
+  // every catalog item and machining op this parts list uses, for its price for this quote
+  const used = []
+  const seen = new Set()
+  lines.forEach((l) => {
+    if (l.kind !== 'custom' && l.catalog_id && !seen.has(l.kind + l.catalog_id)) { seen.add(l.kind + l.catalog_id); used.push({ kind: l.kind, id: l.catalog_id }) }
+  })
+  const ops = [...new Set(lines.flatMap((l) => (l.kind === 'profile' ? (l.machining || []).map((o) => o.op) : [])))]
+  const opRate = Object.fromEntries(cat.machining.map((m) => [m.id, m.price]))
+
+  const save = async (b) => {
+    setBusy(true); setErr('')
+    try {
+      const x = await api.put(`/api/portal/requests/${id}/lines`, { lines: { [it.key]: { bom: b } } })
+      if (saveRates && b) {
+        const cfg = structuredClone(cat.config)
+        cfg.prices = cfg.prices || {}
+        for (const g of ['profiles', 'hardware', 'panels']) cfg.prices[g] = { ...(cfg.prices[g] || {}), ...(b.prices?.[g] || {}) }
+        cfg.machining = { ...(cfg.machining || {}), ...(b.prices?.machining || {}) }
+        if (b.cut_charge !== undefined && b.cut_charge !== '') cfg.cut_charge = Number(b.cut_charge)
+        await api.put('/api/pricing/config', { changes: { extrusion: cfg } })
+        catalogCache = null
+        setCat(await loadCatalog())
+      }
+      setR(x)
+      setMsg(!b ? 'Back to the parts list and prices read from the model.' : saveRates ? 'Saved for this quote and as your extrusion rates. Reprice other requests to use them.' : 'Saved for this quote and repriced.')
+    } catch (e) { setErr(e.message) } finally { setBusy(false) }
+  }
+  const edited = bom.lines != null || bom.prices || bom.cut_charge != null
+  const priceInput = (g, k, rate, step = '0.01') => (
+    <input type="number" min="0" step={step} style={{ width: 80 }} placeholder={rate != null ? String(rate) : ''}
+      value={prices[g]?.[k] ?? ''} onChange={(e) => setPrice(g, k, e.target.value)} />
+  )
   const costs = it.spec.costs || []
   const total = costs.reduce((a, c) => a + (c.cost || 0), 0)
   return (
-    <div style={{ marginTop: 6, minWidth: 420 }}>
-      <ul className="clean" style={{ margin: '0 0 6px' }}>{facts.map((f, j) => (
-        <li key={j}><b>{f.label}</b>: {f.value}{f.flag === 'assumed' && <span className="due-soon"> assumed</span>}</li>
-      ))}</ul>
+    <div className="panel frame-bom" style={{ margin: '10px 0', minWidth: 0 }}>
+      <div className="row spread"><b>{it.name}: parts list{edited ? ' (edited for this quote)' : ' (read from the model)'}</b>
+        {it.spec.joints_measured && <span className="small muted">Joints measured from the model</span>}</div>
+
+      <h3>Prices for this quote</h3>
+      <p className="small muted" style={{ marginTop: 0 }}>Enter what your distributor charges today. Blank uses your rate, shown in gray.</p>
       <table className="small">
+        <thead><tr><th>Item</th><th>Unit</th><th>This quote</th></tr></thead>
+        <tbody>
+          {used.map(({ kind, id: cid }) => (
+            <tr key={kind + cid}><td>{byId[kind]?.[cid]?.name || cid}</td><td className="muted">{unit[kind]}</td>
+              <td>{priceInput(group[kind], cid, rateOf(kind, cid), kind === 'profile' ? '0.001' : '0.01')}</td></tr>
+          ))}
+          {ops.map((op) => <tr key={op}><td>{cat.machining.find((m) => m.id === op)?.name || op}</td><td className="muted">$/operation</td><td>{priceInput('machining', op, opRate[op])}</td></tr>)}
+          {lines.some((l) => l.kind === 'profile') && (
+            <tr><td>Supplier cut charge</td><td className="muted">$/cut</td>
+              <td><input type="number" min="0" step="0.01" style={{ width: 80 }} placeholder={String(cat.config.cut_charge ?? '')} value={cut} onChange={(e) => setCut(e.target.value)} /></td></tr>
+          )}
+        </tbody>
+      </table>
+      <label className="f" style={{ maxWidth: 420, marginTop: 6 }}>Where the prices came from (optional)
+        <input value={note} maxLength={300} onChange={(e) => setNote(e.target.value)} placeholder="80/20 web cart, Oct 12" /></label>
+
+      <h3>Parts</h3>
+      <div style={{ overflowX: 'auto' }}>
+        <table className="small">
+          <thead><tr><th>Type</th><th>Item</th><th>Qty</th><th>Size (in)</th><th>Machining each</th><th>Price each</th><th /></tr></thead>
+          <tbody>{lines.map((l, i) => (
+            <tr key={i}>
+              <td>{BOM_KIND[l.kind]}</td>
+              <td style={{ minWidth: 170 }}>
+                {l.kind === 'custom'
+                  ? <input value={l.description || ''} placeholder="Latch, bracket, labor..." onChange={(e) => setLine(i, { description: e.target.value })} />
+                  : <select value={l.catalog_id} onChange={(e) => setLine(i, { catalog_id: e.target.value })} style={{ maxWidth: 210 }}>
+                    {(l.kind === 'profile' ? cat.profiles : l.kind === 'panel' ? cat.panels : cat.hardware.filter((h) => !h.family || h.family === byId.hardware[l.catalog_id]?.family || h.id === l.catalog_id))
+                      .map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}
+                  </select>}
+                {l.kind !== 'custom' && l.description && <div className="muted">{String(l.description).toLowerCase().slice(0, 80)}</div>}
+              </td>
+              <td><input type="number" min="0" step="1" style={{ width: 60 }} value={l.qty ?? ''} onChange={(e) => setLine(i, { qty: e.target.value === '' ? '' : Number(e.target.value) })} /></td>
+              <td style={{ whiteSpace: 'nowrap' }}>
+                {l.kind === 'profile' && <input type="number" min="0" step="0.0625" style={{ width: 75 }} value={l.length_in ?? ''} onChange={(e) => setLine(i, { length_in: e.target.value === '' ? '' : Number(e.target.value) })} />}
+                {l.kind === 'panel' && <>
+                  <input type="number" min="0" step="0.0625" style={{ width: 65 }} value={l.width_in ?? ''} onChange={(e) => setLine(i, { width_in: e.target.value === '' ? '' : Number(e.target.value) })} /> x{' '}
+                  <input type="number" min="0" step="0.0625" style={{ width: 65 }} value={l.height_in ?? ''} onChange={(e) => setLine(i, { height_in: e.target.value === '' ? '' : Number(e.target.value) })} />
+                </>}
+              </td>
+              <td style={{ whiteSpace: 'nowrap' }}>{l.kind === 'profile' && ['counterbore', 'miter_cut', 'end_tap'].map((op) => (
+                <label key={op} className="muted" style={{ marginRight: 6 }}>{OPS[op]} <input type="number" min="0" max="100" step="1" style={{ width: 44 }}
+                  value={(l.machining || []).find((o) => o.op === op)?.count ?? 0} onChange={(e) => setOp(i, op, Number(e.target.value) || 0)} /></label>
+              ))}</td>
+              <td>
+                {l.kind === 'panel' ? <span className="muted">by sq ft</span>
+                  : <input type="number" min="0" step="0.01" style={{ width: 80 }}
+                    placeholder={l.kind === 'custom' ? 'required' : l.kind === 'profile' ? 'by inch' : String(prices.hardware?.[l.catalog_id] ?? rateOf('hardware', l.catalog_id) ?? '')}
+                    title={l.kind === 'profile' ? 'Optional: the supplier price for one cut piece (material and cut). Blank prices it by the inch.' : ''}
+                    value={l.unit_price ?? ''} onChange={(e) => setLine(i, { unit_price: e.target.value === '' ? null : Number(e.target.value) })} />}
+              </td>
+              <td><button className="link small" onClick={() => setLines(lines.filter((_, j) => j !== i))}>Remove</button></td>
+            </tr>
+          ))}</tbody>
+        </table>
+      </div>
+      <div className="row" style={{ gap: 6, marginTop: 6 }}>
+        <button className="small-btn" onClick={() => add('hardware')}>Add hardware</button>
+        <button className="small-btn" onClick={() => add('custom')}>Add other item</button>
+        <button className="small-btn" onClick={() => add('profile')}>Add extrusion cut</button>
+        <button className="small-btn" onClick={() => add('panel')}>Add panel</button>
+      </div>
+      <label className="check" style={{ marginTop: 10 }}><input type="checkbox" checked={saveRates} onChange={(e) => setSaveRates(e.target.checked)} /> Also save these prices as my extrusion rates for future quotes</label>
+      <div className="row" style={{ gap: 6, marginTop: 6 }}>
+        <button className="primary" disabled={busy} onClick={() => save({ lines, prices, cut_charge: cut === '' ? null : cut, note })}>{busy ? 'Saving…' : 'Save and reprice'}</button>
+        {edited && <button disabled={busy} onClick={() => save(null)}>Go back to the model's parts list and my rates</button>}
+      </div>
+
+      <h3>What it costs</h3>
+      <div style={{ overflowX: 'auto' }}><table className="small">
         <tbody>{costs.map((c, j) => (
           <tr key={j}><td>{c.category}</td><td>{c.item}{c.note && <div className="muted">{c.note}</div>}</td>
-            <td className="mono">{c.hours != null ? `${c.hours} h` : ''}</td><td className="mono">{usd(c.cost)}</td></tr>
+            <td className="mono">{c.rate != null && c.hours == null ? `@ ${usd(c.rate)}` : c.hours != null ? `${c.hours} h` : ''}</td><td className="mono">{usd(c.cost)}</td></tr>
         ))}
-          <tr><td /><td><b>Cost for one build</b></td><td /><td className="mono"><b>{usd(total)}</b></td></tr></tbody>
-      </table>
-      <p className="muted" style={{ margin: '4 0 0' }}>Rates come from Extrusion rates in Pricing settings. Change a rate there and reprice the request to update this.</p>
+          <tr><td /><td><b>Cost for one build</b> (before G&A, profit and per-lot costs)</td><td /><td className="mono"><b>{usd(total)}</b></td></tr></tbody>
+      </table></div>
     </div>
   )
 }
@@ -266,7 +414,8 @@ function LineTable({ r, id, setR, setMsg, setErr }) {
       <table className="small">
         <thead><tr><th>Line</th><th>Qty</th><th>Route</th><th>Setup (lot)</th><th>Run (each)</th><th>Cost each</th><th>Tool price</th><th>Calibration</th><th>Price each</th><th>Margin</th><th>Final price each</th></tr></thead>
         <tbody>{items.map((it) => (
-          <tr key={it.key}>
+          <Fragment key={it.key}>
+          <tr>
             <td style={{ minWidth: 200 }}><b>{it.name}</b>{it.group && <div className="muted">{it.group}</div>}<div className="muted">{it.desc}</div>
               {it.internal_reasons?.length > 0 && (
                 <>
@@ -274,13 +423,10 @@ function LineTable({ r, id, setR, setMsg, setErr }) {
                   {open[it.key] && <ul className="clean muted" style={{ marginTop: 4 }}>{it.internal_reasons.slice(0, 8).map((x, j) => <li key={j}>{x}</li>)}</ul>}
                 </>
               )}
-              {it.spec?.costs?.length > 0 && (
-                <>
-                  <div><button className="link small" onClick={() => setOpen({ ...open, [`${it.key}#bom`]: !open[`${it.key}#bom`] })}>
-                    {open[`${it.key}#bom`] ? 'Hide parts list' : 'Parts list and costs'}</button>
-                    {it.spec.joints_measured && <span className="muted"> (joints measured from the model)</span>}</div>
-                  {open[`${it.key}#bom`] && <FrameBom it={it} />}
-                </>
+              {it.spec?.costs && (
+                <div><button className="link small" onClick={() => setOpen({ ...open, [`${it.key}#bom`]: !open[`${it.key}#bom`] })}>
+                  {open[`${it.key}#bom`] ? 'Hide parts list' : 'Edit parts list and prices'}</button>
+                  {(it.spec.bom?.lines || it.spec.bom?.prices || it.spec.bom?.cut_charge != null) && <span className="due-soon"> edited</span>}</div>
               )}</td>
             <td className="mono">{it.qty}{it.qty_per > 1 ? <div className="muted">{it.qty_per}/set</div> : null}</td>
             <td>{it.route}{it.incomplete && <div className="due-soon">incomplete</div>}</td>
@@ -299,8 +445,10 @@ function LineTable({ r, id, setR, setMsg, setErr }) {
               </div>
             </td>
           </tr>
+          </Fragment>
         ))}</tbody>
       </table>
+      {items.filter((it) => open[`${it.key}#bom`] && it.spec?.costs).map((it) => <FrameBom key={it.key} it={it} id={id} setR={setR} setMsg={setMsg} setErr={setErr} />)}
     </div>
   )
 }

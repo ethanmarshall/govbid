@@ -221,3 +221,50 @@ def test_tslot_panels_by_name():
     assert tslot.panel_for("Front acrylic panel", 0.12) == "PANEL-ACR-125"
     assert tslot.panel_for("Side_infill_ACM", 0.118, "PC") == "PANEL-ACM-118"
     assert tslot.panel_for("Side_plate", 0.236) is None and tslot.panel_for("Aluminum infill panel", 0.125) is None
+
+
+def test_quote_prices_override_catalog_prices():
+    from app import extrusion
+
+    lines = [{"kind": "profile", "catalog_id": "1515", "qty": 4, "length_in": 30, "machining": [{"op": "counterbore", "count": 2}]},
+             {"kind": "hardware", "catalog_id": "HINGE-15", "qty": 2}]
+    base = extrusion.price_build(lines)
+    cost = {l["item"]: l["cost"] for l in base["per_part_lines"]}
+    r = extrusion.price_build(lines, None, [1], {"prices": {"profiles": {"1515": 1.0}, "hardware": {"HINGE-15": 30}, "machining": {"counterbore": 0}},
+                                                "cut_charge": 0})
+    got = {l["item"]: l["cost"] for l in r["per_part_lines"]}
+    assert got["1515 profile"] == 120.0 and got["Hinge, Fractional 15 Series x 2"] == 60.0
+    assert "Counterbore x 8" in got and got["Counterbore x 8"] == 0 and got["supplier cut charge, 4 cut(s)"] == 0
+    assert cost["1515 profile"] != 120.0
+    # a supplier piece price (material and cut) for one line
+    r = extrusion.price_build([{**lines[0], "unit_price": 25.0}], None, [2])
+    mat = [l for l in r["per_part_lines"] if l["category"] == "material"]
+    assert mat[0]["cost"] == 100.0 and not any(l["category"] == "cutting" for l in r["per_part_lines"])
+    assert r["price_breaks"][0]["total_cost"] > 200
+
+
+def test_staff_edit_frame_parts_list_and_prices(client):
+    q = client.post("/api/public/design/quote", json={"spec": CART, "quantity": 1, "preview": True}).json()
+    rid = q["id"] if "id" in q else client.get("/api/portal/requests?include_drafts=true").json()[0]["id"]
+    it = client.get(f"/api/portal/requests/{rid}").json()["internal"]["items"][0]
+    key, before = it["key"], it["unit_price"]
+    assert it["spec"]["model_lines"] and it["spec"]["bom"] == {}
+    # distributor prices for this quote
+    r = client.put(f"/api/portal/requests/{rid}/lines", json={"lines": {key: {"bom": {"prices": {"profiles": {"1515": 2.0, "1530": 3.0}}, "note": "80/20 web cart 10/12"}}}})
+    assert r.status_code == 200, r.text
+    it = r.json()["internal"]["items"][0]
+    assert it["unit_price"] > before and any("80/20 web cart" in x for x in it["internal_reasons"])
+    assert any(c["item"] == "1515 profile" and c["rate"] == 2.0 for c in it["spec"]["costs"])
+    # edit the hardware: add a custom latch, drop the handles
+    lines = [ln for ln in it["spec"]["model_lines"] if not ln["catalog_id"].startswith("HANDLE")]
+    lines.append({"kind": "custom", "description": "Compression latch", "qty": 2, "unit_price": 18.5})
+    r = client.put(f"/api/portal/requests/{rid}/lines", json={"lines": {key: {"bom": {**it["spec"]["bom"], "lines": lines}}}})
+    it = r.json()["internal"]["items"][0]
+    assert any(c["item"] == "Compression latch x 2" for c in it["spec"]["costs"]) and not any("Handle" in c["item"] for c in it["spec"]["costs"])
+    assert "1515" in str(it["spec"]["bom"]["prices"])  # prices kept
+    # bad input is refused; customers cannot change it
+    bad = client.put(f"/api/portal/requests/{rid}/lines", json={"lines": {key: {"bom": {"lines": [{"kind": "hardware", "catalog_id": "NOPE", "qty": 1}]}}}})
+    assert bad.status_code == 400 and "catalog" in bad.text
+    # reset to the model
+    r = client.put(f"/api/portal/requests/{rid}/lines", json={"lines": {key: {"bom": None}}})
+    assert r.json()["internal"]["items"][0]["unit_price"] == before

@@ -922,7 +922,9 @@ async def set_lines(rid: int, body: LinesIn, db: Session = Depends(get_db)):
 
     r = _req(db, rid)
     before = {ln["key"]: ln for ln in (r.internal or {}).get("items") or []}
-    r.line_opts = _guard(portal.merge_line_opts, r.line_opts or {}, body.lines, portal.get_settings(db).max_quantity * 100, True)
+    from . import quotes
+
+    r.line_opts = _guard(portal.merge_line_opts, r.line_opts or {}, body.lines, portal.get_settings(db).max_quantity * 100, True, quotes.get_config(db))
     await run_in_threadpool(portal.price_request, db, r)
     db.commit()
     for key, ch in body.lines.items():
