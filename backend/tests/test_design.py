@@ -28,7 +28,7 @@ def client(monkeypatch):
 def test_every_part_type_builds_from_its_defaults(t):
     tpl = next(x for x in design.templates() if x["type"] == t)
     r = design.render({"type": t, "params": tpl["default_params"]})
-    assert r["mesh"]["triangles"] > 10 and "<svg" in r["drawing"] and r["summary"][0]["label"] == "Part"
+    assert r["mesh"]["triangles"] > 10 and "<svg" in r["drawing"] and r["summary"][0]["label"] in ("Part", "Build")
 
 
 def test_sizes_are_checked():
@@ -126,3 +126,38 @@ def test_assistant_history_is_trimmed_and_checked(client, monkeypatch):
     monkeypatch.setitem(design_ai._day, "n", 10 ** 9)
     monkeypatch.setitem(design_ai._day, "date", __import__("datetime").date.today().isoformat())
     assert "busy" in client.post("/api/public/design/assistant", json={"messages": [{"role": "user", "content": "hi"}]}).json()["detail"]
+
+
+CART = {"type": "frame", "name": "Rolling cart", "units": "in",
+        "params": {"width": 36, "depth": 26, "height": 33.75, "post_profile": "1530", "rail_profile": "1515", "base": "casters",
+                   "doors": [{"face": "front", "leaves": 1, "panel": "PANEL-PC-250"}, {"face": "back", "leaves": 1, "panel": "PANEL-PC-250"}]}}
+
+
+def test_frame_cut_list_uses_butt_joints():
+    from app import frame
+
+    spec = design.clean(CART)
+    cuts = {(g["profile"], g["length"]): g["qty"] for g in frame.cut_list(frame.members(spec["params"]))}
+    assert cuts[("1530", 33.75)] == 4  # corner posts, full height
+    assert cuts[("1515", 33.0)] == 4  # front and back rails between 1.5 in post faces
+    assert cuts[("1515", 20.0)] == 4  # side rails between the 3 in post faces
+    assert cuts[("1515", 30.5)] == 4 and cuts[("1515", 29.75)] == 4  # door stiles and rails, 1/8 in gaps
+    r = design.render(CART)
+    assert any(x["label"] == "Cut 1530" for x in r["summary"]) and r["mesh"]["triangles"] > 500
+
+
+def test_frame_checks():
+    bad = [({"width": 4}, "Width"), ({"post_profile": "9999"}, "Corner post"), ({"rail_profile": "20-2020"}, "one series"),
+           ({"doors": [{"face": "top"}]}, "face"), ({"levels": [{"z": 100}]}, "Level 1")]
+    for change, words in bad:
+        with pytest.raises(design.DesignError, match=words):
+            design.clean({**CART, "params": {**CART["params"], **change}})
+
+
+def test_frame_is_quoted_from_its_parts_list(client):
+    q = client.post("/api/public/design/quote", json={"spec": CART, "quantity": 2}).json()
+    assert q["result"]["kind"] == "estimate" and q["result"]["total_low"] > 0
+    assert [f["name"] for f in q["files"]] == ["Rolling_cart (frame design).json", "Rolling_cart.step"]
+    it = q["result"]["items"][0]
+    assert it["qty"] == 2 and it["view"] and any(f["label"] == "Cut 1530" for f in it["facts"])
+    assert not q["checkout"]["eligible"]

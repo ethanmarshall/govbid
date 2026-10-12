@@ -458,7 +458,12 @@ async def design_quote(body: DesignQuoteIn, request: Request, db: Session = Depe
         raise HTTPException(400, str(exc))
     notes = (body.notes.strip() + "\n\n" if body.notes.strip() else "") + "Designed on the website:\n" + "\n".join(f"{a}: {b}" for a, b in design.summary(spec))
     data_in = {"quantity": body.quantity, "material": body.material, "finish": body.finish, "notes": notes[:3000]}
-    req = await run_in_threadpool(_guard, portal.create, db, [(name, data)], data_in, _client(request), body.preview and _owner(request))
+    if spec["type"] == "frame":  # priced from its cut list and hardware, not as a machined part
+        data_in.update(material="", finish="")
+        req = await run_in_threadpool(_guard, portal.create_frame, db, design.to_customer_units(spec), data, data_in, _client(request),
+                                      body.preview and _owner(request))
+    else:
+        req = await run_in_threadpool(_guard, portal.create, db, [(name, data)], data_in, _client(request), body.preview and _owner(request))
     cust = _customer_of(request, db)
     if cust:
         req.customer_id = cust.id

@@ -29,9 +29,10 @@ import tempfile
 from pathlib import Path
 
 MM = 25.4
-TYPES = ("plate", "block", "l_bracket", "u_channel", "box", "round", "flange")
+TYPES = ("plate", "block", "l_bracket", "u_channel", "box", "round", "flange", "frame")
 TYPE_LABEL = {"plate": "Flat plate", "block": "Machined block", "l_bracket": "L bracket", "u_channel": "U channel",
-              "box": "Open box or tray", "round": "Turned part (shaft, spacer, pin)", "flange": "Round flange or disk"}
+              "box": "Open box or tray", "round": "Turned part (shaft, spacer, pin)", "flange": "Round flange or disk",
+              "frame": "T-slot extrusion frame (cart, stand, enclosure)"}
 MAX_IN = 48.0  # the largest size anywhere, inches
 MIN_IN = 0.01
 MAX_FEATURES = 200
@@ -47,6 +48,7 @@ FIELDS = {
     "box": [("length", "Length", 6.0), ("width", "Width", 4.0), ("height", "Height", 2.0), ("wall", "Wall", 0.125), ("floor", "Floor", 0.125)],
     "round": [],
     "flange": [("diameter", "Diameter", 4.0), ("thickness", "Thickness", 0.375), ("bore", "Center bore", 1.0)],
+    "frame": [("width", "Width (outside)", 36.0), ("depth", "Depth (outside)", 26.0), ("height", "Height (frame only)", 33.75)],
 }
 
 
@@ -95,6 +97,14 @@ def clean(spec: dict) -> dict:
     out = {"type": t, "units": units, "name": re.sub(r"[^\w .,()+-]", "", str(spec.get("name") or TYPE_LABEL[t]))[:60].strip() or TYPE_LABEL[t],
            "material": str(spec.get("material") or "")[:60], "notes": str(spec.get("notes") or "")[:500], "params": {}}
     P = out["params"]
+    if t == "frame":
+        from . import frame
+
+        try:
+            out["params"] = frame.clean(p, units)
+        except frame.FrameError as exc:
+            raise DesignError(str(exc)) from exc
+        return out
 
     def n(key, label, lo=MIN_IN, hi=MAX_IN, zero=False, default=None):
         v = p.get(key, default)
@@ -244,6 +254,10 @@ def summary(spec: dict) -> list[tuple[str, str]]:
     u = spec["units"]
     f = lambda v: f"{_fmt(v * k)} {u}"  # noqa: E731
     P, t = spec["params"], spec["type"]
+    if t == "frame":
+        from . import frame
+
+        return [("Build", spec["name"] if spec["name"] != TYPE_LABEL[t] else "T-slot frame")] + frame.summary(P, frame.members(P), spec["units"])
     rows = [("Part", TYPE_LABEL[t] if spec["name"] == TYPE_LABEL[t] else f"{spec['name']} ({TYPE_LABEL[t][0].lower() + TYPE_LABEL[t][1:] if not TYPE_LABEL[t].startswith(('L ', 'U ')) else TYPE_LABEL[t]})")]
     for key, label, _ in FIELDS.get(t, []):
         if key in P and not (key == "corner_radius" and not P[key]) and not (key == "bore" and not P[key]):
@@ -287,7 +301,7 @@ def summary(spec: dict) -> list[tuple[str, str]]:
 def to_customer_units(spec: dict) -> dict:
     """The spec back in the customer's units (what the page and the AI edit)."""
     k = MM if spec["units"] == "mm" else 1.0
-    nonlen = {"count", "angle"}
+    nonlen = {"count", "angle", "leaves", "locking_casters"}
 
     def conv(v, key=""):
         if isinstance(v, dict):
@@ -297,7 +311,8 @@ def to_customer_units(spec: dict) -> dict:
         if isinstance(v, (int, float)) and not isinstance(v, bool) and key not in nonlen:
             return round(v * k, 4)
         return v
-    return {**{a: b for a, b in spec.items() if a != "params"}, "params": conv(spec["params"])}
+    params = {a: b for a, b in spec["params"].items() if not a.startswith("_") and a != "family"}
+    return {**{a: b for a, b in spec.items() if a != "params"}, "params": conv(params)}
 
 
 # ------------------------------------------------------------------ building (OpenCascade, millimeters)
@@ -372,6 +387,10 @@ def build(spec: dict):
     """The solid for a checked spec (from clean)."""
     t, P = spec["type"], spec["params"]
     eps = 0.01
+    if t == "frame":
+        from . import frame
+
+        return frame.build(P)
     if t in ("plate", "block"):
         L, W, T = P["length"], P["width"], P["thickness"]
         shape = _rrect(0, 0, 0, L, W, T, P.get("corner_radius", 0))
@@ -476,7 +495,7 @@ def render(spec_in: dict) -> dict:
 
     spec = clean(spec_in)
     shape = build(spec)
-    if not _valid(shape):
+    if spec["type"] != "frame" and not _valid(shape):
         raise DesignError("Those features make an invalid part (for example, holes that overlap or cut it apart). Check the positions.")
     L, W, H = portal_views._bbox_in(shape)
     sheet = portal_views.build_sheet(shape, kind="model", label=spec["name"])
@@ -490,7 +509,7 @@ def step_for(spec_in: dict) -> tuple[str, bytes, dict]:
     """(file name, STEP bytes, normalized spec) for pricing or attaching to a project idea."""
     spec = clean(spec_in)
     shape = build(spec)
-    if not _valid(shape):
+    if spec["type"] != "frame" and not _valid(shape):
         raise DesignError("Those features make an invalid part. Check the positions.")
     slug = re.sub(r"[^A-Za-z0-9]+", "_", spec["name"]).strip("_")[:40] or "part"
     return f"{slug}.step", step_bytes(shape, spec["name"]), spec
@@ -505,6 +524,13 @@ def templates() -> list[dict]:
             d["default_params"] = {"sections": [{"diameter": 1.0, "length": 2.0}, {"diameter": 0.75, "length": 1.0}], "bore": {"diameter": 0.25, "depth": 0}}
         elif t == "flange":
             d["default_params"] = {"diameter": 4.0, "thickness": 0.375, "bore": 1.0, "bolt_circle": {"count": 4, "diameter": 3.0, "hole_diameter": 0.266}}
+        elif t == "frame":
+            from . import frame
+
+            d["default_params"] = {k: v for k, v in frame.DEFAULTS.items() if k != "door_profile"}
+            d["default_params"]["doors"] = [{"face": "front", "leaves": 1, "panel": "PANEL-PC-250"}]
+            d["profiles"] = [{"id": p["id"], "label": p["label"], "family": p["family"]} for p in frame.PROFILES.values()]
+            d["panels"] = [{"id": k, "label": v[0]} for k, v in frame.PANELS.items()]
         else:
             d["default_params"] = {a: c for a, _, c in FIELDS[t]}
         out.append(d)

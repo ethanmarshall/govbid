@@ -5,7 +5,7 @@ import { call, statusPath } from './shared'
 // Design a part on the site: describe it to the assistant (when it is on) or fill in the sizes, see it in 3D with a
 // dimensioned drawing, then get a price or send it with a project idea. The server checks every size and builds the model.
 
-const NONLEN = new Set(['count', 'angle'])
+const NONLEN = new Set(['count', 'angle', 'leaves', 'locking_casters'])
 const convert = (v, f, key = '') => {
   if (Array.isArray(v)) return v.map((x) => convert(x, f))
   if (v && typeof v === 'object') return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, convert(x, f, k)]))
@@ -89,6 +89,7 @@ export default function DesignStudio({ info, onSendIdea }) {
               <label className="pq-span2">Name<input value={spec.name} maxLength={60} placeholder={tpl?.label} onChange={(e) => setSpec({ ...spec, name: e.target.value })} /></label>
             </div>
             {tpl?.fields?.length > 0 && <div className="pq-fields">{tpl.fields.map((f) => numIn(f.key, f.label))}</div>}
+            {spec.type === 'frame' && <FrameForm p={spec.params} tpl={tpl} setP={setP} numIn={numIn} />}
             {spec.type === 'round' && (
               <div className="pq-fields">
                 {numIn('diameter', 'Bore diameter (0 = none)', spec.params.bore || {}, (v) => setP('bore', { ...(spec.params.bore || { depth: 0 }), diameter: v }))}
@@ -200,6 +201,7 @@ function PriceIt({ info, spec, ready, onSendIdea }) {
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
   const sheet = spec.type === 'plate' || spec.type === 'l_bracket' || spec.type === 'u_channel'
+  const frame = spec.type === 'frame'
   const price = async () => {
     setBusy(true); setErr('')
     try {
@@ -213,20 +215,84 @@ function PriceIt({ info, spec, ready, onSendIdea }) {
     <div className="pq-design-price">
       <div className="pq-fields two">
         <label>Quantity<input type="number" min="1" max={info.max_quantity} step="1" inputMode="numeric" value={qty} onChange={(e) => setQty(e.target.value)} /></label>
+        {frame ? <p className="pq-muted pq-small" style={{ alignSelf: 'end', margin: 0 }}>Aluminum T-slot extrusion, hardware and panels as listed.</p> : (
         <label>Material
           <select value={material} onChange={(e) => setMaterial(e.target.value)}>
             <option value="">{sheet ? 'Aluminum (we suggest)' : 'Not sure'}</option>
             <optgroup label="Metals and plastics">{(info.materials || []).map((m) => <option key={m}>{m}</option>)}</optgroup>
             <optgroup label="3D printing">{(info.print_materials || []).map((m) => <option key={m}>{m}</option>)}</optgroup>
           </select>
-        </label>
+        </label>)}
       </div>
       {err && <p className="pq-err" role="alert">{err}</p>}
       <div className="pq-actions">
-        <button type="button" className="pq-btn" disabled={!ready || busy || !(info.enabled || info.owner)} onClick={price}>{busy ? 'Pricing…' : 'Get a price'}</button>
+        <button type="button" className="pq-btn" disabled={!ready || busy || !(info.enabled || info.owner)} onClick={price}>{busy ? 'Pricing…' : frame ? 'Get an estimate' : 'Get a price'}</button>
         <button type="button" className="pq-link" disabled={!ready} onClick={onSendIdea}>Send it with a project idea instead</button>
       </div>
+      {frame && <p className="pq-muted pq-small">Frames get an estimate from our parts list; an engineer checks the panel sizes and door hardware, then confirms the price.</p>}
       <p className="pq-muted pq-small">Getting a price saves the design as a quote you can order or send for review. Not sure it is right? Send it as a project idea and an engineer will check it with you.</p>
     </div>
+  )
+}
+
+const FACES = ['front', 'back', 'left', 'right']
+
+// A T-slot frame: profiles, base, doors, shelf levels and panels. Every member and cut length is worked out on the server.
+function FrameForm({ p, tpl, setP, numIn }) {
+  const profiles = tpl?.profiles || []
+  const panels = tpl?.panels || []
+  const sel = (key, label, options, value = p[key] ?? '') => (
+    <label key={key}>{label}
+      <select value={value} onChange={(e) => setP(key, e.target.value)}>{options.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select>
+    </label>
+  )
+  const profOpts = profiles.map((x) => [x.id, x.label])
+  const panelOpts = [['', 'None'], ...panels.map((x) => [x.id, x.label])]
+  const doors = p.doors || []
+  const levels = p.levels || []
+  const pan = p.panels || {}
+  const setDoor = (i, k, v) => setP('doors', doors.map((d, j) => (j === i ? { ...d, [k]: v } : d)))
+  const setLevel = (i, k, v) => setP('levels', levels.map((d, j) => (j === i ? { ...d, [k]: v } : d)))
+  return (
+    <>
+      <div className="pq-fields">
+        {sel('post_profile', 'Corner posts', profOpts)}
+        {sel('rail_profile', 'Rails', profOpts)}
+        {sel('door_profile', 'Door frames', [['', 'Same as rails'], ...profOpts])}
+        {sel('post_wide_along', 'Wide face of the posts', [['depth', 'Along the depth (sides)'], ['width', 'Along the width (front)']])}
+        {sel('joints', 'Joints', [['anchor', 'Butt joints, anchor fasteners'], ['bracket', 'Butt joints, corner brackets']])}
+        {sel('base', 'Base', [['casters', 'Casters'], ['feet', 'Leveling feet'], ['none', 'None']])}
+        {p.base === 'casters' && numIn('caster_height', 'Caster height')}
+        {p.base === 'casters' && sel('locking_casters', 'Casters with brakes', [0, 1, 2, 3, 4].map((n) => [n, String(n)]), p.locking_casters ?? 2)}
+      </div>
+      <div className="pq-rows">
+        <div className="pq-rows-head"><h3>Doors (inset)</h3>{doors.length < 4 && <button type="button" className="pq-link" onClick={() => setP('doors', [...doors, { face: FACES.find((f) => !doors.some((d) => d.face === f)), leaves: 1, panel: 'PANEL-PC-250' }])}>Add</button>}</div>
+        {doors.length > 0 && <table><thead><tr><th>Side</th><th>Doors</th><th>Panel</th><th /></tr></thead><tbody>{doors.map((d, i) => (
+          <tr key={i}>
+            <td><select aria-label={`Door ${i + 1} side`} value={d.face} onChange={(e) => setDoor(i, 'face', e.target.value)}>{FACES.map((f) => <option key={f}>{f}</option>)}</select></td>
+            <td><select aria-label={`Door ${i + 1} count`} value={d.leaves || 1} onChange={(e) => setDoor(i, 'leaves', Number(e.target.value))}><option value={1}>Single</option><option value={2}>Double</option></select></td>
+            <td><select aria-label={`Door ${i + 1} panel`} value={d.panel ?? ''} onChange={(e) => setDoor(i, 'panel', e.target.value)}>{panelOpts.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select></td>
+            <td><button type="button" className="pq-link" onClick={() => setP('doors', doors.filter((_, j) => j !== i))}>Remove</button></td>
+          </tr>))}</tbody></table>}
+      </div>
+      <div className="pq-rows">
+        <div className="pq-rows-head"><h3>Shelf levels</h3><button type="button" className="pq-link" onClick={() => setP('levels', [...levels, { z: Math.round((Number(p.height) || 30) / 2), shelf: '' }])}>Add</button></div>
+        {levels.length > 0 && <table><thead><tr><th>Height of shelf top</th><th>Shelf panel</th><th /></tr></thead><tbody>{levels.map((lv, i) => (
+          <tr key={i}>
+            <td><input type="number" step="any" aria-label={`Level ${i + 1} height`} value={lv.z ?? ''} onChange={(e) => setLevel(i, 'z', e.target.value === '' ? '' : Number(e.target.value))} /></td>
+            <td><select aria-label={`Level ${i + 1} shelf`} value={lv.shelf ?? ''} onChange={(e) => setLevel(i, 'shelf', e.target.value)}>{panelOpts.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select></td>
+            <td><button type="button" className="pq-link" onClick={() => setP('levels', levels.filter((_, j) => j !== i))}>Remove</button></td>
+          </tr>))}</tbody></table>}
+      </div>
+      <div className="pq-fields">
+        {FACES.filter((f) => !doors.some((d) => d.face === f)).map((f) => (
+          <label key={f}>{f[0].toUpperCase() + f.slice(1)} side panel
+            <select value={pan[f] || ''} onChange={(e) => setP('panels', { ...pan, [f]: e.target.value })}>{panelOpts.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select>
+          </label>
+        ))}
+        {sel('top_panel', 'Top panel', panelOpts)}
+        {sel('bottom_panel', 'Bottom panel', panelOpts)}
+      </div>
+    </>
   )
 }

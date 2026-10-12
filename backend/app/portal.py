@@ -488,6 +488,10 @@ def price_request(db: Session, req: PortalRequest) -> None:
     refs = [f for f in req.files if f["kind"] == "ref" and not f["removed"]]
     pairs, loose_reads = PL.pair_drawings(steps, reads)
 
+    # ---- T-slot frames made with the design tool
+    for f in [x for x in req.files if x["kind"] == "frame" and not x["removed"]]:
+        lines.append(_frame_line(ctx, req, f, cfg))
+
     # ---- STEP models
     for f in steps:
         name = Path(f["name"]).stem
@@ -684,6 +688,33 @@ def price_request(db: Session, req: PortalRequest) -> None:
         _finish(req, s, [], manual_reason="Tell us about the project in the notes and send your contact details; we will get back to you.")
         return
     _finish(req, s, lines)
+
+
+def _frame_line(ctx, req: PortalRequest, f: dict, cfg: dict) -> dict:
+    """Price a frame design from its cut list and hardware (extrusion catalog). An engineer confirms it: panel sizes
+    and latches need a look before the order."""
+    from . import design, extrusion
+    from . import frame as frame_mod
+
+    key = f["stored"]
+    qty = ctx.qty(key, 1)
+    try:
+        spec = design.clean(json.loads(file_path(req, f).read_bytes()))
+        P = spec["params"]
+        parts = frame_mod.members(P)
+        lines = frame_mod.extrusion_lines(parts, P["family"])
+        r = extrusion.price_build(lines, cfg, [qty])
+    except Exception as exc:  # noqa: BLE001
+        from . import portal_lines as PL
+
+        return PL.new_line(key, "Frame", "frame", "manual", qty=qty, public_reason="We will price this frame by hand.", internal_reasons=[str(exc)])
+    view = _view(req, ("frame", f["stored"], f.get("size")), lambda: frame_mod.build(P, parts), "model")
+    facts = [{"label": a, "value": b} for a, b in design.summary(spec)[1:]]
+    desc = f"T-slot frame, {P['post_profile']} posts and {P['rail_profile']} rails"
+    return _item_line(ctx, key, _item(spec["name"], "estimate", desc, r["price_breaks"], qty, kind="frame", spec={"frame": P, "lines": lines},
+                                      facts=facts, view=view,
+                                      public_reason="An engineer checks frame builds (panel sizes, door hardware and latches) before we confirm the price.",
+                                      internal_reasons=[x for x in r.get("warnings", [])[:4] + [r.get("config_note") or ""] if x]), qty, "extrusion")
 
 
 def _item_line(ctx, key: str, it: dict, qty: int, process: str) -> dict:
@@ -1022,6 +1053,38 @@ def create(db: Session, uploads: list[tuple[str, bytes]], data: dict, ip: str, p
         raise
     db.commit()
     ensure_job(req)
+    return req
+
+
+def create_frame(db: Session, spec: dict, step: bytes, data: dict, ip: str, preview: bool = False) -> PortalRequest:
+    """A T-slot frame made with the design tool: stored as its spec (priced from the extrusion catalog) plus the
+    assembly model for the shop."""
+    s = get_settings(db)
+    if not s.enabled and not preview:
+        raise PortalError("Online quoting is not open yet.")
+    purge_stale(db)
+    req = PortalRequest(ref=_new_ref(db), token=secrets.token_urlsafe(24), status="draft", ip_hash=ip_hash(ip), export_controlled=False)
+    _clean_opts(req, data, s.max_quantity)
+    req.quantity = req.quantity or 1
+    db.add(req)
+    db.flush()
+    d = req_dir(req)
+    d.mkdir(parents=True, exist_ok=True)
+    slug = _safe(spec.get("name") or "frame").replace(".", "_")[:60] or "frame"
+    raw = json.dumps(spec).encode()
+    (d / f"01_{slug}.json").write_bytes(raw)
+    (d / f"02_{slug}.step").write_bytes(step)
+    req.files = [{"name": f"{slug} (frame design).json", "stored": f"01_{slug}.json", "kind": "frame", "size": len(raw), "removed": False},
+                 {"name": f"{slug}.step", "stored": f"02_{slug}.step", "kind": "model", "size": len(step), "removed": False}]
+    try:
+        price_request(db, req)
+        if preview and not s.enabled:
+            req.internal = {**(req.internal or {}), "preview": True}
+    except Exception:
+        db.rollback()
+        shutil.rmtree(d, ignore_errors=True)
+        raise
+    db.commit()
     return req
 
 
