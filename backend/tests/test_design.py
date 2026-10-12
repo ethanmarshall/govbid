@@ -268,3 +268,30 @@ def test_staff_edit_frame_parts_list_and_prices(client):
     # reset to the model
     r = client.put(f"/api/portal/requests/{rid}/lines", json={"lines": {key: {"bom": None}}})
     assert r.json()["internal"]["items"][0]["unit_price"] == before
+
+
+NOTCHED = {"type": "plate", "name": "Notched plate", "units": "in", "material": "aluminum", "params": {
+    "length": 30.75, "width": 23.75, "thickness": 0.25, "corner_radius": 0,
+    "holes": [{"x": 9.375 + 2 * i, "y": 16.875, "diameter": 1} for i in range(7)] + [{"x": 13.375 + 2 * i, "y": 6.875, "diameter": 1} for i in range(3)],
+    "pockets": [{"x": x, "y": y, "length": 0.5, "width": 1.75, "depth": 0, "corner_radius": 0.125} for x in (0.25, 30.5) for y in (0.875, 22.875)]}}
+
+
+def _solid_count(shape):
+    from OCP.TopAbs import TopAbs_SOLID
+    from OCP.TopExp import TopExp_Explorer
+
+    n, ex = 0, TopExp_Explorer(shape, TopAbs_SOLID)
+    while ex.More():
+        n, _ = n + 1, ex.Next()
+    return n
+
+
+def test_corner_notches_leave_one_piece_and_price_as_one_part(client):
+    assert _solid_count(design.build(design.clean(NOTCHED))) == 1  # rounded notch corners at the edge left 4 slivers before
+    q = client.post("/api/public/design/quote", json={"spec": NOTCHED, "quantity": 1, "preview": True}).json()
+    items = q["result"]["items"]
+    assert len(items) == 1 and items[0]["kind"] == "part" and q["result"]["kind"] == "instant", items
+    # a cut that splits the part is refused instead of quoted as pieces
+    split = {**NOTCHED, "params": {**NOTCHED["params"], "holes": [], "pockets": [{"x": 15, "y": 11.875, "length": 1, "width": 23.75, "depth": 0}]}}
+    with pytest.raises(design.DesignError):
+        design.build(design.clean(split))

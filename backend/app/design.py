@@ -384,7 +384,36 @@ def _slot_tool(s, z0, H):
 
 
 def build(spec: dict):
-    """The solid for a checked spec (from clean)."""
+    """The solid for a checked spec (from clean). A part is always one piece: crumbs a cut left behind are dropped,
+    and features that cut the part in two are refused (otherwise it would be quoted as an assembly of pieces)."""
+    shape = _build(spec)
+    return shape if spec["type"] == "frame" else _one_piece(shape)
+
+
+def _one_piece(shape):
+    from OCP.BRepGProp import BRepGProp
+    from OCP.GProp import GProp_GProps
+    from OCP.TopAbs import TopAbs_SOLID
+    from OCP.TopExp import TopExp_Explorer
+
+    solids = []
+    ex = TopExp_Explorer(shape, TopAbs_SOLID)
+    while ex.More():
+        g = GProp_GProps()
+        BRepGProp.VolumeProperties_s(ex.Current(), g)
+        solids.append((abs(g.Mass()), ex.Current()))
+        ex.Next()
+    if len(solids) <= 1:
+        return shape
+    solids.sort(key=lambda t: -t[0])
+    big = solids[0][0]
+    keep = [sh for v, sh in solids if v >= big * 0.02]
+    if len(keep) > 1:
+        raise DesignError("The holes, slots or pockets cut the part into separate pieces. Move or shrink them so the part stays in one piece.")
+    return keep[0]
+
+
+def _build(spec: dict):
     t, P = spec["type"], spec["params"]
     eps = 0.01
     if t == "frame":
@@ -403,7 +432,13 @@ def build(spec: dict):
         for s in P["pockets"]:
             dep = s["depth"] or T
             z0 = T - dep - (eps if not s["depth"] else 0)
-            tools.append(_rrect(s["x"] - s["length"] / 2, s["y"] - s["width"] / 2, z0, s["length"], s["width"], dep + 2 * eps, s["corner_radius"]))
+            x0, y0, x1, y1 = s["x"] - s["length"] / 2, s["y"] - s["width"] / 2, s["x"] + s["length"] / 2, s["y"] + s["width"] / 2
+            # a notch open to an edge: run the cutter past that edge, so its rounded corners fall outside the part
+            # (only the inside corners are rounded, and no thin slivers are left along the edge)
+            out = s["corner_radius"] + 0.05
+            x0, y0 = (x0 - out if x0 <= 1e-3 else x0), (y0 - out if y0 <= 1e-3 else y0)
+            x1, y1 = (x1 + out if x1 >= L - 1e-3 else x1), (y1 + out if y1 >= W - 1e-3 else y1)
+            tools.append(_rrect(x0, y0, z0, x1 - x0, y1 - y0, dep + 2 * eps, s["corner_radius"]))
         return _cut(shape, tools)
     if t == "l_bracket":
         A, B, W, T, R = P["leg_a"], P["leg_b"], P["width"], P["thickness"], P["bend_radius"]
