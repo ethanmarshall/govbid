@@ -836,10 +836,18 @@ def _frame_line(ctx, req: PortalRequest, f: dict, cfg: dict) -> dict:
     view = _view(req, ("frame", f["stored"], f.get("size")), lambda: frame_mod.build(P, parts), "model")
     facts = [{"label": a, "value": b} for a, b in design.summary(spec)[1:]]
     desc = f"T-slot frame, {P['post_profile']} posts and {P['rail_profile']} rails"
-    return _item_line(ctx, key, _item(spec["name"], "estimate", desc, r["price_breaks"], qty, kind="frame", spec={"frame": P, "lines": lines},
-                                      facts=facts, view=view,
-                                      public_reason="An engineer checks frame builds (panel sizes, door hardware and latches) before we confirm the price.",
-                                      internal_reasons=[x for x in r.get("warnings", [])[:4] + [r.get("config_note") or ""] if x]), qty, "extrusion")
+    # the design tool lays out every member, joint, panel and hinge itself, so the parts list is exact: same narrow
+    # range as a frame read from an uploaded model (Portal settings, T-slot frames)
+    s = ctx.s
+    route = "estimate" if s.frame_review else "instant"
+    ln = _item_line(ctx, key, _item(spec["name"], route, desc, r["price_breaks"], qty, kind="frame",
+                                    spec={"frame": P, "lines": lines, "costs": r.get("per_part_lines"), "lot": r.get("per_lot_lines"), "joints_measured": True},
+                                    facts=facts, view=view,
+                                    public_reason=("Priced from the parts list of your design. An engineer checks door hardware and latches before we confirm the order."
+                                                   if s.frame_review else ""),
+                                    internal_reasons=[x for x in r.get("warnings", [])[:4] + [r.get("config_note") or ""] if x]), qty, "extrusion")
+    ln["band"] = [0.0, float(s.frame_band_pct or 0)]
+    return ln
 
 
 def _item_line(ctx, key: str, it: dict, qty: int, process: str) -> dict:

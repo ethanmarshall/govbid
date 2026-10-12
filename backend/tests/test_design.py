@@ -161,6 +161,9 @@ def test_frame_is_quoted_from_its_parts_list(client):
     it = q["result"]["items"][0]
     assert it["qty"] == 2 and it["view"] and any(f["label"] == "Cut 1530" for f in it["facts"])
     assert not q["checkout"]["eligible"]
+    # an exact parts list: the narrow frame range (price to 5% above), not the 10% below / 35% above estimate range
+    assert it["unit_high"] <= round(it["unit_low"] * 1.06, 2)
+    assert "costs" not in str(q["result"]) and "unit_cost" not in str(q["result"])
 
 
 def test_uploaded_frame_is_priced_as_extrusion_not_machined(client):
