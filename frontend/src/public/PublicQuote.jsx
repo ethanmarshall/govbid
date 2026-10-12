@@ -71,7 +71,7 @@ function Sheet({ info, children, home = false, onPath }) {
     history.replaceState(null, '', `#${id}`)
   }
   const site = info?.site
-  const links = [['quote', 'Get a quote'], info?.design && ['design', 'Design a part'], ['idea', 'Start with an idea'], site?.capabilities?.length && ['capabilities', 'Capabilities'], (site?.about || site?.experience?.length) && ['about', 'About us'],
+  const links = [['quote', 'Get a quote'], info?.design && ['design', 'Design a part'], ['idea', 'Start with an idea'], site?.capabilities?.length && ['capabilities', 'Capabilities'], site?.projects?.length && ['work', 'Our work'], (site?.about || site?.experience?.length) && ['about', 'About us'],
     site?.quality?.length && ['quality', 'Quality'], site?.faq?.length && ['questions', 'Questions'], saved.length && ['saved', `Saved quotes (${saved.length})`]].filter(Boolean)
   return (
     <div className="pq">
@@ -404,6 +404,28 @@ function SiteSections({ info }) {
               ))}
             </tbody>
           </table>
+        </section>
+      )}
+
+      {site.projects?.length > 0 && (
+        <section id="work" className="pq-sec pq-anchor" aria-labelledby="work-h">
+          <h2 id="work-h">Our work</h2>
+          <p className="pq-secnote pq-muted">Each entry says what it is: a job for a customer, something we built ourselves, or our founder's experience before Valley Power Systems.</p>
+          <div className="pq-work">
+            {site.projects.map((w, i) => (
+              <article key={i} className="pq-work-item" aria-labelledby={`work-${i}`}>
+                {w.image && <img className="pq-work-img" src={`/api/public/site-media/${w.image}`} alt={w.image_alt || w.title} loading="lazy" />}
+                <div className="pq-tb pq-work-tb">
+                  <div className="pq-tb-row">
+                    <div className="pq-cell"><span>{w.kind_label}</span><b id={`work-${i}`}>{w.title}</b></div>
+                    {w.year && <div className="pq-cell pq-work-year"><span>Year</span><b>{w.year}</b></div>}
+                  </div>
+                </div>
+                {w.summary && <p className="pq-prose pq-work-sum">{w.summary}</p>}
+                {w.details?.length > 0 && <ul className="pq-ticks pq-work-notes">{w.details.map((d, j) => <li key={j}>{d}</li>)}</ul>}
+              </article>
+            ))}
+          </div>
         </section>
       )}
 

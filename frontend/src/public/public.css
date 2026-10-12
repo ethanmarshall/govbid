@@ -254,6 +254,13 @@
 .pq-steps span { color: var(--ink-2); font-size: 15px; }
 
 .pq-ticks { list-style: none; margin: 0; padding: 0; }
+.pq-work { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 30px 36px; margin-top: 8px; }
+.pq-work-item { min-width: 0; }
+.pq-work-img { display: block; width: 100%; aspect-ratio: 4 / 3; object-fit: contain; background: var(--paper); border: 1.5px solid var(--ink); border-bottom: 0; }
+.pq-work-tb .pq-cell b { font-size: 21px; }
+.pq-work-year { flex: 0 0 auto; min-width: 84px; }
+.pq-work-sum { margin: 12px 0 10px; }
+.pq-work-notes { font-size: 16px; }
 .pq-ticks li { position: relative; padding: 0 0 10px 26px; }
 .pq-ticks li::before { content: ''; position: absolute; left: 2px; top: 7px; width: 11px; height: 6px; border-left: 2px solid var(--ok); border-bottom: 2px solid var(--ok); transform: rotate(-45deg); }
 .pq-codes { margin-top: 44px; }
@@ -278,6 +285,7 @@
 .pq-foot-links { display: flex; gap: 6px 20px; flex-wrap: wrap; }
 
 @media (max-width: 899px) {
+  .pq-work { grid-template-columns: minmax(0, 1fr); }
   .pq { padding: calc(12px + env(safe-area-inset-top, 0px)) calc(10px + env(safe-area-inset-right, 0px)) calc(28px + env(safe-area-inset-bottom, 0px)) calc(10px + env(safe-area-inset-left, 0px)); font-size: 16px; }
   .pq-sheet { padding: 20px 16px 26px; border-width: 1px; }
   .pq-zones { display: none; }

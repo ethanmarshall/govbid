@@ -65,6 +65,22 @@ def _owner(request: Request) -> bool:
     return auth.enabled() and auth.valid_session(request.cookies.get(auth.COOKIE))
 
 
+@public.get("/site-media/{name}")
+def site_media(name: str):
+    p = portal.media_path(name)
+    if not p:
+        raise HTTPException(404, "Not found")
+    kind = {"png": "image/png", "jpg": "image/jpeg", "webp": "image/webp"}[p.suffix[1:]]
+    return FileResponse(p, media_type=kind, headers={"Cache-Control": "public, max-age=86400", "X-Content-Type-Options": "nosniff"})
+
+
+@internal.post("/site-media")
+async def upload_site_media(file: UploadFile = File(...)):
+    """A photo for the customer site (past work)."""
+    data = await file.read(portal.MEDIA_MAX + 1)
+    return {"name": _guard(portal.save_media, data)}
+
+
 @public.get("/info")
 def info(request: Request, db: Session = Depends(get_db)):
     return {**portal.public_info(db), "owner": _owner(request)}

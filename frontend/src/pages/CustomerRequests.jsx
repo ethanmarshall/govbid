@@ -453,16 +453,70 @@ function LineTable({ r, id, setR, setMsg, setErr }) {
   )
 }
 
+// Past work on the customer site. Every entry is labeled by what it really was, and stays a hidden draft until you
+// publish it: anything shown here is something a customer or contracting officer may ask you about.
+function PastWork({ projects, setProjects, kinds, setErr }) {
+  const [busy, setBusy] = useState(-1)
+  const set = (i, ch) => setProjects(projects.map((p, j) => (j === i ? { ...p, ...ch } : p)))
+  const move = (i, d) => { const out = [...projects]; const [x] = out.splice(i, 1); out.splice(i + d, 0, x); setProjects(out) }
+  const upload = async (i, file) => {
+    if (!file) return
+    setBusy(i); setErr('')
+    try {
+      const f = new FormData(); f.append('file', file)
+      const r = await api.upload('/api/portal/site-media', f)
+      set(i, { image: r.name })
+    } catch (e) { setErr(e.message) } finally { setBusy(-1) }
+  }
+  return (
+    <div style={{ marginTop: 14 }}>
+      <h4 style={{ margin: '0 0 4px' }}>Our work (past work)</h4>
+      <p className="small muted" style={{ marginTop: 0 }}>Only list work you can back up. Pick what each entry really was; customers see that label. Entries stay hidden until you tick Published and save.</p>
+      {projects.map((p, i) => (
+        <div key={i} className="panel" style={{ marginBottom: 10 }}>
+          <div className="grid g3">
+            <label className="f">Title<input value={p.title || ''} maxLength={120} onChange={(e) => set(i, { title: e.target.value })} /></label>
+            <label className="f">What it was
+              <select value={p.kind || 'in_house'} onChange={(e) => set(i, { kind: e.target.value })}>
+                {Object.entries(kinds).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+              </select></label>
+            <label className="f">Year<input value={p.year || ''} maxLength={12} onChange={(e) => set(i, { year: e.target.value })} /></label>
+          </div>
+          <label className="f" style={{ marginTop: 8 }}>Summary<textarea value={p.summary || ''} maxLength={1200} style={{ minHeight: 60 }} onChange={(e) => set(i, { summary: e.target.value })} /></label>
+          <label className="f" style={{ marginTop: 8 }}>Details, one per line<textarea value={(p.details || []).join('\n')} style={{ minHeight: 60 }}
+            onChange={(e) => set(i, { details: e.target.value.split('\n') })} /></label>
+          <div className="row" style={{ gap: 10, marginTop: 8, alignItems: 'center' }}>
+            {p.image && <img src={`/api/public/site-media/${p.image}`} alt="" style={{ height: 64, border: '1px solid var(--line, #ccc)' }} />}
+            <label className="small">{p.image ? 'Replace photo' : 'Add a photo'} <input type="file" accept="image/png,image/jpeg,image/webp" disabled={busy === i} onChange={(e) => upload(i, e.target.files?.[0])} /></label>
+            {p.image && <button className="link small" onClick={() => set(i, { image: '' })}>Remove photo</button>}
+            {p.image && <input className="small" style={{ flex: 1, minWidth: 160 }} placeholder="Photo description, for screen readers" value={p.image_alt || ''} onChange={(e) => set(i, { image_alt: e.target.value })} />}
+          </div>
+          <div className="row" style={{ gap: 12, marginTop: 8 }}>
+            <label className="check"><input type="checkbox" checked={!!p.published} onChange={(e) => set(i, { published: e.target.checked })} /> <b>Published</b> (customers see it)</label>
+            {!p.published && <span className="small due-soon">Draft, hidden</span>}
+            <span style={{ marginLeft: 'auto' }} />
+            {i > 0 && <button className="link small" onClick={() => move(i, -1)}>Move up</button>}
+            {i < projects.length - 1 && <button className="link small" onClick={() => move(i, 1)}>Move down</button>}
+            <button className="link small" onClick={() => setProjects(projects.filter((_, j) => j !== i))}>Delete</button>
+          </div>
+        </div>
+      ))}
+      <button className="small-btn" onClick={() => setProjects([...projects, { title: '', kind: 'customer', year: String(new Date().getFullYear()), summary: '', details: [], published: false }])}>Add past work</button>
+    </div>
+  )
+}
+
 function PortalSettings({ onSaved }) {
   const [s, setS] = useState(null)
   const [site, setSite] = useState(null)
   const [err, setErr] = useState('')
   const [msg, setMsg] = useState('')
-  useEffect(() => { api.get('/api/portal/settings').then((v) => { setS(v); setSite(siteText(v.site)) }).catch((e) => setErr(e.message)) }, [])
+  const [projects, setProjects] = useState([])
+  useEffect(() => { api.get('/api/portal/settings').then((v) => { setS(v); setSite(siteText(v.site)); setProjects(v.site.projects || []) }).catch((e) => setErr(e.message)) }, [])
   if (!s) return <p className="muted">{err || 'Loading…'}</p>
   const save = async () => {
     setErr(''); setMsg('')
-    try { const { site: _ignored, site_defaults: _d, ...rest } = s; const v = await api.put('/api/portal/settings', { ...rest, site: siteFrom(site) }); setS(v); setSite(siteText(v.site)); setMsg('Saved.'); onSaved?.() } catch (e) { setErr(e.message) }
+    try { const { site: _ignored, site_defaults: _d, ...rest } = s; const v = await api.put('/api/portal/settings', { ...rest, site: { ...siteFrom(site), projects } }); setS(v); setSite(siteText(v.site)); setProjects(v.site.projects || []); setMsg('Saved.'); onSaved?.() } catch (e) { setErr(e.message) }
   }
   const f = (k, label, type = 'text', props = {}) => (
     <label className="f">{label}<input type={type} value={s[k] ?? ''} onChange={(e) => setS({ ...s, [k]: type === 'number' ? Number(e.target.value) : e.target.value })} {...props} /></label>
@@ -525,6 +579,7 @@ function PortalSettings({ onSaved }) {
         {t('industries', 'Who you work with', 'One per line', 5)}
       </div>
       {t('quality', 'Quality and compliance', 'One per line', 5)}
+      <PastWork projects={projects} setProjects={setProjects} kinds={s.project_kinds || {}} setErr={setErr} />
       {t('faq', 'Questions', 'Question on the first line, answer below it, blank line between questions. {review_days} becomes your review time.', 12)}
       <label className="check" style={{ marginTop: 8 }}><input type="checkbox" checked={!!s.show_codes} onChange={(e) => setS({ ...s, show_codes: e.target.checked })} /> Show your UEI, CAGE code, NAICS codes and the certifications you hold (from Company profile). Pending certifications are never shown.</label>
       <p className="small"><button className="link" onClick={() => setSite(siteText(s.site_defaults))}>Put back the suggested text</button> (not saved until you save)</p>

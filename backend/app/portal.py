@@ -105,6 +105,7 @@ DEFAULT_SITE = {
         "Domestic and DFARS-compliant materials sourced when your contract calls for them.",
         "Export-controlled technical data is never handled through this website.",
     ],
+    "projects": [],  # past work: added and published by you in Portal settings
     "faq": [
         {"q": "What files should I send?", "a": "A STEP model gives the fastest and most accurate price. A PDF drawing tells us tolerances, finishes and notes, so send both if you have them. For flat parts, a DXF and the sheet thickness. For circuit boards, one zip with the Gerbers, drill file, BOM and pick-and-place file."},
         {"q": "Is the instant price final?", "a": "It is our price for the part as we read it from your files. We confirm every order with you before we start, and if anything in your files changes the price, we tell you first."},
@@ -116,7 +117,11 @@ DEFAULT_SITE = {
         {"q": "How do I pay?", "a": "Quotes with a firm price can be ordered online by card or purchase order. Card payments go through Stripe, so your card number never reaches us. For jobs that need a review, we agree on payment terms when we confirm the order. Purchase orders are welcome."},
     ],
 }
-SITE_LIMITS = {"capabilities": 24, "experience": 20, "industries": 20, "quality": 20, "faq": 30}
+SITE_LIMITS = {"capabilities": 24, "experience": 20, "industries": 20, "quality": 20, "faq": 30, "projects": 24}
+# Past work on the customer site. Each entry says what kind of work it was, so a reader never mistakes your own
+# build or your experience before the company for a delivered customer job. Drafts are hidden until you publish them.
+PROJECT_KINDS = {"customer": "Customer project", "in_house": "In-house build", "experience": "Founder's prior experience"}
+MEDIA_NAME = re.compile(r"^[a-f0-9]{24}\.(png|jpg|webp)$")
 
 
 def site_content(s: PortalSettings) -> dict:
@@ -137,10 +142,55 @@ def _clean_site(v: dict) -> dict:
     if "capabilities" in v:
         out["capabilities"] = [{"title": str(c.get("title") or "").strip()[:80], "text": str(c.get("text") or "").strip()[:500]}
                                for c in (v["capabilities"] or []) if isinstance(c, dict) and str(c.get("title") or "").strip()][: SITE_LIMITS["capabilities"]]
+    if "projects" in v:
+        out["projects"] = [_clean_project(c) for c in (v["projects"] or []) if isinstance(c, dict) and str(c.get("title") or "").strip()][: SITE_LIMITS["projects"]]
     if "faq" in v:
         out["faq"] = [{"q": str(c.get("q") or "").strip()[:200], "a": str(c.get("a") or "").strip()[:1500]}
                       for c in (v["faq"] or []) if isinstance(c, dict) and str(c.get("q") or "").strip()][: SITE_LIMITS["faq"]]
     return out
+
+
+def _clean_project(c: dict) -> dict:
+    kind = c.get("kind") if c.get("kind") in PROJECT_KINDS else "in_house"
+    image = str(c.get("image") or "")
+    return {"title": str(c.get("title") or "").strip()[:120], "kind": kind, "year": str(c.get("year") or "").strip()[:12],
+            "summary": str(c.get("summary") or "").strip()[:1200],
+            "details": [str(x).strip()[:300] for x in (c.get("details") or []) if str(x).strip()][:10],
+            "image": image if MEDIA_NAME.match(image) else "", "image_alt": str(c.get("image_alt") or "").strip()[:200],
+            "published": bool(c.get("published"))}
+
+
+def public_site(s: PortalSettings) -> dict:
+    """The site text customers see: past work only once you publish it."""
+    site = site_content(s)
+    site["projects"] = [{**{k: v for k, v in p.items() if k != "published"}, "kind_label": PROJECT_KINDS.get(p.get("kind"), "")}
+                        for p in site.get("projects") or [] if p.get("published")]
+    return site
+
+
+MEDIA_MAX = 6 * 1024 * 1024
+
+
+def save_media(data: bytes) -> str:
+    """A photo for the site (PNG, JPEG or WebP, checked by its bytes). Returns its name."""
+    if not data or len(data) > MEDIA_MAX:
+        raise PortalError("Photos can be up to 6 MB.")
+    ext = "png" if data[:8] == b"\x89PNG\r\n\x1a\n" else "jpg" if data[:3] == b"\xff\xd8\xff" else \
+        "webp" if data[:4] == b"RIFF" and data[8:12] == b"WEBP" else None
+    if not ext:
+        raise PortalError("Use a PNG, JPEG or WebP photo.")
+    d = Path(UPLOAD_DIR) / "site_media"
+    d.mkdir(parents=True, exist_ok=True)
+    name = f"{secrets.token_hex(12)}.{ext}"
+    (d / name).write_bytes(data)
+    return name
+
+
+def media_path(name: str) -> Path | None:
+    if not MEDIA_NAME.match(name or ""):
+        return None
+    p = Path(UPLOAD_DIR) / "site_media" / name
+    return p if p.is_file() else None
 
 
 def settings_dict(s: PortalSettings) -> dict:
@@ -153,6 +203,7 @@ def settings_dict(s: PortalSettings) -> dict:
     from .agreement import DEFAULT_TEMPLATE, PLACEHOLDERS
 
     return {**{k: getattr(s, k) for k in SETTINGS_FIELDS}, "remit_to": remit, "site": site_content(s), "site_defaults": DEFAULT_SITE,
+            "project_kinds": PROJECT_KINDS,
             "agreement_default": DEFAULT_TEMPLATE, "agreement_placeholders": PLACEHOLDERS}
 
 
@@ -216,7 +267,7 @@ def public_info(db: Session) -> dict:
             "materials": sorted(cfg["materials"]), "print_materials": sorted(cfg["additive"]["materials"]),
             "sheet_materials": sorted(flat_materials(cfg)), "finishes": sorted(cfg["finishes"]),
             "accept": ACCEPT, "max_files": MAX_FILES, "max_file_mb": MAX_FILE // (1024 * 1024), "keep_days": DRAFT_DAYS,
-            "site": site_content(s), "company": _company_codes(prof) if s.show_codes else None,
+            "site": public_site(s), "company": _company_codes(prof) if s.show_codes else None,
             "concept_options": portal_concept.OPTIONS, "must_have_hints": portal_concept.MUST_HAVE_HINTS,
             "checkout_methods": checkout.methods(),
             "design": {"ai": __import__("app.design_ai", fromlist=["available"]).available(s), "templates": __import__("app.design", fromlist=["templates"]).templates()}}
