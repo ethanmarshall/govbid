@@ -555,8 +555,12 @@ def price_request(db: Session, req: PortalRequest) -> None:
 
         for g in sp["groups"]:  # decided now, not from the cache, so naming rules can improve
             g["bought"] = all(is_bought(x) for x in (g.get("raw_names") or [g["name"]]))
-        made = [g for g in sp["groups"] if not g.get("bought")] or sp["groups"]
-        bought = [g for g in sp["groups"] if g.get("bought") and g not in made]
+        frame_line, used = _tslot_frame(ctx, req, key, name, sp["groups"], cfg)
+        groups = [g for g in sp["groups"] if g["group"] not in used]
+        made = [g for g in groups if not g.get("bought")] or ([] if used else groups)
+        bought = [g for g in groups if g.get("bought") and g not in made]
+        if frame_line:
+            lines.append(frame_line)
         totals: dict[str, int] = {}
         for g in made + bought:
             totals[g["name"]] = totals.get(g["name"], 0) + 1
@@ -688,6 +692,74 @@ def price_request(db: Session, req: PortalRequest) -> None:
         _finish(req, s, [], manual_reason="Tell us about the project in the notes and send your contact details; we will get back to you.")
         return
     _finish(req, s, lines)
+
+
+def _tslot_frame(ctx, req: PortalRequest, key: str, name: str, groups: list[dict], cfg: dict) -> tuple[dict | None, set]:
+    """An uploaded frame or cart: T-slot extrusion members are priced cut to length with their hardware from the extrusion
+    catalog, not machined from solid. Returns (line or None, group numbers it covers)."""
+    from collections import Counter
+
+    from . import extrusion, tslot
+    from . import frame as frame_mod
+
+    members, hardware, cast = [], [], []
+    for g in groups:
+        names = g.get("raw_names") or [g["name"]]
+        c = None
+        if not g.get("bought"):
+            try:
+                c = tslot.classify(tslot.load_group_shape(g["file_id"]), names[0], g.get("volume"))
+            except Exception:  # noqa: BLE001
+                c = None
+        if c:
+            members.append((g, c))
+            continue
+        base, _ = tslot.hardware_for(names)
+        if base and base.startswith("CASTER"):
+            cast.append((g, base))
+        elif base:
+            hardware.append((g, base))
+    if sum(int(g.get("qty", 1)) for g, _ in members) < 4:  # not a frame: price the parts as usual
+        return None, set()
+    fam = Counter(c["family"] for _, c in members).most_common(1)[0][0]
+    pieces = sum(int(g.get("qty", 1)) for g, _ in members)
+    by_cut: dict = {}
+    for g, c in members:
+        k = (c["profile"], round(c["length_in"] * 16) / 16, c["miters"])
+        e = by_cut.setdefault(k, {"qty": 0, "names": []})
+        e["qty"] += int(g.get("qty", 1))
+        e["names"].append(g["name"])
+    lines = []
+    for (pid, length, miters), e in sorted(by_cut.items(), key=lambda kv: (kv[0][0], -kv[0][1])):
+        ops = [{"op": "counterbore", "count": 2}] + ([{"op": "miter_cut", "count": miters}] if miters else [])
+        lines.append({"kind": "profile", "catalog_id": pid, "qty": e["qty"], "length_in": length, "machining": ops, "description": ", ".join(e["names"])[:200]})
+    hw = Counter()
+    for g, base in hardware:
+        hw[base] += int(g.get("qty", 1))
+    if cast:  # a caster drawn as several bodies (plate, swivel, fork, wheel) is one caster
+        hw[cast[0][1] if all(b == cast[0][1] for _, b in cast) else "CASTER"] += min(int(g.get("qty", 1)) for g, _ in cast)
+    hw["ANCHOR"] += 2 * pieces
+    lines += [{"kind": "hardware", "catalog_id": f"{b}-{fam}", "qty": q} for b, q in hw.items()]
+    tkey = f"{key}#tslot"
+    qty = ctx.qty(tkey, 1)
+    try:
+        r = extrusion.price_build(lines, cfg, [qty])
+    except Exception as exc:  # noqa: BLE001
+        from . import portal_lines as PL
+
+        return PL.new_line(tkey, "T-slot frame", "frame", "manual", group=name, qty=qty, public_reason="We will price the frame by hand.",
+                           internal_reasons=[str(exc)]), {g["group"] for g, _ in members + hardware + cast}
+    facts = [{"label": f"Cut {pid}", "value": f"{e['qty']} x {frame_mod._frac(length)} in" + (f", {miters} miter{'s' if miters > 1 else ''} each" if miters else "")
+              + f": {', '.join(sorted(set(e['names'])))[:120].lower()}"} for (pid, length, miters), e in sorted(by_cut.items(), key=lambda kv: (kv[0][0], -kv[0][1]))]
+    facts.append({"label": "Hardware", "value": ", ".join(f"{q} {frame_mod.HW_LABEL.get(b, b).lower()}" for b, q in hw.items())})
+    facts.append({"label": "Joining", "value": "Estimated at one anchor fastener and counterbore per member end; the model does not show the fasteners.",
+                  "flag": "assumed"})
+    ln = _item_line(ctx, tkey, _item("T-slot extrusion frame", "estimate", f"{pieces} members cut to length, {', '.join(sorted({c['profile'] for _, c in members}))}, with hardware",
+                                     r["price_breaks"], qty, kind="frame", spec={"lines": lines}, facts=facts,
+                                     public_reason="Frame members are priced as cut-to-length extrusion. An engineer confirms the joining hardware.",
+                                     internal_reasons=[x for x in r.get("warnings", [])[:4] + [r.get("config_note") or ""] if x]), qty, "extrusion")
+    ln["group"] = name
+    return ln, {g["group"] for g, _ in members + hardware + cast}
 
 
 def _frame_line(ctx, req: PortalRequest, f: dict, cfg: dict) -> dict:

@@ -231,6 +231,9 @@ class _AxisIndex:
         return out
 
 
+ANALYSIS_VERSION = 2  # 2: flat plates up to 1/2 in are recognized for waterjet cutting
+
+
 def analyze(shape) -> dict:
     """Measure a solid. All lengths in inches, areas in in², volumes in in³."""
     from OCP.Bnd import Bnd_OBB
@@ -375,8 +378,11 @@ def analyze(shape) -> dict:
     min_dim = dims[2]
     thin_ratio = t_est / min_dim if min_dim else 0
     is_sheet = t_est <= 0.26 and (bends or (min_dim <= t_est * 1.15 and dims[1] > 6 * t_est))
+    # a flat plate up to 1/2 in thick with only through features: profile cut on a waterjet, not milled from a block
+    is_plate = not is_sheet and not bends and 0.26 < t_est <= 0.51 and min_dim <= t_est * 1.15 and dims[1] > 6 * t_est \
+        and all(h["depth"] <= 1.5 * t_est for h in holes)
     sheet = None
-    if is_sheet:
+    if is_sheet or is_plate:
         flat_area = volume / t_est
         cut_length = max((area - 2 * flat_area) / t_est, 0)
         sheet = {
@@ -386,6 +392,7 @@ def analyze(shape) -> dict:
             "flat_area": round(flat_area, 3),
             "cut_length": round(cut_length, 2),
             "holes_through_thickness": sum(1 for h in holes if h["depth"] <= 1.5 * t_est),
+            "plate": bool(is_plate),
         }
 
     if sheet:
@@ -409,6 +416,7 @@ def analyze(shape) -> dict:
 
     return {
         "units": "in",
+        "v": ANALYSIS_VERSION,
         "complexity": cx,
         "bounding_box": {"length": round(dims[0], 4), "width": round(dims[1], 4), "height": round(dims[2], 4)},
         "volume": round(volume, 4),

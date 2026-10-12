@@ -161,3 +161,32 @@ def test_frame_is_quoted_from_its_parts_list(client):
     it = q["result"]["items"][0]
     assert it["qty"] == 2 and it["view"] and any(f["label"] == "Cut 1530" for f in it["facts"])
     assert not q["checkout"]["eligible"]
+
+
+def test_uploaded_frame_is_priced_as_extrusion_not_machined(client):
+    """A cart model (here the designer's own STEP) is priced as cut-to-length extrusion plus hardware."""
+    name, data, _ = design.step_for({**CART, "params": {**CART["params"], "doors": [], "base": "none"}})  # no caster bodies
+    q = client.post("/api/public/quote", data={"quantity": "1"}, files=[("files", ("cart.step", data))]).json()
+    items = q["result"]["items"]
+    frame_lines = [i for i in items if i["kind"] == "frame"]
+    assert len(frame_lines) == 1, [(i["name"], i.get("process_label")) for i in items]
+    facts = {f["label"]: f["value"] for f in frame_lines[0]["facts"]}
+    assert facts["Cut 1530"].startswith("4 x 33 3/4 in") and "Cut 1515" in facts
+    assert not [i for i in items if i.get("process_label", "").startswith("CNC")]
+
+
+def test_tslot_names_and_hardware():
+    from app import tslot
+
+    assert tslot.hardware_for(["Front_door_hinge_reference_0", "Front_door_hinge_reference_1"]) == ("HINGE", 2)
+    assert tslot.hardware_for(["Caster_reference_0_0_wheel", "Caster_reference_0_0_fork_1", "Caster_reference_1_0_wheel"]) == ("CASTER", 2)
+    assert tslot.hardware_for(["Locking_caster_2"])[0] == "CASTER-LOCK"
+    assert tslot.hardware_for(["Door_pull_handle"])[0] == "HANDLE" and tslot.hardware_for(["Side_plate"]) == (None, 0)
+
+
+def test_thick_flat_plate_is_waterjet_cut():
+    from app import cad
+
+    spec = design.clean({"type": "plate", "params": {"length": 30, "width": 20, "thickness": 0.5, "holes": [{"x": 2, "y": 2, "diameter": 0.344}]}})
+    g = cad.analyze(design.build(spec))
+    assert g["sheet_metal"] and g["sheet_metal"]["plate"] and g["suggested_process"] == "sheet_metal"

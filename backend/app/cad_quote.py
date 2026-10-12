@@ -183,14 +183,14 @@ def build_spec(geometry: dict, opts: dict, inserts_used: list[dict] | None = Non
             notes.append(f"Thickness set to {t} in; the model measures {sm['thickness']} in.")
         blank = math.sqrt(sm["flat_area"] * 1.15)  # flat pattern plus trim, as a square-equivalent blank
         spec["stock"] = {"shape": "sheet", "dims": {"length": round(blank, 3), "width": round(blank, 3), "thickness": t}}
-        cutter = opts.get("cut_process") or ("waterjet" if t > 0.5 else "laser_cut")
+        cutter = opts.get("cut_process") or ("waterjet" if t > 0.5 or (sm.get("plate") and t > 0.25) else "laser_cut")
         spec["operations"].append({"type": cutter, "cut_length_in": sm["cut_length"], "pierces": sm["holes_through_thickness"] + 1})
         if sm["bends"]:
             spec["operations"].append({"type": "press_brake", "bends": sm["bends"]})
         if threaded:
             spec["operations"].append({"type": "fabrication", "minutes_per_part": round(threaded * 0.75, 2)})
             notes.append(f"{threaded} tapped hole(s) at 0.75 min each.")
-        if t > 0.25:
+        if t > 0.25 and sm["bends"]:
             notes.append("Plate over 1/4 in: check that your brake can form it, or quote as a machined part.")
     elif process == "cnc_lathe":
         tr = g.get("turned")
@@ -253,7 +253,7 @@ def _refresh(file_id: str, d: dict) -> dict:
     """Models analyzed before complexity was measured get measured again once (small files only; big ones
     use the estimate in complexity_of)."""
     g = d.get("geometry") or {}
-    if g.get("complexity") or not (CAD_DIR / f"{file_id}.step").exists():
+    if (g.get("complexity") and g.get("v", 1) >= cad.ANALYSIS_VERSION) or not (CAD_DIR / f"{file_id}.step").exists():
         return d
     if (CAD_DIR / f"{file_id}.step").stat().st_size > isolate.BIG_FILE:
         return d
@@ -290,7 +290,7 @@ def process_options(file_id: str, opts: dict, config: dict | None = None) -> lis
 
     Each option: {process, label, material, five_axis, breaks, unit_price (first quantity), note}. A printed option
     in metal uses the closest printable alloy and says so. Options that do not apply to the geometry are left out."""
-    d = load(file_id)
+    d = _refresh(file_id, load(file_id))
     g = d["geometry"]
     cfg = pricing.merged_config(config)
     mat = opts.get("material") or "6061-T6 aluminum"
@@ -316,6 +316,8 @@ def process_options(file_id: str, opts: dict, config: dict | None = None) -> lis
         five = bool(r["spec"]["operations"] and r["spec"]["operations"][0].get("five_axis"))
         pb = r["estimate"]["price_breaks"]
         label = ("Metal 3D printed" if "DMLS" in m else "3D printed") if proc == "3d_print" else PROCESS_LABEL["cnc_5axis" if five else proc]
+        if proc == "sheet_metal" and (g.get("sheet_metal") or {}).get("plate"):
+            label = "Waterjet cut plate"
         out.append({"process": proc, "label": label,
                     "material": m, "five_axis": five, "breaks": pb, "unit_price": pb[0]["unit_price"], "note": note,
                     "warnings": r["estimate"].get("warnings", [])[:3]})
