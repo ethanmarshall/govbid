@@ -14,6 +14,7 @@ part form with live 3D and the price, only without the chat.
 from __future__ import annotations
 
 import json
+import re
 from datetime import date
 
 from . import design
@@ -154,4 +155,6 @@ def chat(messages: list, current: dict | None, shop: str, daily_limit: int) -> d
             break
     if not text:
         text = "Here is the design. Change any size below, or tell me what to adjust." if spec_out else "Tell me a bit more about the part."
+    text = re.sub(r"\*\*(.+?)\*\*|__(.+?)__", lambda m: m.group(1) or m.group(2), text)  # the chat shows plain text
+    text = re.sub(r"^#{1,6}\s*", "", text, flags=re.M)
     return {"reply": text[:3000], "spec": spec_out}
