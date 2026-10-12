@@ -190,3 +190,31 @@ def test_thick_flat_plate_is_waterjet_cut():
     spec = design.clean({"type": "plate", "params": {"length": 30, "width": 20, "thickness": 0.5, "holes": [{"x": 2, "y": 2, "diameter": 0.344}]}})
     g = cad.analyze(design.build(spec))
     assert g["sheet_metal"] and g["sheet_metal"]["plate"] and g["suggested_process"] == "sheet_metal"
+
+
+def test_tslot_joints_measured_from_geometry():
+    from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox
+    from OCP.gp import gp_Pnt
+
+    from app import tslot
+
+    mm = 25.4
+    box = lambda x, y, z, dx, dy, dz: BRepPrimAPI_MakeBox(gp_Pnt(x * mm, y * mm, z * mm), dx * mm, dy * mm, dz * mm).Shape()
+    solids = [box(0, 0, 0, 1.5, 3, 30), box(1.5, 0, 28.5, 20, 1.5, 1.5), box(40, 0, 0, 1.5, 1.5, 10)]  # post, rail butted into it, loose bar
+    c1530 = {"profile": "1530", "miters": 0}
+    c1515 = {"profile": "1515", "miters": 0}
+    j = tslot.measure_joints(solids, [(0, c1530), (1, c1515), (2, c1515)])
+    assert j[1] == {"joined_ends": 1, "anchors": 1}  # one end on the post, the other end free
+    assert j[0]["joined_ends"] == 0 and j[2]["joined_ends"] == 0
+    solids[0] = box(1.5, 0, 30, 1.5, 3, 10)  # a 1530 standing on the rail's end region: two anchors on that end
+    j = tslot.measure_joints(solids, [(0, c1530), (1, c1515)])
+    assert j[0] == {"joined_ends": 1, "anchors": 2}
+
+
+def test_tslot_panels_by_name():
+    from app import tslot
+
+    assert tslot.panel_for("Rear_right_door_infill", 0.236) == "PANEL-PC-250"
+    assert tslot.panel_for("Front acrylic panel", 0.12) == "PANEL-ACR-125"
+    assert tslot.panel_for("Side_infill_ACM", 0.118, "PC") == "PANEL-ACM-118"
+    assert tslot.panel_for("Side_plate", 0.236) is None and tslot.panel_for("Aluminum infill panel", 0.125) is None

@@ -85,4 +85,10 @@ class PortalSettings(Base):
     # the design assistant (needs ANTHROPIC_API_KEY): on or off, and how many chat messages a day at most
     design_ai: Mapped[bool] = mapped_column(Boolean, default=True)
     design_ai_daily: Mapped[int] = mapped_column(Integer, default=300)
+    # T-slot frames found in uploaded models: when every member, joint and hardware item is measured from the model the
+    # frame is priced from that parts list with a narrow range (frame_band_pct above the price, none below). With
+    # frame_review on, an engineer still confirms the frame before it can be ordered.
+    frame_review: Mapped[bool] = mapped_column(Boolean, default=True)
+    frame_band_pct: Mapped[float] = mapped_column(Float, default=5.0)
+    frame_panel_material: Mapped[str] = mapped_column(String(10), default="PC")  # infill panels with no material in their name
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

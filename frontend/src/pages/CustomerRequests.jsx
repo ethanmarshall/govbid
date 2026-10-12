@@ -227,6 +227,28 @@ const siteText = (site) => ({ about: site.about || '', capabilities: toCaps(site
   industries: (site.industries || []).join('\n'), quality: (site.quality || []).join('\n'), faq: toFaq(site.faq) })
 const siteFrom = (t) => ({ about: t.about, capabilities: fromCaps(t.capabilities), experience: lines(t.experience), industries: lines(t.industries), quality: lines(t.quality), faq: fromFaq(t.faq) })
 
+// What a T-slot frame line was priced from: the cut list and hardware read from the model, then each cost.
+function FrameBom({ it }) {
+  const facts = (it.facts || []).filter((f) => f.label !== 'Overall size')
+  const costs = it.spec.costs || []
+  const total = costs.reduce((a, c) => a + (c.cost || 0), 0)
+  return (
+    <div style={{ marginTop: 6, minWidth: 420 }}>
+      <ul className="clean" style={{ margin: '0 0 6px' }}>{facts.map((f, j) => (
+        <li key={j}><b>{f.label}</b>: {f.value}{f.flag === 'assumed' && <span className="due-soon"> assumed</span>}</li>
+      ))}</ul>
+      <table className="small">
+        <tbody>{costs.map((c, j) => (
+          <tr key={j}><td>{c.category}</td><td>{c.item}{c.note && <div className="muted">{c.note}</div>}</td>
+            <td className="mono">{c.hours != null ? `${c.hours} h` : ''}</td><td className="mono">{usd(c.cost)}</td></tr>
+        ))}
+          <tr><td /><td><b>Cost for one build</b></td><td /><td className="mono"><b>{usd(total)}</b></td></tr></tbody>
+      </table>
+      <p className="muted" style={{ margin: '4 0 0' }}>Rates come from Extrusion rates in Pricing settings. Change a rate there and reprice the request to update this.</p>
+    </div>
+  )
+}
+
 function LineTable({ r, id, setR, setMsg, setErr }) {
   const items = r.internal?.items || []
   const [finals, setFinals] = useState({})
@@ -250,6 +272,14 @@ function LineTable({ r, id, setR, setMsg, setErr }) {
                 <>
                   <button className="link small" onClick={() => setOpen({ ...open, [it.key]: !open[it.key] })}>{open[it.key] ? 'Hide notes' : `${it.internal_reasons.length} note(s)`}</button>
                   {open[it.key] && <ul className="clean muted" style={{ marginTop: 4 }}>{it.internal_reasons.slice(0, 8).map((x, j) => <li key={j}>{x}</li>)}</ul>}
+                </>
+              )}
+              {it.spec?.costs?.length > 0 && (
+                <>
+                  <div><button className="link small" onClick={() => setOpen({ ...open, [`${it.key}#bom`]: !open[`${it.key}#bom`] })}>
+                    {open[`${it.key}#bom`] ? 'Hide parts list' : 'Parts list and costs'}</button>
+                    {it.spec.joints_measured && <span className="muted"> (joints measured from the model)</span>}</div>
+                  {open[`${it.key}#bom`] && <FrameBom it={it} />}
                 </>
               )}</td>
             <td className="mono">{it.qty}{it.qty_per > 1 ? <div className="muted">{it.qty_per}/set</div> : null}</td>
@@ -308,6 +338,16 @@ function PortalSettings({ onSaved }) {
         {f('estimate_high_pct', 'Estimate range: above by %', 'number', { min: 0 })}
         {f('incomplete_high_pct', 'Above by % when parts need manual prices', 'number', { min: 0 })}
       </div>
+      <h3>T-slot frames in uploaded models</h3>
+      <div className="grid g3">
+        {f('frame_band_pct', 'Range above the price by % when the parts list is complete', 'number', { min: 0 })}
+        <label className="f">Infill panels with no material in their name
+          <select value={s.frame_panel_material || 'PC'} onChange={(e) => setS({ ...s, frame_panel_material: e.target.value })}>
+            <option value="PC">Polycarbonate</option><option value="ACR">Acrylic</option><option value="ACM">Aluminum composite (ACM)</option>
+          </select></label>
+        <label className="check" style={{ alignSelf: 'end' }}><input type="checkbox" checked={s.frame_review ?? true} onChange={(e) => setS({ ...s, frame_review: e.target.checked })} /> An engineer confirms frames before they can be ordered</label>
+      </div>
+      <p className="small muted" style={{ margin: '4px 0 0' }}>The cut list, joints and hardware are read from the model. When every joint is measured the frame gets this narrow range instead of the estimate range above. Name panels with their material (polycarbonate, acrylic, ACM) to skip the default.</p>
       <label className="f" style={{ marginTop: 10 }}>Tagline<input value={s.tagline} onChange={(e) => setS({ ...s, tagline: e.target.value })} /></label>
       <label className="f" style={{ marginTop: 10 }}>Intro above the upload box<textarea value={s.intro} onChange={(e) => setS({ ...s, intro: e.target.value })} style={{ minHeight: 60 }} /></label>
       <label className="f" style={{ marginTop: 10 }}>Terms the customer accepts<textarea value={s.terms} onChange={(e) => setS({ ...s, terms: e.target.value })} style={{ minHeight: 70 }} /></label>

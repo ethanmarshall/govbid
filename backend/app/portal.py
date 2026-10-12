@@ -74,7 +74,8 @@ def get_settings(db: Session) -> PortalSettings:
 
 SETTINGS_FIELDS = ("enabled", "display_name", "tagline", "intro", "contact_email", "contact_phone", "notify_email", "estimate_low_pct",
                    "estimate_high_pct", "incomplete_high_pct", "review_days", "max_quantity", "terms", "show_codes",
-                   "pay_instructions", "agreement_template", "design_ai", "design_ai_daily")
+                   "pay_instructions", "agreement_template", "design_ai", "design_ai_daily",
+                   "frame_review", "frame_band_pct", "frame_panel_material")
 
 # What the customer site says about you until you change it in Portal settings. Written to be true of a small
 # veteran-owned shop that designs, builds and tests; edit every line so it matches what you actually do.
@@ -168,9 +169,15 @@ def update_settings(db: Session, changes: dict) -> dict:
             continue
         if k not in SETTINGS_FIELDS or v is None:
             continue
-        if k in ("enabled", "show_codes", "design_ai"):
+        if k in ("enabled", "show_codes", "design_ai", "frame_review"):
             v = bool(v)
-        elif k in ("estimate_low_pct", "estimate_high_pct", "incomplete_high_pct"):
+        elif k == "frame_panel_material":
+            from .extrusion_catalog import PANELS
+
+            v = str(v).upper()
+            if v not in {p[1] for p in PANELS.values()}:
+                raise PortalError("Pick a panel material from the catalog")
+        elif k in ("estimate_low_pct", "estimate_high_pct", "incomplete_high_pct", "frame_band_pct"):
             v = float(v)
             if not 0 <= v <= 300:
                 raise PortalError(f"{k} must be between 0 and 300")
@@ -555,7 +562,7 @@ def price_request(db: Session, req: PortalRequest) -> None:
 
         for g in sp["groups"]:  # decided now, not from the cache, so naming rules can improve
             g["bought"] = all(is_bought(x) for x in (g.get("raw_names") or [g["name"]]))
-        frame_line, used = _tslot_frame(ctx, req, key, name, sp["groups"], cfg)
+        frame_line, used = _tslot_frame(ctx, req, key, name, sp["groups"], cfg, stored["file_id"], f.get("size", 0))
         groups = [g for g in sp["groups"] if g["group"] not in used]
         made = [g for g in groups if not g.get("bought")] or ([] if used else groups)
         bought = [g for g in groups if g.get("bought") and g not in made]
@@ -694,7 +701,7 @@ def price_request(db: Session, req: PortalRequest) -> None:
     _finish(req, s, lines)
 
 
-def _tslot_frame(ctx, req: PortalRequest, key: str, name: str, groups: list[dict], cfg: dict) -> tuple[dict | None, set]:
+def _tslot_frame(ctx, req: PortalRequest, key: str, name: str, groups: list[dict], cfg: dict, parent_id: str = "", size: int = 0) -> tuple[dict | None, set]:
     """An uploaded frame or cart: T-slot extrusion members are priced cut to length with their hardware from the extrusion
     catalog, not machined from solid. Returns (line or None, group numbers it covers)."""
     from collections import Counter
@@ -702,7 +709,8 @@ def _tslot_frame(ctx, req: PortalRequest, key: str, name: str, groups: list[dict
     from . import extrusion, tslot
     from . import frame as frame_mod
 
-    members, hardware, cast = [], [], []
+    s = ctx.s
+    members, hardware, cast, panels = [], [], [], []
     for g in groups:
         names = g.get("raw_names") or [g["name"]]
         c = None
@@ -717,29 +725,61 @@ def _tslot_frame(ctx, req: PortalRequest, key: str, name: str, groups: list[dict
         base, _ = tslot.hardware_for(names)
         if base and base.startswith("CASTER"):
             cast.append((g, base))
-        elif base:
+            continue
+        if base:
             hardware.append((g, base))
+            continue
+        sm = (g.get("sheet_thickness") or 0)
+        bb = g.get("bounding_box") or {}
+        dims = sorted([bb.get("length") or 0, bb.get("width") or 0, bb.get("height") or 0])
+        t = sm or dims[0]
+        pid = tslot.panel_for(names[0], t, s.frame_panel_material or "PC") if t and t <= 0.4 and dims[1] > 4 else None
+        if pid:
+            panels.append((g, pid, dims[2], dims[1]))
     if sum(int(g.get("qty", 1)) for g, _ in members) < 4:  # not a frame: price the parts as usual
         return None, set()
     fam = Counter(c["family"] for _, c in members).most_common(1)[0][0]
     pieces = sum(int(g.get("qty", 1)) for g, _ in members)
+    # joints: measured from where each member's ends touch other members (small files), else one per member end
+    joints = None
+    if parent_id and size <= isolate.BIG_FILE:
+        try:
+            from .assembly import _load_solids
+
+            solids = _load_solids(parent_id)
+            body_c = [(i, c) for g, c in members for i in (g.get("bodies") or [g.get("representative")]) if i is not None and i < len(solids)]
+            joints = tslot.measure_joints(solids, body_c)
+        except Exception:  # noqa: BLE001
+            joints = None
     by_cut: dict = {}
+    anchors_total = 0
     for g, c in members:
-        k = (c["profile"], round(c["length_in"] * 16) / 16, c["miters"])
-        e = by_cut.setdefault(k, {"qty": 0, "names": []})
-        e["qty"] += int(g.get("qty", 1))
-        e["names"].append(g["name"])
+        bodies = g.get("bodies") or [g.get("representative")]
+        for b in bodies:
+            j = (joints or {}).get(b)
+            anchors = j["anchors"] if j else 2
+            anchors_total += anchors
+            k = (c["profile"], round(c["length_in"] * 16) / 16, c["miters"], anchors)
+            e = by_cut.setdefault(k, {"qty": 0, "names": []})
+            e["qty"] += 1
+            if g["name"] not in e["names"]:
+                e["names"].append(g["name"])
     lines = []
-    for (pid, length, miters), e in sorted(by_cut.items(), key=lambda kv: (kv[0][0], -kv[0][1])):
-        ops = [{"op": "counterbore", "count": 2}] + ([{"op": "miter_cut", "count": miters}] if miters else [])
+    for (pid, length, miters, anchors), e in sorted(by_cut.items(), key=lambda kv: (kv[0][0], -kv[0][1])):
+        ops = ([{"op": "counterbore", "count": anchors}] if anchors else []) + ([{"op": "miter_cut", "count": miters}] if miters else [])
         lines.append({"kind": "profile", "catalog_id": pid, "qty": e["qty"], "length_in": length, "machining": ops, "description": ", ".join(e["names"])[:200]})
     hw = Counter()
     for g, base in hardware:
         hw[base] += int(g.get("qty", 1))
     if cast:  # a caster drawn as several bodies (plate, swivel, fork, wheel) is one caster
         hw[cast[0][1] if all(b == cast[0][1] for _, b in cast) else "CASTER"] += min(int(g.get("qty", 1)) for g, _ in cast)
-    hw["ANCHOR"] += 2 * pieces
+    if anchors_total:
+        hw["ANCHOR"] += anchors_total
     lines += [{"kind": "hardware", "catalog_id": f"{b}-{fam}", "qty": q} for b, q in hw.items()]
+    pan = Counter()
+    for g, pid, a, b in panels:
+        pan[(pid, round(a, 3), round(b, 3), g["name"])] += int(g.get("qty", 1))
+    lines += [{"kind": "panel", "catalog_id": pid, "qty": q, "width_in": a, "height_in": b, "description": nm} for (pid, a, b, nm), q in pan.items()]
     tkey = f"{key}#tslot"
     qty = ctx.qty(tkey, 1)
     try:
@@ -749,17 +789,30 @@ def _tslot_frame(ctx, req: PortalRequest, key: str, name: str, groups: list[dict
 
         return PL.new_line(tkey, "T-slot frame", "frame", "manual", group=name, qty=qty, public_reason="We will price the frame by hand.",
                            internal_reasons=[str(exc)]), {g["group"] for g, _ in members + hardware + cast}
+    from .extrusion_catalog import PANELS
+
     facts = [{"label": f"Cut {pid}", "value": f"{e['qty']} x {frame_mod._frac(length)} in" + (f", {miters} miter{'s' if miters > 1 else ''} each" if miters else "")
-              + f": {', '.join(sorted(set(e['names'])))[:120].lower()}"} for (pid, length, miters), e in sorted(by_cut.items(), key=lambda kv: (kv[0][0], -kv[0][1]))]
+              + (f", {anchors} counterbore{'s' if anchors > 1 else ''} each" if anchors else "")
+              + f": {', '.join(sorted(set(e['names'])))[:120].lower()}"} for (pid, length, miters, anchors), e in sorted(by_cut.items(), key=lambda kv: (kv[0][0], -kv[0][1]))]
     facts.append({"label": "Hardware", "value": ", ".join(f"{q} {frame_mod.HW_LABEL.get(b, b).lower()}" for b, q in hw.items())})
-    facts.append({"label": "Joining", "value": "Estimated at one anchor fastener and counterbore per member end; the model does not show the fasteners.",
-                  "flag": "assumed"})
-    ln = _item_line(ctx, tkey, _item("T-slot extrusion frame", "estimate", f"{pieces} members cut to length, {', '.join(sorted({c['profile'] for _, c in members}))}, with hardware",
-                                     r["price_breaks"], qty, kind="frame", spec={"lines": lines}, facts=facts,
-                                     public_reason="Frame members are priced as cut-to-length extrusion. An engineer confirms the joining hardware.",
+    for (pid, a, b, nm), q in pan.items():
+        facts.append({"label": "Panel", "value": f"{q} x {frame_mod._frac(a)} x {frame_mod._frac(b)} in {PANELS[pid][0].lower()}: {nm.lower()}",
+                      "flag": None if tslot.PANEL_HINTS and any(rx.search(nm) for rx, _ in tslot.PANEL_HINTS) else "assumed"})
+    facts.append({"label": "Joining", "value": (f"{anchors_total} anchor fasteners, one per joined member end and two on a 1530-size end (measured from the model)" if joints
+                                                else "Estimated at one anchor fastener and counterbore per member end; the model does not show the fasteners."),
+                  **({} if joints else {"flag": "assumed"})})
+    confident = joints is not None
+    route = "instant" if (confident and not s.frame_review) else "estimate"
+    ln = _item_line(ctx, tkey, _item("T-slot extrusion frame", route, f"{pieces} members cut to length, {', '.join(sorted({c['profile'] for _, c in members}))}, with hardware",
+                                     r["price_breaks"], qty, kind="frame", spec={"lines": lines, "costs": r.get("per_part_lines"), "lot": r.get("per_lot_lines"),
+                                                                                  "joints_measured": confident}, facts=facts,
+                                     public_reason=("Priced from the parts list in your model; an engineer confirms it before the order." if confident else
+                                                    "Frame members are priced as cut-to-length extrusion. An engineer confirms the joining hardware."),
                                      internal_reasons=[x for x in r.get("warnings", [])[:4] + [r.get("config_note") or ""] if x]), qty, "extrusion")
     ln["group"] = name
-    return ln, {g["group"] for g, _ in members + hardware + cast}
+    if confident:
+        ln["band"] = [0.0, float(s.frame_band_pct or 0)]
+    return ln, {g["group"] for g, _ in members + hardware + cast} | {g["group"] for g, *_ in panels}
 
 
 def _frame_line(ctx, req: PortalRequest, f: dict, cfg: dict) -> dict:
@@ -843,7 +896,10 @@ def _finish(req: PortalRequest, s: PortalSettings, lines: list[dict], manual_rea
         q = int(ln.get("qty") or 1)
         if u is not None and ln["route"] == "estimate":
             hi_pct = s.incomplete_high_pct if ln.get("incomplete") else s.estimate_high_pct
-            lo_u, hi_u = u * (1 - s.estimate_low_pct / 100), u * (1 + hi_pct / 100)
+            lo_pct = s.estimate_low_pct
+            if ln.get("band"):  # a line priced from an exact parts list: a narrow range
+                lo_pct, hi_pct = ln["band"]
+            lo_u, hi_u = u * (1 - lo_pct / 100), u * (1 + hi_pct / 100)
             row.update(unit_low=_round_est(lo_u), unit_high=_round_est(hi_u), total_low=_round_est(lo_u * q), total_high=_round_est(hi_u * q))
             low += lo_u * q
             high += hi_u * q

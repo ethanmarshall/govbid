@@ -139,3 +139,60 @@ def load_group_shape(file_id: str):
     from . import cad, cad_quote
 
     return cad.load_step(Path(cad_quote.CAD_DIR) / f"{file_id}.step")
+
+
+def _obb_box(shape):
+    from OCP.Bnd import Bnd_OBB
+    from OCP.BRepBndLib import BRepBndLib
+
+    o = Bnd_OBB()
+    BRepBndLib.AddOBB_s(shape, o, True, True, False)
+    return o
+
+
+def measure_joints(solids: list, members: list[tuple[int, dict]], tol_in: float = 0.06) -> dict:
+    """Which member ends butt into another member. members: [(body index, classify() result)].
+    Returns {body index: {"joined_ends": n, "anchors": n}}: an end is joined when its center touches another member;
+    each joined end takes one anchor fastener per 1.5 in module of its own section (a 1530 end takes two)."""
+    from OCP.gp import gp_Pnt
+
+    boxes, grown = {}, {}
+    for i, c in members:
+        boxes[i] = _obb_box(solids[i])
+        g = _obb_box(solids[i])
+        g.Enlarge((tol_in if not c.get("miters") else 0.2) * 25.4)  # a mitered end meets the other member on a slant
+        grown[i] = g
+    out = {}
+    for i, c in members:
+        o = boxes[i]
+        axes = [(o.XHSize(), o.XDirection()), (o.YHSize(), o.YDirection()), (o.ZHSize(), o.ZDirection())]
+        half, d = max(axes, key=lambda t: t[0])
+        ctr = o.Center()
+        ends = 0
+        for sgn in (1, -1):
+            p = gp_Pnt(ctr.X() + sgn * half * d.X(), ctr.Y() + sgn * half * d.Y(), ctr.Z() + sgn * half * d.Z())
+            if any(j != i and not grown[j].IsOut(p) for j, _ in members):
+                ends += 1
+        prof = next((p for p in PROFILES if p["id"] == c["profile"]), None)
+        modules = max(1, round(prof["b"] / prof["a"])) if prof else 1
+        out[i] = {"joined_ends": ends, "anchors": ends * modules}
+    return out
+
+
+PANEL_WORDS = re.compile(r"\b(infill|panel|window|glazing|lexan|polycarb\w*|acrylic|plexi\w*|acm|dibond|composite|guard[ _-]?panel)\b", re.I)
+PANEL_HINTS = [(re.compile(r"polycarb|lexan|makrolon|\bpc\b", re.I), "PC"), (re.compile(r"acrylic|plexi|\bacr\b", re.I), "ACR"),
+               (re.compile(r"\bacm\b|dibond|composite", re.I), "ACM")]
+
+
+def panel_for(name: str, thickness_in: float, default_material: str = "PC") -> str | None:
+    """Catalog panel id for an infill panel (by name hint, else the default material), nearest in thickness."""
+    from .extrusion_catalog import PANELS
+
+    n = (name or "").replace("_", " ")
+    if not PANEL_WORDS.search(n):
+        return None
+    if re.search(r"\b(alum\w*|6061|5052|steel|stainless)\b", n, re.I):
+        return None  # a metal panel is priced as sheet metal
+    mat = next((m for rx, m in PANEL_HINTS if rx.search(n)), default_material)
+    opts = [(k, v) for k, v in PANELS.items() if v[1] == mat] or list(PANELS.items())
+    return min(opts, key=lambda kv: abs(kv[1][2] - thickness_in))[0]
