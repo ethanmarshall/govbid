@@ -39,4 +39,13 @@ def test_past_work_drafts_hidden_until_published(client):
     bad = TestClient(app).get("/api/public/site-media/..%2F..%2Fsecret.png")
     assert "image" not in bad.headers.get("content-type", "")
     assert TestClient(app).get("/api/public/site-media/abc.png").status_code == 404
+    r = client.put("/api/portal/settings", json={"site": {"projects": [{"title": "Sample job", "kind": "customer", "sample": True, "published": True}]}})
+    assert r.json()["site"]["projects"][0]["published"] is False  # samples never reach customers
+    assert client.get("/api/public/info").json()["site"]["projects"] == []
+    from app import portal
+    from app.db import SessionLocal
+
+    with SessionLocal() as db:
+        seen = portal.public_info(db, owner=True)["site"]["projects"]
+    assert seen[0]["preview"].startswith("Sample") and "sample" not in seen[0]
     client.put("/api/portal/settings", json={"site": {"projects": []}})

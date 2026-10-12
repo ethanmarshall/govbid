@@ -414,6 +414,7 @@ function SiteSections({ info }) {
           <div className="pq-work">
             {site.projects.map((w, i) => (
               <article key={i} className="pq-work-item" aria-labelledby={`work-${i}`}>
+                {w.preview && <p className="pq-work-preview">{w.preview}</p>}
                 {w.image && <img className="pq-work-img" src={`/api/public/site-media/${w.image}`} alt={w.image_alt || w.title} loading="lazy" />}
                 <div className="pq-tb pq-work-tb">
                   <div className="pq-tb-row">

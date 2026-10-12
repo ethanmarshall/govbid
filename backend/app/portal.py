@@ -157,14 +157,16 @@ def _clean_project(c: dict) -> dict:
             "summary": str(c.get("summary") or "").strip()[:1200],
             "details": [str(x).strip()[:300] for x in (c.get("details") or []) if str(x).strip()][:10],
             "image": image if MEDIA_NAME.match(image) else "", "image_alt": str(c.get("image_alt") or "").strip()[:200],
-            "published": bool(c.get("published"))}
+            "sample": bool(c.get("sample")), "published": bool(c.get("published")) and not c.get("sample")}  # a sample is never shown to customers
 
 
-def public_site(s: PortalSettings) -> dict:
-    """The site text customers see: past work only once you publish it."""
+def public_site(s: PortalSettings, owner: bool = False) -> dict:
+    """The site text customers see: past work only once you publish it. You (signed in) also see drafts and samples,
+    marked, so you can judge the page as customers will see it."""
     site = site_content(s)
-    site["projects"] = [{**{k: v for k, v in p.items() if k != "published"}, "kind_label": PROJECT_KINDS.get(p.get("kind"), "")}
-                        for p in site.get("projects") or [] if p.get("published")]
+    site["projects"] = [{**{k: v for k, v in p.items() if k not in ("published", "sample")}, "kind_label": PROJECT_KINDS.get(p.get("kind"), ""),
+                         **({} if p.get("published") else {"preview": "Sample, only you can see this" if p.get("sample") else "Draft, only you can see this"})}
+                        for p in site.get("projects") or [] if p.get("published") or owner]
     return site
 
 
@@ -252,7 +254,7 @@ def update_settings(db: Session, changes: dict) -> dict:
     return settings_dict(s)
 
 
-def public_info(db: Session) -> dict:
+def public_info(db: Session, owner: bool = False) -> dict:
     """What the public page needs: who you are, choices, limits. No rates or costs."""
     from .models import CompanyProfile
 
@@ -267,7 +269,7 @@ def public_info(db: Session) -> dict:
             "materials": sorted(cfg["materials"]), "print_materials": sorted(cfg["additive"]["materials"]),
             "sheet_materials": sorted(flat_materials(cfg)), "finishes": sorted(cfg["finishes"]),
             "accept": ACCEPT, "max_files": MAX_FILES, "max_file_mb": MAX_FILE // (1024 * 1024), "keep_days": DRAFT_DAYS,
-            "site": public_site(s), "company": _company_codes(prof) if s.show_codes else None,
+            "site": public_site(s, owner), "company": _company_codes(prof) if s.show_codes else None,
             "concept_options": portal_concept.OPTIONS, "must_have_hints": portal_concept.MUST_HAVE_HINTS,
             "checkout_methods": checkout.methods(),
             "design": {"ai": __import__("app.design_ai", fromlist=["available"]).available(s), "templates": __import__("app.design", fromlist=["templates"]).templates()}}

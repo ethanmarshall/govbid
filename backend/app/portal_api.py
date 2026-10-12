@@ -83,7 +83,8 @@ async def upload_site_media(file: UploadFile = File(...)):
 
 @public.get("/info")
 def info(request: Request, db: Session = Depends(get_db)):
-    return {**portal.public_info(db), "owner": _owner(request)}
+    owner = _owner(request)
+    return {**portal.public_info(db, owner), "owner": owner}
 
 
 @public.post("/quote")

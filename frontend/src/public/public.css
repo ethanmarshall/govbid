@@ -256,6 +256,7 @@
 .pq-ticks { list-style: none; margin: 0; padding: 0; }
 .pq-work { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 30px 36px; margin-top: 8px; }
 .pq-work-item { min-width: 0; }
+.pq-work-preview { margin: 0 0 6px; font-size: 14px; font-weight: 600; color: var(--wait); }
 .pq-work-img { display: block; width: 100%; aspect-ratio: 4 / 3; object-fit: contain; background: var(--paper); border: 1.5px solid var(--ink); border-bottom: 0; }
 .pq-work-tb .pq-cell b { font-size: 21px; }
 .pq-work-year { flex: 0 0 auto; min-width: 84px; }

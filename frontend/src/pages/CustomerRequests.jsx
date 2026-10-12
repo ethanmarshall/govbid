@@ -492,8 +492,11 @@ function PastWork({ projects, setProjects, kinds, setErr }) {
             {p.image && <input className="small" style={{ flex: 1, minWidth: 160 }} placeholder="Photo description, for screen readers" value={p.image_alt || ''} onChange={(e) => set(i, { image_alt: e.target.value })} />}
           </div>
           <div className="row" style={{ gap: 12, marginTop: 8 }}>
-            <label className="check"><input type="checkbox" checked={!!p.published} onChange={(e) => set(i, { published: e.target.checked })} /> <b>Published</b> (customers see it)</label>
-            {!p.published && <span className="small due-soon">Draft, hidden</span>}
+            {p.sample
+              ? <span className="small due-soon">Sample for previewing the page: only you see it, signed in. Replace it with a real job; it can't be published.</span>
+              : <label className="check"><input type="checkbox" checked={!!p.published} onChange={(e) => set(i, { published: e.target.checked })} /> <b>Published</b> (customers see it)</label>}
+            {!p.published && !p.sample && <span className="small due-soon">Draft: only you see it, signed in</span>}
+            {p.sample && <button className="link small" onClick={() => set(i, { sample: false, published: false })}>This is now a real job</button>}
             <span style={{ marginLeft: 'auto' }} />
             {i > 0 && <button className="link small" onClick={() => move(i, -1)}>Move up</button>}
             {i < projects.length - 1 && <button className="link small" onClick={() => move(i, 1)}>Move down</button>}
