@@ -359,7 +359,7 @@ def _claude_extract(data: bytes) -> dict:
     """Send the PDF to Claude for the geometry fields. Tests replace this function."""
     import anthropic
 
-    client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+    client = __import__("app.config", fromlist=["anthropic_client"]).anthropic_client()
     msg = client.messages.create(
         model=ANTHROPIC_MODEL,
         max_tokens=4000,

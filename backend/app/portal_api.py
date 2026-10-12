@@ -841,7 +841,10 @@ def assistant_check():
     from . import design_ai
     from .config import ANTHROPIC_API_KEY, ANTHROPIC_MODEL
 
-    out = {"key_set": bool(ANTHROPIC_API_KEY), "key_prefix": ANTHROPIC_API_KEY[:10] if ANTHROPIC_API_KEY else "", "model": ANTHROPIC_MODEL}
+    from .config import ANTHROPIC_WORKSPACE_ID
+
+    out = {"key_set": bool(ANTHROPIC_API_KEY), "key_prefix": ANTHROPIC_API_KEY[:10] if ANTHROPIC_API_KEY else "", "model": ANTHROPIC_MODEL,
+           "workspace_id_set": bool(ANTHROPIC_WORKSPACE_ID)}
     try:
         msg = design_ai._client().messages.create(model=ANTHROPIC_MODEL, max_tokens=5, messages=[{"role": "user", "content": "Say ok"}])
         out.update(ok=True, reply="".join(getattr(b, "text", "") for b in msg.content))

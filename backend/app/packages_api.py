@@ -433,7 +433,7 @@ def draft_section(sid: int, body: DraftIn, db: Session = Depends(get_db)):
 
     import anthropic
 
-    client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+    client = __import__("app.config", fromlist=["anthropic_client"]).anthropic_client()
     msg = client.messages.create(
         model=ANTHROPIC_MODEL, max_tokens=8000, system=DRAFT_SYSTEM,
         messages=[{"role": "user", "content": "\n\n".join(x for x in parts if x)}],

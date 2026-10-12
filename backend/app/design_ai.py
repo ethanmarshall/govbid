@@ -113,7 +113,7 @@ def _clean_history(messages: list) -> list[dict]:
 def _client():
     import anthropic
 
-    return anthropic.Anthropic(api_key=ANTHROPIC_API_KEY, timeout=60, max_retries=1)
+    return __import__("app.config", fromlist=["anthropic_client"]).anthropic_client(timeout=60, max_retries=1)
 
 
 def chat(messages: list, current: dict | None, shop: str, daily_limit: int) -> dict:

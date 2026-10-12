@@ -712,7 +712,7 @@ def _claude_read_bom(data: bytes) -> dict:
     """Send the PDF to Claude and return its JSON transcription. Tests replace this function."""
     import anthropic
 
-    client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+    client = __import__("app.config", fromlist=["anthropic_client"]).anthropic_client()
     msg = client.messages.create(
         model=ANTHROPIC_MODEL, max_tokens=8000,
         messages=[{"role": "user", "content": [

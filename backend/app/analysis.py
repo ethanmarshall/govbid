@@ -313,7 +313,7 @@ Use empty strings or empty lists when information is not present. Do not invent 
 def claude_analysis(opp: dict, docs: list[tuple[str, str]], eligibility: dict | None = None) -> dict:
     import anthropic
 
-    client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+    client = __import__("app.config", fromlist=["anthropic_client"]).anthropic_client()
     header = {k: opp.get(k) for k in ("title", "solicitation_number", "agency", "notice_type", "set_aside_desc", "naics", "psc", "response_deadline", "place_of_performance")}
     material, used = [], 0
     for name, text in docs:

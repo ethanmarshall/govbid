@@ -45,7 +45,7 @@ def call_claude(system: str, user: str, max_tokens: int = 8000) -> str:
     """The one place this module talks to the Anthropic SDK (tests monkeypatch it)."""
     import anthropic
 
-    client = anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY)
+    client = __import__("app.config", fromlist=["anthropic_client"]).anthropic_client()
     msg = client.messages.create(model=config.ANTHROPIC_MODEL, max_tokens=max_tokens, system=system,
                                  messages=[{"role": "user", "content": user}])
     return "".join(b.text for b in msg.content if getattr(b, "type", "") == "text").strip()

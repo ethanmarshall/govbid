@@ -22,6 +22,17 @@ _load_dotenv()
 SAM_API_KEY = os.getenv("SAM_API_KEY", "")
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 ANTHROPIC_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-5-5")
+# Keys that are not scoped to one workspace must say which workspace to use (Console, Settings, Workspaces: wrkspc_...)
+ANTHROPIC_WORKSPACE_ID = os.getenv("ANTHROPIC_WORKSPACE_ID", "")
+
+
+def anthropic_client(**kw):
+    """The Anthropic client with the key, and the workspace header when ANTHROPIC_WORKSPACE_ID is set."""
+    import anthropic
+
+    if ANTHROPIC_WORKSPACE_ID:
+        kw["default_headers"] = {"anthropic-workspace-id": ANTHROPIC_WORKSPACE_ID}
+    return anthropic.Anthropic(api_key=ANTHROPIC_API_KEY, **kw)
 DATABASE_URL = os.getenv("DATABASE_URL", f"sqlite:///{BASE_DIR / 'govbid.db'}")
 if DATABASE_URL.startswith("sqlite:///"):  # create the folder for the database file (a fresh disk is empty)
     Path(DATABASE_URL[len("sqlite:///"):]).parent.mkdir(parents=True, exist_ok=True)
