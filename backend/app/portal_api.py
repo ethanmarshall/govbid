@@ -835,6 +835,21 @@ def waive_agreement(rid: int, body: WaiveIn, db: Session = Depends(get_db)):
     return portal.internal_dict(r, full=True)
 
 
+@internal.get("/design/assistant-check")
+def assistant_check():
+    """Staff only: make one tiny call to the AI and say exactly what happened (the key itself is never shown)."""
+    from . import design_ai
+    from .config import ANTHROPIC_API_KEY, ANTHROPIC_MODEL
+
+    out = {"key_set": bool(ANTHROPIC_API_KEY), "key_prefix": ANTHROPIC_API_KEY[:10] if ANTHROPIC_API_KEY else "", "model": ANTHROPIC_MODEL}
+    try:
+        msg = design_ai._client().messages.create(model=ANTHROPIC_MODEL, max_tokens=5, messages=[{"role": "user", "content": "Say ok"}])
+        out.update(ok=True, reply="".join(getattr(b, "text", "") for b in msg.content))
+    except Exception as exc:  # noqa: BLE001
+        out.update(ok=False, error=type(exc).__name__, detail=str(exc)[:400])
+    return out
+
+
 @internal.get("/customers")
 def list_customers(db: Session = Depends(get_db)):
     """Customer accounts with their orders and the terms you gave them; requests for terms first."""
