@@ -893,6 +893,7 @@ export function PartsTable({ req, token, info, onLine, pending, viewUrl }) {
   const editable = !!onLine && !req.submitted
   const src = (key) => (viewUrl ? viewUrl(key) : `/api/public/quote/${req.ref}/views/${key}.svg?token=${encodeURIComponent(token)}`)
   const flagged = items.some((it) => (it.facts || []).some((f) => f.flag))
+  const assumedCount = items.filter((it) => (it.editable || {}).material && (it.facts || []).some((f) => f.label === 'Material' && f.flag === 'assumed')).length
   const groups = [...new Set(items.map((it) => it.group || ''))]
   return (
     <section className="pq-parts" aria-labelledby="parts-h">
@@ -902,6 +903,10 @@ export function PartsTable({ req, token, info, onLine, pending, viewUrl }) {
       </div>
       <p className="pq-secnote pq-muted">{editable ? 'Change the quantity, material, finish or how a part is made, and its price updates. ' : ''}
         Open Details to check what we read from your files{flagged ? ': lines marked for checking are guesses or things we could not find' : ''}.</p>
+      {editable && assumedCount > 0 && (
+        <p className="pq-pick-banner" role="note">{assumedCount === 1 ? 'One part does not say' : `${assumedCount} parts do not say`} what material {assumedCount === 1 ? 'it is' : 'they are'}, so we assumed one.
+          If you know, pick the material (and how it is made) on {assumedCount === 1 ? 'that part' : 'each part marked below'}; the price updates.</p>
+      )}
       {groups.map((g) => (
         <div key={g || 'none'} className="pq-group">
           {g && <h3 className="pq-group-name">{g}</h3>}
@@ -928,6 +933,7 @@ function PartRow({ it, info, editable, onLine, open, toggle, src }) {
   const price = it.unit_price != null ? money(it.unit_price) : it.unit_low != null ? range(it.unit_low, it.unit_high) : null
   const total = it.total != null ? money(it.total) : it.total_low != null ? range(it.total_low, it.total_high) : null
   const flagged = (it.facts || []).some((f) => f.flag)
+  const assumedMat = editable && ed.material && (it.facts || []).some((f) => f.label === 'Material' && f.flag === 'assumed')
   return (
     <li className={`pq-line r-${it.route}`}>
       <div className="pq-line-main">
@@ -944,7 +950,7 @@ function PartRow({ it, info, editable, onLine, open, toggle, src }) {
               onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur() }} />
           ) : <b>{it.qty.toLocaleString()}</b>}
         </label>
-        <label className="pq-mini">Material
+        <label className={`pq-mini ${assumedMat ? 'pq-pick' : ''}`}>Material{assumedMat && <span className="pq-pick-note"> assumed, pick yours</span>}
           {editable && ed.material ? (
             <select value={it.material || ''} onChange={(e) => onLine(it.key, { material: e.target.value, process: null, process_material: null })}>
               {!mats.includes(it.material) && it.material && <option>{it.material}</option>}

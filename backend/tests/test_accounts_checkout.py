@@ -166,3 +166,19 @@ def test_card_checkout_with_stripe(client, monkeypatch):
     ts = str(int(time.time()))
     sig = hmac.new(b"whsec_test", f"{ts}.".encode() + payload, hashlib.sha256).hexdigest()
     assert client.post("/api/public/stripe/webhook", content=payload, headers={"stripe-signature": f"t={ts},v1={sig}"}).json() == {"received": True}
+
+
+def test_staff_picks_material_and_process_per_part(client):
+    q = _quote(client, FIX / "cad" / "machined_block.step", quantity=2)
+    rid = next(x["id"] for x in client.get("/api/portal/requests?include_drafts=true").json() if x["ref"] == q["ref"])
+    it = client.get(f"/api/portal/requests/{rid}").json()["internal"]["items"][0]
+    assert it["editable"]["material"] and any(f["label"] == "Material" and f["flag"] == "assumed" for f in it["facts"])
+    before = it["unit_price"]
+    r = client.put(f"/api/portal/requests/{rid}/lines", json={"lines": {it["key"]: {"material": "304 stainless steel"}}})
+    assert r.status_code == 200, r.text
+    it2 = r.json()["internal"]["items"][0]
+    assert it2["material"] == "304 stainless steel" and it2["unit_price"] != before
+    assert not any(f["label"] == "Material" and f["flag"] == "assumed" for f in it2["facts"])  # chosen now
+    # the customer sees the same choice
+    pub = client.get(f"/api/public/quote/{q['ref']}", params={"token": q["token"]}).json()
+    assert pub["result"]["items"][0]["material"] == "304 stainless steel"

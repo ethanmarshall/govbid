@@ -423,10 +423,57 @@ function FrameBom({ it, id, setR, setMsg, setErr }) {
   )
 }
 
+// Material, finish and process for one line in review: the same choices the customer has, open to you even after they
+// submit. Saving prices the request again.
+let infoCache = null
+const loadInfo = () => (infoCache ||= api.get('/api/public/info').catch((e) => { infoCache = null; throw e }))
+
+function MadeAs({ it, info, change }) {
+  const ed = it.editable || {}
+  if (!info || !(ed.material || ed.finish || ed.process)) return null
+  const mats = it.kind === 'flat' ? info.sheet_materials || [] : [...(info.materials || []), ...(info.print_materials || [])]
+  const procs = it.options?.processes || []
+  const assumed = (it.facts || []).some((f) => f.label === 'Material' && f.flag === 'assumed')
+  return (
+    <div className="row small" style={{ gap: 6, marginTop: 4, flexWrap: 'wrap', alignItems: 'center' }}>
+      {ed.material && (
+        <select value={it.material || ''} title="Material" style={assumed ? { borderColor: '#b26a00' } : undefined}
+          onChange={(e) => change(it.key, { material: e.target.value, process: null, process_material: null })}>
+          {!mats.includes(it.material) && it.material && <option>{it.material}</option>}
+          {mats.map((m) => <option key={m}>{m}</option>)}
+        </select>
+      )}
+      {ed.process && procs.length > 1 && (
+        <select value={`${it.process}|${it.material}`} title="How it is made"
+          onChange={(e) => { const [process, material] = e.target.value.split('|'); change(it.key, { process, process_material: material }) }}>
+          {procs.map((o) => <option key={`${o.process}|${o.material}`} value={`${o.process}|${o.material}`}>{o.label}{o.process === '3d_print' ? ` (${o.material})` : ''}, {usd(o.unit_price)}</option>)}
+        </select>
+      )}
+      {ed.finish && (
+        <select value={it.finish && it.finish !== 'none' ? it.finish : 'none'} title="Finish" onChange={(e) => change(it.key, { finish: e.target.value })}>
+          <option value="none">No finish</option>
+          {(info.finishes || []).map((f) => <option key={f}>{f}</option>)}
+        </select>
+      )}
+      {assumed && <span className="due-soon">material assumed</span>}
+    </div>
+  )
+}
+
 function LineTable({ r, id, setR, setMsg, setErr }) {
   const items = r.internal?.items || []
   const [finals, setFinals] = useState({})
   const [open, setOpen] = useState({})
+  const [info, setInfo] = useState(null)
+  const [busyKey, setBusyKey] = useState('')
+  useEffect(() => { loadInfo().then(setInfo).catch(() => {}) }, [])
+  const change = async (key, ch) => {
+    setBusyKey(key); setErr('')
+    try {
+      const x = await api.put(`/api/portal/requests/${id}/lines`, { lines: { [key]: ch } })
+      setR(x); setMsg('Changed and priced again. The customer sees the new price.')
+    } catch (e) { setErr(e.message) } finally { setBusyKey('') }
+  }
   const save = async (key, value) => {
     try {
       const x = await api.put(`/api/portal/requests/${id}/lines`, { lines: { [key]: { final_unit_price: value === '' ? null : Number(value) } } })
@@ -443,6 +490,7 @@ function LineTable({ r, id, setR, setMsg, setErr }) {
           <Fragment key={it.key}>
           <tr>
             <td style={{ minWidth: 200 }}><b>{it.name}</b>{it.group && <div className="muted">{it.group}</div>}<div className="muted">{it.desc}</div>
+              <MadeAs it={it} info={info} change={change} />{busyKey === it.key && <div className="small muted">Pricing…</div>}
               {it.internal_reasons?.length > 0 && (
                 <>
                   <button className="link small" onClick={() => setOpen({ ...open, [it.key]: !open[it.key] })}>{open[it.key] ? 'Hide notes' : `${it.internal_reasons.length} note(s)`}</button>
