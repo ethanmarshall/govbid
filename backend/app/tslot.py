@@ -186,7 +186,7 @@ PANEL_HINTS = [(re.compile(r"polycarb|lexan|makrolon|\bpc\b", re.I), "PC"), (re.
 
 def panel_for(name: str, thickness_in: float, default_material: str = "PC") -> str | None:
     """Catalog panel id for an infill panel (by name hint, else the default material), nearest in thickness."""
-    from .extrusion_catalog import PANELS
+    from .extrusion_catalog import LEGACY_PANELS, PANELS
 
     n = (name or "").replace("_", " ")
     if not PANEL_WORDS.search(n):
@@ -194,5 +194,5 @@ def panel_for(name: str, thickness_in: float, default_material: str = "PC") -> s
     if re.search(r"\b(alum\w*|6061|5052|steel|stainless)\b", n, re.I):
         return None  # a metal panel is priced as sheet metal
     mat = next((m for rx, m in PANEL_HINTS if rx.search(n)), default_material)
-    opts = [(k, v) for k, v in PANELS.items() if v[1] == mat] or list(PANELS.items())
+    opts = [(k, v) for k, v in PANELS.items() if v[1] == mat and k not in LEGACY_PANELS] or [(k, v) for k, v in PANELS.items() if k not in LEGACY_PANELS]
     return min(opts, key=lambda kv: abs(kv[1][2] - thickness_in))[0]

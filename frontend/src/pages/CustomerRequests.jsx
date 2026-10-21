@@ -2,6 +2,7 @@ import { Fragment, useEffect, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { api } from '../api'
 import { PartsTable } from '../public/PublicQuote'
+import { DesignChecks, Order8020 } from './Order8020'
 
 const usd = (n) => (n == null ? '' : `$${Number(n).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`)
 const STATUSES = ['submitted', 'reviewing', 'confirmed', 'ordered', 'in_production', 'shipped', 'declined', 'closed', 'draft']
@@ -260,8 +261,9 @@ function FrameBom({ it, id, setR, setMsg, setErr }) {
   const unit = { profile: '$/in', hardware: '$/each', panel: '$/sq ft' }
   const setLine = (i, ch) => setLines(lines.map((l, j) => (j === i ? { ...l, ...ch } : l)))
   const setOp = (i, op, n) => {
+    const old = (lines[i].machining || []).find((o) => o.op === op)
     const ops = (lines[i].machining || []).filter((o) => o.op !== op)
-    setLine(i, { machining: n > 0 ? [...ops, { op, count: n }] : ops })
+    setLine(i, { machining: n > 0 ? [...ops, { ...(old || {}), op, count: n }] : ops })
   }
   const setPrice = (g, k, v) => setPrices((old) => {
     const out = structuredClone(old)
@@ -303,6 +305,21 @@ function FrameBom({ it, id, setR, setMsg, setErr }) {
     } catch (e) { setErr(e.message) } finally { setBusy(false) }
   }
   const edited = bom.lines != null || bom.prices || bom.cut_charge != null
+  const downloadSheet = async (kind) => {
+    try {
+      const res = await fetch(`/api/extrusion/${kind === 'cut' ? 'cutlist' : 'purchase'}.xlsx`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ lines: it.spec.lines || [], quantities: [it.qty || 1], builds: it.qty || 1, title: it.name, options: {} }),
+      })
+      if (!res.ok) throw new Error(`Could not make the ${kind === 'cut' ? 'cut' : 'purchase'} list (${res.status})`)
+      const url = URL.createObjectURL(await res.blob())
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `${String(it.name || 'frame').replace(/[^a-z0-9]+/gi, '-').toLowerCase()}-${kind === 'cut' ? 'cut-list' : 'purchase-list'}.xlsx`
+      a.click()
+      setTimeout(() => URL.revokeObjectURL(url), 2000)
+    } catch (e) { setErr(e.message) }
+  }
   const priceInput = (g, k, rate, step = '0.01') => (
     <input type="number" min="0" step={step} style={{ width: 80 }} placeholder={rate != null ? String(rate) : ''}
       value={prices[g]?.[k] ?? ''} onChange={(e) => setPrice(g, k, e.target.value)} />
@@ -383,6 +400,15 @@ function FrameBom({ it, id, setR, setMsg, setErr }) {
       <div className="row" style={{ gap: 6, marginTop: 6 }}>
         <button className="primary" disabled={busy} onClick={() => save({ lines, prices, cut_charge: cut === '' ? null : cut, note })}>{busy ? 'Saving…' : 'Save and reprice'}</button>
         {edited && <button disabled={busy} onClick={() => save(null)}>Go back to the model's parts list and my rates</button>}
+      </div>
+
+      <h3>80/20 design checks</h3>
+      <DesignChecks checks={it.spec.checks} />
+      <h3>80/20 order list</h3>
+      <Order8020 order={it.spec.order_8020} builds={it.qty || 1} />
+      <div className="row" style={{ gap: 6, marginTop: 6 }}>
+        <button className="small-btn" onClick={() => downloadSheet('purchase')}>Download purchase list</button>
+        <button className="small-btn" onClick={() => downloadSheet('cut')}>Download cut list</button>
       </div>
 
       <h3>What it costs</h3>

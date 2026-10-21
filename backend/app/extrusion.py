@@ -27,7 +27,7 @@ import re
 from collections import Counter, defaultdict
 from pathlib import Path
 
-from . import pricing
+from . import catalog_8020, pricing
 from .config import ANTHROPIC_API_KEY, ANTHROPIC_MODEL
 from .extrusion_catalog import FAMILIES, MACHINING_OPS, PANEL_MATERIALS, catalog
 
@@ -112,7 +112,11 @@ OP_LABELS = {k: v[0] for k, v in MACHINING_OPS.items()}
 
 
 def parse_machining(text: str) -> list[dict]:
-    """Machining callouts -> [{op, count}]. 'END TAP BOTH ENDS' = 2, '2X ACCESS HOLE' = 2, '(4) CBORE' = 4."""
+    """Machining callouts -> [{op, count}]. 'END TAP BOTH ENDS' = 2, '2X ACCESS HOLE' = 2, '(4) CBORE' = 4.
+    80/20 service numbers (#7040, 7060 ...) are read first and name the exact operation."""
+    by_number = catalog_8020.parse_ops(text)
+    if by_number:
+        return by_number
     ops: Counter = Counter()
     for seg in re.split(r"[,;\n]|\s+&\s+(?!C\s*'?\s*BORE|COUNTER)|\bAND\b(?!\s*(?:C\s*'?\s*BORE|COUNTER))", text or "", flags=re.I):
         seg = seg.strip()
@@ -140,8 +144,10 @@ def parse_machining(text: str) -> list[dict]:
 
 
 def machining_text(ops: list[dict]) -> str:
-    return ", ".join(f"{o['count']}X {OP_LABELS.get(o['op'], o['op'])}" if o.get("count", 1) != 1 else OP_LABELS.get(o["op"], o["op"])
-                     for o in ops or [])
+    def one(o):
+        label = OP_LABELS.get(o["op"], o["op"]) + (f" {o['thread']}" if o.get("thread") else "")
+        return f"{o['count']}X {label}" if o.get("count", 1) != 1 else label
+    return ", ".join(one(o) for o in ops or [])
 
 
 # ---------------------------------------------------------------- catalog matching
@@ -225,6 +231,9 @@ def _family_hint(text: str) -> str | None:
 
 
 def match_hardware(text: str, family: str | None, hint_text: str = "") -> tuple[str | None, float, str]:
+    hit = catalog_8020.match_part(text)  # an 80/20 part number names the exact part and series
+    if hit:
+        return hit[0], 0.95, f"80/20 part {hit[1]}." + (f" {hit[2]}" if hit[2] else "")
     for base, pat in HW_RULES:
         if re.search(pat, text, re.I):
             hint = _family_hint(text) or _family_hint(hint_text)
@@ -892,7 +901,10 @@ def normalize_lines(lines: list[dict]) -> list[dict]:
             if isinstance(o, str):
                 o = {"op": o, "count": 1}
             if o.get("op") and int(_num(o.get("count"), 1)) > 0:
-                ops.append({"op": o["op"], "count": int(_num(o.get("count"), 1))})
+                op = {"op": o["op"], "count": int(_num(o.get("count"), 1))}
+                if o.get("thread"):  # end tap thread, e.g. 7/16-14 for a stem caster
+                    op["thread"] = str(o["thread"])[:20]
+                ops.append(op)
         ln["machining"] = ops
         out.append(ln)
     return out
@@ -1164,6 +1176,8 @@ def price_build(lines: list[dict], config: dict | None = None, quantities: list[
         "nesting": {"quantity": qtys[0], "profiles": {pid: {k: v for k, v in n.items()} for pid, n in nest0.items()}},
         "nesting_by_quantity": {str(q): {pid: {"sticks": n["sticks"], "waste_pct": n["waste_pct"]} for pid, n in nest.items()} for q, nest in nest_by_q.items()},
         "purchase_list": purchase_list(lines, cfg, build_qty, mode=mode),
+        "checks": catalog_8020.check(lines, {p["id"]: p.get("thickness_in") for p in cat["panels"]}),
+        "order_8020": catalog_8020.order_list(lines, build_qty),
         "counts": {"pieces": n_pieces, "joints": joints, "fasteners": counts["fastener"], "panels": n_panels, "accessories": counts["accessory"]},
     }
 
@@ -1313,5 +1327,10 @@ def purchase_list_xlsx(lines: list[dict], config: dict | None = None, builds: in
     data = [[r["supplier"], r["part_number"], r["description"], r["qty"], r["unit"], r["unit_price"], r["extended"], r["machining"]] for r in rows]
     total = round(sum(r["extended"] for r in rows), 2)
     data.append(["", "", "Total (placeholder prices until you enter supplier prices)", "", "", "", total, ""])
-    return _xlsx([("Purchase list", ["Supplier", "Part number", "Description", "Qty", "Unit", "Unit price", "Extended", "Machining"], data)],
+    o = catalog_8020.order_list(normalize_lines(lines), builds)
+    rows80 = [[r["part_number"], r["description"], r["qty"], r["unit"], r["callout"], r["page"]] for r in o["rows"]]
+    rows80 += [["", f"Not in the 80/20 table here: {u}", "", "", "", ""] for u in o["unknown"]]
+    rows80 += [["", n, "", "", "", ""] for n in o["notes"]]
+    return _xlsx([("Purchase list", ["Supplier", "Part number", "Description", "Qty", "Unit", "Unit price", "Extended", "Machining"], data),
+                  ("80-20 order", ["80/20 part no.", "Description", "Qty", "Unit", "Machining services (80/20 numbers)", "Catalog page"], rows80)],
                  f"{title + ': ' if title else ''}purchase list for {builds} build(s)")

@@ -17,10 +17,14 @@ from __future__ import annotations
 import math
 import re
 
-from .extrusion_catalog import PANELS, profile_rows
+from .extrusion_catalog import LEGACY_PANELS, PANELS, profile_rows
 
 FACES = ("front", "back", "left", "right")
-ENGAGE = {"10": 0.19, "15": 0.31, "MS": 0.15, "ML": 0.24}  # panel edge in the slot, inches per side (approximate)
+# panel edge in the slot, inches per side: half of what 80/20 says to add to the visible opening (catalog 24, 4-5:
+# 10 Series .500 in, 15 Series .750 in, 20 Series 10 mm, 40 Series 22 mm)
+ENGAGE = {"10": 0.25, "15": 0.375, "MS": 5 / 25.4, "ML": 11 / 25.4}
+# thread tapped into the post ends for the base (80/20 stem casters and leveling feet, 5-4 and 5-24)
+BASE_THREAD = {("casters", "15"): "7/16-14", ("feet", "15"): "3/8-16", ("casters", "10"): "1/4-20", ("feet", "10"): "1/4-20"}
 SLOT = {"10": (0.26, 0.2), "15": (0.32, 0.26), "MS": (0.24, 0.18), "ML": (0.32, 0.26)}  # slot opening, depth (drawing only)
 MODULE = {"10": 1.0, "15": 1.5, "MS": None, "ML": None}
 
@@ -61,7 +65,7 @@ def _n(v, what, lo, hi, k):
 def _panel(v, what):
     v = str(v or "").strip()
     if v and v not in PANELS:
-        raise FrameError(f"{what}: choose a panel from the list ({', '.join(PANELS)}) or none.")
+        raise FrameError(f"{what}: choose a panel from the list ({', '.join(k for k in PANELS if k not in LEGACY_PANELS)}) or none.")
     return v
 
 
@@ -139,7 +143,8 @@ def members(f: dict) -> dict:
     rp = PROFILES[f["rail_profile"]]
     r = rp["small"]
     joint_ops = [{"op": "counterbore", "count": 2}] if f["joints"] == "anchor" else []
-    base_ops = [{"op": "end_tap", "count": 1}] if f["base"] in ("casters", "feet") else []
+    base_ops = ([{"op": "end_tap", "count": 1, **({"thread": BASE_THREAD[(f["base"], f["family"])]} if (f["base"], f["family"]) in BASE_THREAD else {})}]
+                if f["base"] in ("casters", "feet") else [])
     out = []
     for name, x, y in (("front left", 0, 0), ("front right", W - px, 0), ("back left", 0, D - py), ("back right", W - px, D - py)):
         out.append(_m(f"Corner post, {name}", f["post_profile"], "z", x, y, 0, H, px, py, base_ops))
@@ -224,17 +229,13 @@ def members(f: dict) -> dict:
                     box = (xx, s + d - e, z0 + d - e, th, lw - 2 * d + 2 * e, lh - 2 * d + 2 * e)
                 panel(f"Door panel, {tag}", door["panel"], lw - 2 * d, lh - 2 * d, box)
             hinges = 3 if lh > 36 else 2
-            hardware.append(("HINGE", hinges, f"hinges, {tag}"))
-            hardware.append(("HANDLE", 1, f"handle, {tag}"))
-            hardware.append(("TNUT-DROP", hinges * 4 + 2, f"T-nuts for the hinges and handle, {tag}"))
-            hardware.append(("SCREW-BHSCS", hinges * 4 + 2, f"screws for the hinges and handle, {tag}"))
+            hardware.append(("HINGE", hinges, f"lift-off hinges, {tag} (mounting hardware included)"))
+            hardware.append(("HANDLE", 1, f"handle with its screws and T-nuts, {tag}"))
     rail_ends = sum(2 for m in out if m["role"].startswith(("Front rail", "Back rail", "Left rail", "Right rail", "Door rail")))
     if f["joints"] == "anchor":
         hardware.append(("ANCHOR", rail_ends, "anchor fasteners, one per rail end"))
     else:
-        hardware.append(("BRKT-4H", rail_ends, "corner brackets, one per rail end"))
-        hardware.append(("TNUT-DROP", rail_ends * 4, "T-nuts for the brackets"))
-        hardware.append(("SCREW-BHSCS", rail_ends * 4, "screws for the brackets"))
+        hardware.append(("BRKT-4H", rail_ends, "inside corner brackets with screws and T-nuts, one per rail end"))
     if f["base"] == "casters":
         lock = f["locking_casters"]
         if lock:
@@ -276,7 +277,7 @@ def extrusion_lines(parts: dict, family: str) -> list[dict]:
     lines = []
     for g in cut_list(parts):
         lines.append({"kind": "profile", "catalog_id": g["profile"], "qty": g["qty"], "length_in": g["length"],
-                      "machining": [{"op": o["op"], "count": o["count"]} for o in g["machining"]], "description": ", ".join(g["roles"])})
+                      "machining": [dict(o) for o in g["machining"]], "description": ", ".join(g["roles"])})
     hw: dict = {}
     for base, qty, why in parts["hardware"]:
         hid = f"{base}-{family}"
@@ -293,7 +294,7 @@ def extrusion_lines(parts: dict, family: str) -> list[dict]:
     return lines
 
 
-HW_LABEL = {"ANCHOR": "Anchor fasteners", "BRKT-4H": "Corner brackets", "TNUT-DROP": "Drop-in T-nuts", "SCREW-BHSCS": "Button head screws",
+HW_LABEL = {"ANCHOR": "Anchor fasteners", "BRKT-4H": "Corner brackets", "BRKT-2H": "Corner brackets", "BUTT": "Butt fasteners", "ENDFAST": "End fasteners", "TNUT-DROP": "Drop-in T-nuts", "SCREW-BHSCS": "Button head screws",
             "CASTER": "Swivel casters", "CASTER-LOCK": "Swivel casters with brakes", "FOOT": "Leveling feet", "HINGE": "Hinges",
             "HANDLE": "Handles", "ENDCAP": "End caps"}
 
@@ -317,7 +318,7 @@ def summary(f: dict, parts: dict, units: str) -> list[tuple[str, str]]:
     if sides:
         rows.append(("Panels", "; ".join(sides)))
     for g in cut_list(parts):
-        ops = ", ".join(f"{o['count']} {o['op'].replace('_', ' ')}" for o in g["machining"])
+        ops = ", ".join(f"{o['count']} {o['op'].replace('_', ' ')}" + (f" {o['thread']}" if o.get("thread") else "") for o in g["machining"])
         rows.append((f"Cut {g['profile']}", f"{g['qty']} x {L(g['length'])}: {', '.join(g['roles']).lower()}" + (f" ({ops} each)" if ops else "")))
     hw: dict = {}
     for base, qty, _ in parts["hardware"]:

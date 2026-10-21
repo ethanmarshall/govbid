@@ -61,6 +61,7 @@ Part types and their params (sizes in the spec's units):
   panels: {{front, back, left, right}} panel ids for closed sides; top_panel, bottom_panel.
   Panel ids: {panels}.
   A bottom and a top ring are always included. If the customer says two doors "on the front and back", that usually means one door on each; say so and ask if they meant double doors.
+  Frames are built from 80/20 parts (catalog 24): butt joints with anchor fasteners, lift-off hinges, 5 in threaded-stem casters with brakes rated 125 lb each (about 500 lb for the cart) in tapped post ends, or leveling feet. Panels are 80/20 stock sheet: polycarbonate 3, 4.5 or 6 mm, acrylic 4.5 or 6 mm, aluminum composite 6 mm, aluminum plate; a 15 Series slot takes up to about 1/4 in, a 10 Series slot about 3/16 in. Single pieces longer than 242 in are not possible. If the customer gives a shelf load, keep in mind a 1515 rail over 33 in sags about 0.03 in under 100 lb at the center; suggest 1530 rails (wide face up) for heavy shelves.
 Features:
 - plate, block: holes [{{x, y, diameter, depth}}] (depth 0 = through), slots [{{x, y, length, width, angle}}] (center, angle 0 along X or 90 along Y, through), pockets [{{x, y, length, width, depth, corner_radius}}] (center; depth 0 = cutout through). x and y are from the lower-left corner.
 - box: holes in the floor [{{x, y, diameter}}].
@@ -139,11 +140,11 @@ def chat(messages: list, current: dict | None, shop: str, daily_limit: int) -> d
             cur = json.dumps(design.to_customer_units(design.clean(current)))[:6000]
         except design.DesignError:
             cur = "none yet"
-    from .extrusion_catalog import PANELS
+    from .extrusion_catalog import LEGACY_PANELS, PANELS
     from .frame import PROFILES
 
     system = RULES.format(shop=shop, current=cur, profiles=", ".join(f"{p['id']} ({p['small']:g} x {p['large']:g} in)" for p in PROFILES.values()),
-                          panels=", ".join(f"{k} ({v[0]})" for k, v in PANELS.items()))
+                          panels=", ".join(f"{k} ({v[0]})" for k, v in PANELS.items() if k not in LEGACY_PANELS))
     tools = [{"name": "set_design", "description": "Show this design to the customer as a 3D model with dimensions. Always send the complete spec.",
               "input_schema": SCHEMA}]
     convo: list = [dict(m) for m in history]

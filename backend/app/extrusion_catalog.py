@@ -65,6 +65,30 @@ _PROFILES: list[tuple[str, str, str, str, str, float | None, float]] = [
     ("HFS8-4080", "Misumi", "8", "ML", "40 x 80 mm", None, 1.05),
 ]
 
+
+def _more_8020() -> list:
+    """Every other profile in the 80/20 catalog (catalog_8020.json), with a placeholder price of about $4.90 per lb."""
+    from .catalog_8020 import data
+
+    have = {r[0] for r in _PROFILES}
+    out = []
+    for pn, p in data()["profiles"].items():
+        if pn in have or not p.get("lb_in"):
+            continue
+        ser = p["series"]
+        fam = ser if ser in ("10", "15") else ("ML" if ser in ("40", "45") else "MS")
+        kind = ", ".join(x for x in (("Ultra-Lite" if "-UL" in pn else "Lite") if p.get("lite") else "", "smooth" if p.get("smooth") else "",
+                                      f"{p['slots']} open slot{'s' if p['slots'] != 1 else ''}" if p.get("slots") and p["slots"] < 4 else "") if x)
+        if fam in ("10", "15"):
+            size = f"{p['w']:.2f} x {p['h']:.2f} in"
+        else:
+            size = f"{round(p['w'] * 25.4):g} x {round(p['h'] * 25.4):g} mm"
+        out.append((pn, "80/20", ser, fam, size + (f", {kind}" if kind else ""), p["lb_in"], round(p["lb_in"] * 4.9, 2)))
+    return out
+
+
+_PROFILES += _more_8020()
+
 # Machining operations: id -> (label, placeholder price each, note)
 MACHINING_OPS: dict[str, tuple[str, float, str]] = {
     "end_tap": ("End tap", 2.50, "Tap the profile's center hole(s) at one end. Count each end."),
@@ -75,6 +99,7 @@ MACHINING_OPS: dict[str, tuple[str, float, str]] = {
     "miter_cut": ("Mitercut", 6.00, "Angled cut. Count each mitered end."),
     "miter_cbore": ("Mitercut counterbore", 4.00, "Counterbore on a mitered end."),
     "central_connector_cbore": ("Central connector counterbore", 4.00, "Counterbore for a central connector."),
+    "butt_counterbore": ("Butt fastener counterbore", 3.00, "Counterbore for a butt fastener (80/20 7041 on 15 Series). Count each one."),
 }
 
 # Hardware: base id -> (label, assembly class, placeholder price each by family {10, 15, MS, ML})
@@ -82,12 +107,15 @@ MACHINING_OPS: dict[str, tuple[str, float, str]] = {
 _HARDWARE: list[tuple[str, str, str, dict[str, float]]] = [
     ("TNUT-DROP", "Drop-in T-nut", "fastener", {"10": 0.60, "15": 0.80, "MS": 0.50, "ML": 0.70}),
     ("TNUT-SLIDE", "Slide-in T-nut", "fastener", {"10": 0.40, "15": 0.55, "MS": 0.35, "ML": 0.50}),
-    ("TNUT-ECON", "Economy T-nut", "fastener", {"10": 0.25, "15": 0.35, "MS": 0.25, "ML": 0.35}),
+    ("TNUT-ECON", "Economy T-nut with screw", "fastener", {"10": 0.25, "15": 0.35, "MS": 0.25, "ML": 0.35}),
     ("SCREW-BHSCS", "Button head socket cap screw", "none", {"10": 0.20, "15": 0.25, "MS": 0.15, "ML": 0.25}),
     ("ANCHOR", "Anchor fastener assembly", "joint", {"10": 2.00, "15": 2.50, "MS": 2.00, "ML": 2.50}),
-    ("BRKT-4H", "Corner bracket, 4-hole", "joint", {"10": 3.00, "15": 4.00, "MS": 2.50, "ML": 3.50}),
+    ("BUTT", "Butt fastener assembly", "joint", {"10": 3.00, "15": 4.00, "MS": 3.00, "ML": 4.00}),
+    ("ENDFAST", "End fastener assembly", "joint", {"10": 1.50, "15": 2.00, "MS": 1.50, "ML": 2.00}),
+    ("BRKT-2H", "Inside corner bracket, 2-hole, with screws and T-nuts", "joint", {"10": 3.00, "15": 4.50, "MS": 2.50, "ML": 3.50}),
+    ("BRKT-4H", "Inside corner bracket, 4-hole, with screws and T-nuts", "joint", {"10": 4.50, "15": 7.00, "MS": 4.00, "ML": 5.50}),
     ("BRKT-5H", "Corner bracket, 5-hole", "joint", {"10": 4.00, "15": 5.00, "MS": 3.00, "ML": 4.50}),
-    ("BRKT-GUSSET", "Gusseted corner bracket", "joint", {"10": 5.00, "15": 7.00, "MS": 4.00, "ML": 6.00}),
+    ("BRKT-GUSSET", "Gusseted corner bracket, with screws and T-nuts", "joint", {"10": 5.00, "15": 7.00, "MS": 4.00, "ML": 6.00}),
     ("PLATE-L", "Joining plate, L", "joint", {"10": 5.00, "15": 7.00, "MS": 4.00, "ML": 6.00}),
     ("PLATE-T", "Joining plate, T", "joint", {"10": 5.00, "15": 7.00, "MS": 4.00, "ML": 6.00}),
     ("PLATE-FLAT", "Joining plate, flat (straight)", "joint", {"10": 4.00, "15": 6.00, "MS": 3.50, "ML": 5.00}),
@@ -96,22 +124,30 @@ _HARDWARE: list[tuple[str, str, str, dict[str, float]]] = [
     ("CASTER", "Caster, swivel", "accessory", {"10": 15.00, "15": 20.00, "MS": 14.00, "ML": 18.00}),
     ("CASTER-LOCK", "Caster, swivel with brake", "accessory", {"10": 20.00, "15": 25.00, "MS": 18.00, "ML": 23.00}),
     ("RETAINER", "Panel retainer (gasket or clip)", "fastener", {"10": 0.50, "15": 0.60, "MS": 0.40, "ML": 0.50}),
-    ("HINGE", "Hinge", "accessory", {"10": 8.00, "15": 12.00, "MS": 7.00, "ML": 10.00}),
-    ("HANDLE", "Handle", "accessory", {"10": 8.00, "15": 10.00, "MS": 7.00, "ML": 9.00}),
+    ("HINGE", "Hinge, lift-off (mounting hardware included)", "accessory", {"10": 8.00, "15": 12.00, "MS": 7.00, "ML": 10.00}),
+    ("HANDLE", "Door handle with mounting screws and T-nuts", "accessory", {"10": 8.00, "15": 10.00, "MS": 7.00, "ML": 9.00}),
 ]
 
 # Panels: id -> (label, material key, thickness in, placeholder price per square foot)
+# Thicknesses are 80/20's stock panels (catalog 24, pages 4-10 to 4-22; 80/20 part numbers in catalog_8020.PANELS_8020).
+# The older ids keep their names so saved quotes still open: PANEL-PC-250 is 80/20's 6 mm (.220 - .236 in) sheet.
 PANELS: dict[str, tuple[str, str, float, float]] = {
-    "PANEL-PC-125": ("Polycarbonate, clear, 1/8 in", "PC", 0.125, 6.00),
-    "PANEL-PC-187": ("Polycarbonate, clear, 3/16 in", "PC", 0.1875, 8.00),
-    "PANEL-PC-250": ("Polycarbonate, clear, 1/4 in", "PC", 0.25, 10.00),
-    "PANEL-ACR-125": ("Acrylic, clear, 1/8 in", "ACR", 0.125, 5.00),
-    "PANEL-ACR-187": ("Acrylic, clear, 3/16 in", "ACR", 0.1875, 6.50),
-    "PANEL-ACR-250": ("Acrylic, clear, 1/4 in", "ACR", 0.25, 8.00),
-    "PANEL-ACM-118": ("Aluminum composite (ACM), 3 mm", "ACM", 0.118, 5.00),
-    "PANEL-ACM-157": ("Aluminum composite (ACM), 4 mm", "ACM", 0.157, 6.00),
+    "PANEL-PC-125": ("Polycarbonate, clear, 3 mm (.118 in)", "PC", 0.118, 6.00),
+    "PANEL-PC-187": ("Polycarbonate, clear, 4.5 mm (.177 in)", "PC", 0.177, 8.00),
+    "PANEL-PC-250": ("Polycarbonate, clear, 6 mm (.236 in)", "PC", 0.236, 10.00),
+    "PANEL-ACR-187": ("Acrylic, clear, 4.5 mm (.177 in)", "ACR", 0.177, 6.50),
+    "PANEL-ACR-250": ("Acrylic, clear, 6 mm (.236 in)", "ACR", 0.236, 8.00),
+    "PANEL-ACM-236": ("Aluminum composite (ACM), 6 mm (.236 in)", "ACM", 0.236, 6.00),
+    "PANEL-AL-125": ("Aluminum plate 6061-T6, .125 in", "AL", 0.125, 12.00),
+    "PANEL-AL-187": ("Aluminum plate 6061-T6, .187 in", "AL", 0.187, 16.00),
+    "PANEL-AL-250": ("Aluminum plate 6061-T6, .250 in", "AL", 0.25, 20.00),
+    # not 80/20 stock sizes; kept so older quotes still price
+    "PANEL-ACR-125": ("Acrylic, clear, 1/8 in (not an 80/20 stock panel)", "ACR", 0.125, 5.00),
+    "PANEL-ACM-118": ("Aluminum composite (ACM), 3 mm (not an 80/20 stock panel)", "ACM", 0.118, 5.00),
+    "PANEL-ACM-157": ("Aluminum composite (ACM), 4 mm (not an 80/20 stock panel)", "ACM", 0.157, 6.00),
 }
-PANEL_MATERIALS = {"PC": "Polycarbonate", "ACR": "Acrylic", "ACM": "Aluminum composite (ACM)"}
+PANEL_MATERIALS = {"PC": "Polycarbonate", "ACR": "Acrylic", "ACM": "Aluminum composite (ACM)", "AL": "Aluminum plate"}
+LEGACY_PANELS = {"PANEL-ACR-125", "PANEL-ACM-118", "PANEL-ACM-157"}  # not offered for new designs
 
 
 def profile_rows() -> list[dict]:

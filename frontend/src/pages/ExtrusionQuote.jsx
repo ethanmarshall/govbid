@@ -3,6 +3,7 @@ import { BuildQtyInput, buildFromSaved, buildList, toBuild } from '../qty'
 import { Link } from 'react-router-dom'
 import { api } from '../api'
 import QuoteActions from '../QuoteActions'
+import { DesignChecks, Order8020 } from './Order8020'
 
 const usd = (n) => (n == null ? '' : `$${Number(n).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`)
 const KINDS = [['profile', 'Profile'], ['hardware', 'Hardware'], ['panel', 'Panel'], ['custom', 'Custom (priced by hand)'], ['unmatched', 'Unmatched']]
@@ -237,6 +238,12 @@ export default function ExtrusionQuote({ meta, quoteId, oppId, onSaved }) {
                       <p className="small muted">G&A {Math.round(est.ga_rate * 100)}% · profit {Math.round(est.profit_rate * 100)}%.</p>
                     </>
                   )}
+                  <h3>80/20 design checks</h3>
+                  <DesignChecks checks={est.checks} />
+                  <details style={{ marginTop: 8 }}>
+                    <summary className="small"><b>80/20 order list</b> (part numbers and machining services)</summary>
+                    <Order8020 order={est.order_8020} builds={row.quantity} />
+                  </details>
                   <div className="row" style={{ marginTop: 10 }}>
                     <button onClick={() => sheet('cut')}>Download cut list</button>
                     <button onClick={() => sheet('purchase')}>Download purchase list</button>

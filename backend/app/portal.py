@@ -811,7 +811,8 @@ def _tslot_frame(ctx, req: PortalRequest, key: str, name: str, groups: list[dict
         for b in bodies:
             j = (joints or {}).get(b)
             anchors = j["anchors"] if j else 2
-            anchors_total += anchors
+            if not c["miters"]:  # a mitered end joins with 80/20's miter cut counterbore service, hardware included (10-12)
+                anchors_total += anchors
             k = (c["profile"], round(c["length_in"] * 16) / 16, c["miters"], anchors)
             e = by_cut.setdefault(k, {"qty": 0, "names": []})
             e["qty"] += 1
@@ -819,7 +820,10 @@ def _tslot_frame(ctx, req: PortalRequest, key: str, name: str, groups: list[dict
                 e["names"].append(g["name"])
     lines = []
     for (pid, length, miters, anchors), e in sorted(by_cut.items(), key=lambda kv: (kv[0][0], -kv[0][1])):
-        ops = ([{"op": "counterbore", "count": anchors}] if anchors else []) + ([{"op": "miter_cut", "count": miters}] if miters else [])
+        if miters:
+            ops = [{"op": "miter_cut", "count": miters}] + ([{"op": "miter_cbore", "count": min(anchors, miters)}] if anchors else [])
+        else:
+            ops = [{"op": "counterbore", "count": anchors}] if anchors else []
         lines.append({"kind": "profile", "catalog_id": pid, "qty": e["qty"], "length_in": length, "machining": ops, "description": ", ".join(e["names"])[:200]})
     hw = Counter()
     for g, base in hardware:
@@ -828,6 +832,23 @@ def _tslot_frame(ctx, req: PortalRequest, key: str, name: str, groups: list[dict
         hw[cast[0][1] if all(b == cast[0][1] for _, b in cast) else "CASTER"] += min(int(g.get("qty", 1)) for g, _ in cast)
     if anchors_total:
         hw["ANCHOR"] += anchors_total
+    # stem casters and leveling feet thread into the bottom ends of the posts (80/20 catalog 5-4, 5-24): add the end tap
+    # to the longest pieces whose name says they stand upright, else to the longest pieces
+    base_n = hw.get("CASTER", 0) + hw.get("CASTER-LOCK", 0) + hw.get("FOOT", 0)
+    if base_n and fam in ("10", "15"):
+        thread = {"15": "7/16-14" if hw.get("FOOT", 0) < base_n else "3/8-16", "10": "1/4-20"}[fam]
+        upright = re.compile(r"post|leg|upright|riser|vertical|column", re.I)
+        order = sorted(lines, key=lambda l: (not upright.search(l.get("description") or ""), -(l.get("length_in") or 0)))
+        left = base_n
+        for ln in order:
+            if left <= 0 or ln.get("kind") != "profile":
+                continue
+            if ln["qty"] > left:  # split the group so only the pieces that get a caster are tapped
+                rest = {**ln, "qty": ln["qty"] - left, "machining": [dict(o) for o in ln["machining"]]}
+                ln["qty"] = left
+                lines.append(rest)
+            ln["machining"] = ln["machining"] + [{"op": "end_tap", "count": 1, "thread": thread}]
+            left -= ln["qty"]
     lines += [{"kind": "hardware", "catalog_id": f"{b}-{fam}", "qty": q} for b, q in hw.items()]
     pan = Counter()
     for g, pid, a, b in panels:
@@ -861,6 +882,7 @@ def _tslot_frame(ctx, req: PortalRequest, key: str, name: str, groups: list[dict
     ln = _item_line(ctx, tkey, _item("T-slot extrusion frame", route, f"{pieces} members cut to length, {', '.join(sorted({c['profile'] for _, c in members}))}, with hardware",
                                      r["price_breaks"], qty, kind="frame", spec={"lines": lines, "model_lines": model_lines, "bom": edits,
                                                                                   "costs": r.get("per_part_lines"), "lot": r.get("per_lot_lines"),
+                                                                                  "checks": r.get("checks"), "order_8020": r.get("order_8020"),
                                                                                   "joints_measured": confident}, facts=facts,
                                      public_reason=("Priced from the parts list in your model; an engineer confirms it before the order." if confident else
                                                     "Frame members are priced as cut-to-length extrusion. An engineer confirms the joining hardware."),
@@ -886,6 +908,12 @@ def _frame_line(ctx, req: PortalRequest, f: dict, cfg: dict) -> dict:
         model_lines = frame_mod.extrusion_lines(parts, P["family"])
         lines, bom_opts, edits = _bom(ctx, key, model_lines)
         r = extrusion.price_build(lines, cfg, [qty], bom_opts)
+        from . import catalog_8020
+
+        span = max(P["width"] - 2 * P["_post"][0], P["depth"] - 2 * P["_post"][1])
+        note = catalog_8020.beam_note(P["rail_profile"], span)
+        if note:
+            r["checks"] = (r.get("checks") or []) + [note]
     except Exception as exc:  # noqa: BLE001
         from . import portal_lines as PL
 
@@ -899,7 +927,7 @@ def _frame_line(ctx, req: PortalRequest, f: dict, cfg: dict) -> dict:
     route = "estimate" if s.frame_review else "instant"
     ln = _item_line(ctx, key, _item(spec["name"], route, desc, r["price_breaks"], qty, kind="frame",
                                     spec={"frame": P, "lines": lines, "model_lines": model_lines, "bom": edits, "costs": r.get("per_part_lines"),
-                                          "lot": r.get("per_lot_lines"), "joints_measured": True},
+                                          "lot": r.get("per_lot_lines"), "checks": r.get("checks"), "order_8020": r.get("order_8020"), "joints_measured": True},
                                     facts=facts, view=view,
                                     public_reason=("Priced from the parts list of your design. An engineer checks door hardware and latches before we confirm the order."
                                                    if s.frame_review else ""),

@@ -218,8 +218,8 @@ def test_tslot_panels_by_name():
     from app import tslot
 
     assert tslot.panel_for("Rear_right_door_infill", 0.236) == "PANEL-PC-250"
-    assert tslot.panel_for("Front acrylic panel", 0.12) == "PANEL-ACR-125"
-    assert tslot.panel_for("Side_infill_ACM", 0.118, "PC") == "PANEL-ACM-118"
+    assert tslot.panel_for("Front acrylic panel", 0.12) == "PANEL-ACR-187"  # 80/20 stocks acrylic in 4.5 and 6 mm only
+    assert tslot.panel_for("Side_infill_ACM", 0.118, "PC") == "PANEL-ACM-236"
     assert tslot.panel_for("Side_plate", 0.236) is None and tslot.panel_for("Aluminum infill panel", 0.125) is None
 
 
@@ -233,7 +233,7 @@ def test_quote_prices_override_catalog_prices():
     r = extrusion.price_build(lines, None, [1], {"prices": {"profiles": {"1515": 1.0}, "hardware": {"HINGE-15": 30}, "machining": {"counterbore": 0}},
                                                 "cut_charge": 0})
     got = {l["item"]: l["cost"] for l in r["per_part_lines"]}
-    assert got["1515 profile"] == 120.0 and got["Hinge, Fractional 15 Series x 2"] == 60.0
+    assert got["1515 profile"] == 120.0 and got["Hinge, lift-off (mounting hardware included), Fractional 15 Series x 2"] == 60.0
     assert "Counterbore x 8" in got and got["Counterbore x 8"] == 0 and got["supplier cut charge, 4 cut(s)"] == 0
     assert cost["1515 profile"] != 120.0
     # a supplier piece price (material and cut) for one line
