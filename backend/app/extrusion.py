@@ -1136,6 +1136,8 @@ def price_build(lines: list[dict], config: dict | None = None, quantities: list[
     per_lot.append(_line_obj("freight", "outbound freight", freight, basis="per_lot"))
 
     # ---- totals
+    per_build += pricing.handling_lines(cfg, per_build)  # on material at the first quantity, hardware and panels
+    per_lot += pricing.handling_lines(cfg, per_lot, "per_lot")
     ga = _num(opts.get("ga_rate"), cfg["ga_rate"])
     profit = _num(opts.get("profit_rate"), cfg["profit_rate"])
     build_cost_ex_mat = sum(l["cost"] for l in per_build if not (l["category"] == "material"))

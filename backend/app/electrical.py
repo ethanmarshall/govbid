@@ -770,6 +770,8 @@ def validate_harness(wires: list[dict], bom: list[dict]) -> list[str]:
 
 # ================================================================ shared totals
 def _totals(per_unit: list[dict], per_lot: list[dict], cfg: dict, qtys: list[int], opts: dict, *, lead_days, min_lot: float) -> dict:
+    per_unit = per_unit + pricing.handling_lines(cfg, per_unit, all_but_labor=True)
+    per_lot = per_lot + pricing.handling_lines(cfg, per_lot, "per_lot", all_but_labor=True)
     ga = _num(opts.get("ga_rate"), cfg["ga_rate"])
     profit = _num(opts.get("profit_rate"), cfg["profit_rate"])
     unit_cost = sum(l["cost"] for l in per_unit)

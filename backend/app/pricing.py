@@ -158,6 +158,10 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "default_freight_per_lot": 45.0,
     # Buying the part from an outside shop (make-or-buy): your markup on their price and your handling costs
     "outsourcing": {"markup": 0.15, "receiving_inspection_per_lot": 35.0, "handling_per_part": 0.75},
+    # Bought material and hardware (stock, extrusion, panels, components, wire): this markup covers ordering, receiving,
+    # paying for it before the customer pays you, and the risk of being left with it. Added as its own cost line before
+    # G&A and profit. Labor is not marked up by it.
+    "material_handling_rate": 0.12,
     "ga_rate": 0.10,  # general and administrative
     "profit_rate": 0.15,
     "min_lot_charge": 250.0,
@@ -274,6 +278,28 @@ def stock_volume(stock: dict) -> float:
         w, h, wall = _num(d, "width"), _num(d, "height"), _num(d, "wall")
         return (w * h - max(w - 2 * wall, 0) * max(h - 2 * wall, 0)) * _num(d, "length")
     raise SpecError(f"Unknown stock shape '{shape}'. Use one of {list(STOCK_SHAPES)}")
+
+
+BOUGHT_CATEGORIES = {"material", "hardware", "panels", "components", "wire", "consumables"}
+
+
+NOT_BOUGHT = {"labor", "setup", "test", "inspection", "engineering", "packaging", "freight", "iuid", "marking", "labels", "handling",
+              "nre", "programming"}
+
+
+def handling_lines(cfg: dict, lines: list[dict], basis: str = "per_part", extra: float = 0.0, all_but_labor: bool = False) -> list[dict]:
+    """The material handling cost line for the bought material and hardware among `lines` (lines with labor hours, such
+    as installing fasteners, are left out), plus `extra` bought cost not in lines. Empty when the rate is 0.
+    all_but_labor: every line that is not labor, test, packaging or freight is bought (harness and panel BOMs, whose
+    categories are the part kinds: connector, contact, backshell ...)."""
+    rate = float(cfg.get("material_handling_rate", DEFAULT_CONFIG.get("material_handling_rate", 0.0)) or 0.0)
+    is_bought = (lambda l: l.get("category") not in NOT_BOUGHT) if all_but_labor else \
+        (lambda l: l.get("category") in BOUGHT_CATEGORIES or l.get("bought"))
+    bought = sum(l["cost"] for l in lines if is_bought(l) and l.get("hours") is None) + extra
+    if rate <= 0 or bought <= 0:
+        return []
+    return [{"category": "handling", "item": f"material handling, {rate:.0%} of ${bought:,.2f} bought material and hardware",
+             "basis": basis, "hours": None, "rate": rate, "cost": round(bought * rate, 2), "note": "ordering, receiving and paying for it up front"}]
 
 
 def _line(category: str, item: str, cost: float, *, basis: str = "per_part", hours: float | None = None, rate: float | None = None, note: str = "") -> dict:
@@ -522,6 +548,8 @@ def estimate(spec: dict, config: dict | None = None) -> dict:
     per_lot.append(_line("freight", "outbound freight", freight, basis="per_lot"))
 
     # ---------------- totals per quantity
+    per_part += handling_lines(cfg, per_part)
+    per_lot += handling_lines(cfg, per_lot, "per_lot")
     ga, profit = _num(spec, "ga_rate", cfg["ga_rate"]), _num(spec, "profit_rate", cfg["profit_rate"])
     part_cost = sum(l["cost"] for l in per_part)
     if additive_ops and part_cost < add_cfg["min_part_charge"]:

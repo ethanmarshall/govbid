@@ -413,6 +413,7 @@ function ShopRates({ onChanged }) {
           <table><tbody>{Object.keys(draft.setup_hours).map((k) => <tr key={k}><td>{k.replace('_', ' ')}</td><td>{numIn(`setup_hours.${k}`)}</td></tr>)}</tbody></table>
           <h3>Markups and minimums</h3>
           <table><tbody>
+            <tr><td>Material handling on bought material and hardware (0.12 = 12%)</td><td>{numIn('material_handling_rate')}</td></tr>
             <tr><td>G&A rate (0.10 = 10%)</td><td>{numIn('ga_rate')}</td></tr>
             <tr><td>Profit rate</td><td>{numIn('profit_rate')}</td></tr>
             <tr><td>Minimum lot charge $</td><td>{numIn('min_lot_charge')}</td></tr>

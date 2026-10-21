@@ -86,7 +86,7 @@ def test_tiny_harness_labor_math():
         {"ref": "P1", "kind": "contact", "part_number": "K1", "qty": None, "unit_price": 0.5},
     ]
     opts = {"workmanship": "class_2", "branches": 2, "ties": 4, "hipot": False}
-    r = electrical.price_harness(wires, bom, None, [1, 10], opts)
+    r = electrical.price_harness(wires, bom, {"material_handling_rate": 0}, [1, 10], opts)
     c = r["counts"]
     assert (c["ends"], c["crimp"], c["insert"], c["solder"], c["heat_shrink"], c["markers"]) == (4, 3, 3, 1, 1, 4)
     # 4 ends x 0.35 + 3 crimps x 0.6 + 3 inserts x 0.35 + 1 solder x 1.5 + 2 wires marked x 0.75
@@ -106,7 +106,7 @@ def test_tiny_harness_labor_math():
     b10 = r["price_breaks"][1]
     assert b10["total_price"] == pytest.approx((r["per_part_cost"] * 10 + r["per_lot_cost"]) * 1.10 * 1.15, abs=0.05)
     # Class 3 multiplies only the assembly labor
-    r3 = electrical.price_harness(wires, bom, None, [1], dict(opts, workmanship="class_3"))
+    r3 = electrical.price_harness(wires, bom, {"material_handling_rate": 0}, [1], dict(opts, workmanship="class_3"))
     assert r3["labor_minutes"] == pytest.approx(35.55 * 1.35, abs=0.01)
     assert r3["test_minutes"] == pytest.approx(0.8)
     assert len(r["cut_list"]) == 2 and r["pinout"][0]["ref"] == "P1"
@@ -160,7 +160,7 @@ def test_panel_parse_and_price():
 # ---------------------------------------------------------------- labels
 def test_label_pricing_by_hand():
     line = {"item": "1", "type": "engraved_laminate", "width_in": 2, "height_in": 3, "text": "PUMP 1", "holes": 2, "qty": 3}
-    r = electrical.price_labels([line], None, [100], {})
+    r = electrical.price_labels([line], {"material_handling_rate": 0}, [100], {})
     d = r["line_detail"][0]
     # material max(6 sq in x 0.06, 0.75) = 0.75; 5 chars x 1.5 s at $85/h; (30 s handling + 2 holes x 0.5 min) at $45/h
     each = 0.75 + 7.5 / 3600 * 85 + 1.5 / 60 * 45
@@ -169,7 +169,7 @@ def test_label_pricing_by_hand():
     assert r["per_lot_cost"] == pytest.approx(15 / 60 * 45 + 25 + 45)
     b = r["price_breaks"][0]
     assert b["total_price"] == pytest.approx((r["per_part_cost"] * 100 + r["per_lot_cost"]) * 1.1 * 1.15, abs=0.05)
-    small = electrical.price_labels([line], None, [1], {"freight_per_lot": 0})
+    small = electrical.price_labels([line], {"material_handling_rate": 0}, [1], {"freight_per_lot": 0})
     assert small["price_breaks"][0]["total_price"] == 75.0  # labels minimum lot charge
 
 

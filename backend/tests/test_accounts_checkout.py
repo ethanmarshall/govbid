@@ -108,7 +108,12 @@ def test_checkout_by_invoice(client, monkeypatch):
     ag = v["order"]["agreement"]
     v = client.post(f"/api/public/quote/{q['ref']}/agreement/sign", json={"token": q["token"], "sha256": ag["sha256"], "name": "Dana Lee",
                                                                          "title": "Buyer", "authority": True, "consent": True, "agree": True}).json()
-    assert v["status"] == "ordered" and v["order"]["status"] == "invoice_due" and v["order"]["amount"] == pytest.approx(total)
+    o = v["order"]
+    disc = round(total * 3.0 / 103.0, 2)  # default 3% card fee allowance comes off for check or bank transfer
+    assert v["status"] == "ordered" and o["status"] == "invoice_due" and o["card_amount"] == pytest.approx(total)
+    assert o["cash_discount"] == {"pct": 3.0, "amount": disc} and o["amount"] == pytest.approx(round(total - disc, 2))
+    pdf = client.get(f"/api/public/quote/{q['ref']}/invoice.pdf", params={"token": q["token"]})
+    assert pdf.status_code == 200 and pdf.content[:4] == b"%PDF"
     assert v["order"]["invoice_number"] and v["order"]["po_number"] == "PO-1"
     assert v["order"]["lines"][0]["qty"] == 5 and not v["checkout"]["eligible"]
     assert q["ref"] in notices and "customer" in notices

@@ -75,7 +75,7 @@ def get_settings(db: Session) -> PortalSettings:
 SETTINGS_FIELDS = ("enabled", "display_name", "tagline", "intro", "contact_email", "contact_phone", "notify_email", "estimate_low_pct",
                    "estimate_high_pct", "incomplete_high_pct", "review_days", "max_quantity", "terms", "show_codes",
                    "pay_instructions", "agreement_template", "design_ai", "design_ai_daily",
-                   "frame_review", "frame_band_pct", "frame_panel_material")
+                   "frame_review", "frame_band_pct", "frame_panel_material", "card_fee_pct")
 
 # What the customer site says about you until you change it in Portal settings. Written to be true of a small
 # veteran-owned shop that designs, builds and tests; edit every line so it matches what you actually do.
@@ -230,6 +230,10 @@ def update_settings(db: Session, changes: dict) -> dict:
             v = str(v).upper()
             if v not in {p[1] for p in PANELS.values()}:
                 raise PortalError("Pick a panel material from the catalog")
+        elif k == "card_fee_pct":
+            v = float(v)
+            if not 0 <= v <= 4:
+                raise PortalError("The card fee allowance must be between 0 and 4 percent.")
         elif k in ("estimate_low_pct", "estimate_high_pct", "incomplete_high_pct", "frame_band_pct"):
             v = float(v)
             if not 0 <= v <= 300:
@@ -1518,8 +1522,12 @@ def public_view(req: PortalRequest) -> dict:
 
 
 def _checkout_state(req: PortalRequest) -> dict:
+    from sqlalchemy.orm import object_session
+
     ok, why = checkout.eligible(req)
-    return {"eligible": ok, "why": why, "methods": checkout.methods()}
+    db = object_session(req)
+    fee = float(getattr(get_settings(db), "card_fee_pct", 0) or 0) if db is not None else 0.0
+    return {"eligible": ok, "why": why, "methods": checkout.methods(), "cash_discount_pct": fee}
 
 
 def notify(req: PortalRequest, s: PortalSettings) -> str:

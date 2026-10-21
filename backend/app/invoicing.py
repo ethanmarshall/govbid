@@ -35,6 +35,10 @@ def _lines(order: dict) -> list[dict]:
         desc = l["name"] + (f" ({l['group']})" if l.get("group") else "")
         extra = ", ".join(x for x in (l.get("process"), l.get("material"), l.get("finish") if l.get("finish") not in ("", "none") else "") if x)
         out.append({"description": desc + (f": {extra}" if extra else ""), "quantity": l["qty"], "unit": "EA", "unit_price": l["unit_price"]})
+    d = order.get("cash_discount")
+    if d and not order.get("discount_forfeited"):
+        out.append({"description": f"Discount for paying by check or bank transfer ({d['pct']:g}%)", "quantity": 1, "unit": "EA",
+                    "unit_price": -float(d["amount"])})
     return out
 
 
@@ -76,6 +80,10 @@ def mark_paid(db: Session, req, amount: float | None = None, note: str = "") -> 
         create(db, req, o, 0, paid_amount=amount if amount is not None else o.get("amount"))
         req.order = o
         return
+    if o.get("discount_forfeited"):  # paid by card online: the invoice is at the card price
+        from .finance_api import clean_lines
+
+        inv.lines = clean_lines(_lines(o))
     if inv.status != "paid":
         today = date.today().isoformat()
         inv.status, inv.paid_date = "paid", today
@@ -174,6 +182,9 @@ def render(req, order: dict, info: dict, remit_to: str, pay_text: str, pay_url: 
         story += [P("How to pay", "h")]
         if pay_url:
             story += [Paragraph(f'Online by bank transfer or card: <link href="{escape(pay_url)}" color="#2356c4">{escape(pay_url)}</link>', st["p"]), Spacer(1, 4)]
+            if o.get("cash_discount") and o.get("card_amount"):
+                story += [P(f"Paying online is at the card price, ${float(o['card_amount']):,.2f}: the {o['cash_discount']['pct']:g}% discount is for "
+                            "payment by check or bank transfer to the account below."), Spacer(1, 4)]
         story += [P(pay_text or "Contact us for payment instructions.")]
         story += [Spacer(1, 4), P(f"Please put {o.get('invoice_number') or req.ref} on your payment.", "small")]
     if o.get("notes"):

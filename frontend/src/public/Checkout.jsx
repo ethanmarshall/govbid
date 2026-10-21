@@ -8,6 +8,7 @@ export default function Checkout({ req, token, setReq, info }) {
   const acct = useAccount()
   const me = acct?.customer
   const methods = req.checkout?.methods || ['invoice']
+  const discPct = Number(req.checkout?.cash_discount_pct || 0)
   const [open, setOpen] = useState(false)
   const [f, setF] = useState({ name: '', company: '', email: '', phone: '', method: methods[0], po_number: '', billing_email: '', needed_by: '', notes: '', accept_terms: false, save_address: true })
   const [ship, setShip] = useState(BLANK)
@@ -16,6 +17,8 @@ export default function Checkout({ req, token, setReq, info }) {
   const [err, setErr] = useState('')
   const [changed, setChanged] = useState(null)
   const total = req.result?.total
+  // same rounding as the server: the discount, then the invoice total
+  const invoiceTotal = total != null ? Math.round((total - Math.round(total * discPct / (100 + discPct) * 100) / 100) * 100) / 100 : total
   const terms = me?.net_terms_days || 0
 
   useEffect(() => {
@@ -111,7 +114,8 @@ export default function Checkout({ req, token, setReq, info }) {
             <input type="radio" name="method" value="invoice" checked={f.method === 'invoice'} onChange={set('method')} />
             <span><b>Invoice my company</b><span className="pq-muted">{terms
               ? `Your account has net ${terms} terms. You sign a short order agreement online, then we start and you pay within ${terms} days.`
-              : 'You sign a short order agreement online and get the invoice. Pay it by bank transfer or check' + (methods.includes('card') ? ', or online' : '') + ', and we start when it is paid.'}</span></span>
+              : 'You sign a short order agreement online and get the invoice. Pay it by bank transfer or check' + (methods.includes('card') ? ', or online' : '') + ', and we start when it is paid.'}
+              {discPct > 0 && <> Paying by check or bank transfer takes {discPct}% off: <b>{money(invoiceTotal)}</b>.</>}</span></span>
           </label>
         </div>
         {f.method === 'invoice' && (
@@ -140,7 +144,7 @@ export default function Checkout({ req, token, setReq, info }) {
       <p className="pq-muted pq-small">This total does not include shipping or sales tax. We confirm shipping with you before the parts go out.</p>
       {changed != null && <p className="pq-err" role="alert">The price changed since you last looked. The new total is {money(changed)}. Check it and place the order again.</p>}
       {err && <p className="pq-err" role="alert">{err}</p>}
-      <button className="pq-btn" disabled={busy}>{busy ? 'Placing your order…' : f.method === 'card' ? `Continue to payment, ${money(total)}` : `Place order and sign, ${money(total)}`}</button>
+      <button className="pq-btn" disabled={busy}>{busy ? 'Placing your order…' : f.method === 'card' ? `Continue to payment, ${money(total)}` : `Place order and sign, ${money(discPct > 0 ? invoiceTotal : total)}`}</button>
       <button type="button" className="pq-link" onClick={() => setOpen(false)}>Not now</button>
       <p className="pq-muted pq-small"><a href={pdfLink(req.ref, token)} target="_blank" rel="noopener">Save the quote as a PDF</a> for your purchasing team first.</p>
     </form>
@@ -226,7 +230,7 @@ export function OrderPanel({ order, info, token, fresh = false }) {
   return (
     <div className="pq-done pq-order">
       <h2>{fresh ? 'Order placed' : 'Your order'}</h2>
-      <p>Order <b>{o.number}</b>, {money(o.amount)}. <span className={`pq-ostat s-${o.status}`}>{o.status_label || STEP[o.status] || o.status}</span></p>
+      <p>Order <b>{o.number}</b>, {money(o.amount)}{o.cash_discount && !o.discount_forfeited ? ` by check or bank transfer (${o.cash_discount.pct}% off)` : ''}. <span className={`pq-ostat s-${o.status}`}>{o.status_label || STEP[o.status] || o.status}</span></p>
       {o.status === 'awaiting_signature' && (
         <div className="pq-signnote">
           <p><b>One more step: sign the order agreement.</b> It sets out payment, changes and cancellations. We send the invoice and start once it is signed.</p>
@@ -248,7 +252,8 @@ export function OrderPanel({ order, info, token, fresh = false }) {
       {o.invoice_number && token && (
         <div className="pq-save-row">
           <a className="pq-btn ghost" href={invoiceLink(o.number, token)} target="_blank" rel="noopener">{o.status === 'paid' && o.method === 'card' ? 'Download receipt' : 'Download invoice'}</a>
-          {o.pay_online && <button type="button" className="pq-btn" disabled={busy} onClick={pay}>{busy ? 'Opening…' : `Pay ${money(o.amount)} online`}</button>}
+          {o.pay_online && <button type="button" className="pq-btn" disabled={busy} onClick={pay}>{busy ? 'Opening…' : `Pay ${money(o.cash_discount && o.card_amount ? o.card_amount : o.amount)} online`}</button>}
+          {o.pay_online && o.cash_discount && o.card_amount && <span className="pq-muted pq-small"> Online is the card price; the {o.cash_discount.pct}% discount is for check or bank transfer.</span>}
         </div>
       )}
       {open && <p className="pq-muted pq-small">{o.pay_online ? 'Pay online by bank transfer or card, or use the' : 'Pay using the'} bank transfer or check details on the invoice. Put {o.invoice_number} on your payment.</p>}

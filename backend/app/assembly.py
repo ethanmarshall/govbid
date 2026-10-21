@@ -341,6 +341,7 @@ def quote_assembly(bodies_in: list[dict], joining: dict | None, quantities: list
         per_lot.append(_line("packaging", f"{packaging} lot labels and marking", pk["per_lot"], basis="per_lot"))
     per_lot.append(_line("freight", "outbound freight", _f(freight_per_lot, cfg["default_freight_per_lot"]), basis="per_lot"))
 
+    per_assy += pricing.handling_lines(cfg, per_assy)
     ga, profit = cfg["ga_rate"], cfg["profit_rate"]
     assy_cost = sum(l["cost"] for l in per_assy)
     lot_cost = sum(l["cost"] for l in per_lot)

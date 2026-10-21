@@ -121,6 +121,11 @@ def place(db: Session, req, data: dict, customer=None, base_url: str = "") -> di
     if method == "invoice":  # held until the customer signs the order agreement; then the invoice is made
         from . import agreement
 
+        pct = float(getattr(portal.get_settings(db), "card_fee_pct", 0) or 0)
+        if pct > 0:  # prices include the card fee allowance: paying by check or bank transfer takes it off
+            disc = round(total * pct / (100 + pct), 2)
+            order.update(card_amount=total, amount=round(total - disc, 2), cash_discount={"pct": pct, "amount": disc})
+
         order["terms_days"] = invoicing.terms_for(customer)
         order["status"] = "awaiting_signature"
         req.status = "submitted"
@@ -260,7 +265,9 @@ def mark_paid(db: Session, req, sess: dict) -> bool:
         return False
     if o.get("status") in ("paid", "payment_review"):
         return False
-    want = int(round(float(o.get("amount") or 0) * 100))
+    # an invoice paid by card online is at the card price: the check or bank transfer discount does not apply
+    card_amount = o.get("card_amount") if o.get("cash_discount") else None
+    want = int(round(float(card_amount if card_amount is not None else o.get("amount") or 0) * 100))
     got = sess.get("amount_subtotal")
     got = int(got) if got is not None else int(sess.get("amount_total") or 0)
     paid = (sess.get("amount_total") or 0) / 100
@@ -273,13 +280,16 @@ def mark_paid(db: Session, req, sess: dict) -> bool:
         db.commit()
         _alert(req, f"The card payment for {req.ref} does not match the order total. {o['review_reason']} Check it in Stripe before starting work.")
         return False
+    if card_amount is not None:
+        o.update(amount=float(card_amount), discount_forfeited=True)
     req.order = o
     if req.status in ("draft", "submitted", "reviewing", "confirmed"):
         req.status = "ordered"
     req.submitted_at = req.submitted_at or datetime.utcnow()
     from . import invoicing
 
-    invoicing.mark_paid(db, req, paid, "Paid online through Stripe")
+    invoicing.mark_paid(db, req, paid, "Paid online through Stripe" + (" by card, at the card price (no check or transfer discount)"
+                                                                       if card_amount is not None else ""))
     db.commit()
     return True
 
@@ -316,6 +326,7 @@ def public_order(req) -> dict | None:
     if not o.get("number"):
         return None
     return {k: o.get(k) for k in ("number", "method", "status", "placed_at", "amount", "lines", "ship_to", "po_number", "paid_at", "lead_days",
-                                  "invoice_number", "terms_days", "due_date", "invoice_date")} | {"pay_online": stripe_enabled() and o.get("status") in ("invoiced", "invoice_due"),
+                                  "invoice_number", "terms_days", "due_date", "invoice_date", "card_amount", "cash_discount",
+                                  "discount_forfeited")} | {"pay_online": stripe_enabled() and o.get("status") in ("invoiced", "invoice_due"),
         "agreement": __import__("app.agreement", fromlist=["public"]).public(o), "buyer": {"name": req.contact_name or "", "company": req.company or ""}, 
         "status_label": ORDER_LABEL.get(o.get("status"), o.get("status"))}

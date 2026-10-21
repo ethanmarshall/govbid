@@ -102,6 +102,16 @@ def new_line(key: str, name: str, kind: str, route: str, **kw) -> dict:
 def apply_final(ctx: Ctx, ln: dict) -> dict:
     """A price you set in review replaces the tool's and is what the customer sees."""
     fp = ctx.opt(ln["key"]).get("final_unit_price")
+    fee = float(getattr(ctx.s, "card_fee_pct", 0) or 0) / 100
+    if fee > 0 and (fp in (None, "") or float(fp) <= 0):
+        # the card fee allowance (Portal settings); invoices paid by check or bank transfer get it back as a discount.
+        # A price you set in review is the customer's price as is.
+        if ln.get("unit_price") is not None:
+            ln["unit_price"] = round(float(ln["unit_price"]) * (1 + fee), 2)
+            ln["card_fee_pct"] = fee * 100
+        for o in (ln.get("options") or {}).get("processes") or []:
+            if o.get("unit_price") is not None:
+                o["unit_price"] = round(float(o["unit_price"]) * (1 + fee), 2)
     if fp not in (None, "") and float(fp) > 0:
         ln["final_unit_price"] = float(fp)
         ln["unit_price"] = float(fp)

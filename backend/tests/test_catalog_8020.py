@@ -104,3 +104,18 @@ def test_standard_parts_by_size():
     assert tslot.standard_part(cap) == ("ENDCAP", "15", "2030")
     assert tslot.standard_part(_box(0, 0, 0, 3, 3, 3)) is None
     assert c.match_part("2333 <7>")[0] == "CASTER-LOCK-15" and c.match_part("2420")[0] == "CASTER-PLATE-15"
+
+
+def test_material_handling_on_bought_material_only():
+    from app import pricing
+
+    lines = [{"kind": "profile", "catalog_id": "1515", "qty": 1, "length_in": 20, "machining": []},
+             {"kind": "hardware", "catalog_id": "CASTER-15", "qty": 4}]
+    r = extrusion.price_build(lines, {"extrusion": {"prices": {"profiles": {"1515": 1.0}, "hardware": {"CASTER-15": 20.0}}}})
+    h = [l for l in r["per_part_lines"] if l["category"] == "handling"]
+    assert len(h) == 1 and h[0]["cost"] == round((20 * 1.0 + 4 * 20.0) * pricing.DEFAULT_CONFIG["material_handling_rate"], 2)
+    off = extrusion.price_build(lines, {"material_handling_rate": 0, "extrusion": {"prices": {"profiles": {"1515": 1.0}, "hardware": {"CASTER-15": 20.0}}}})
+    assert not [l for l in off["per_part_lines"] if l["category"] == "handling"]
+    assert r["price_breaks"][0]["total_price"] > off["price_breaks"][0]["total_price"]
+    # labor lines (with hours) are never marked up
+    assert pricing.handling_lines({"material_handling_rate": 0.1}, [{"category": "hardware", "cost": 50, "hours": 0.5}]) == []

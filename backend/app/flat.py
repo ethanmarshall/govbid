@@ -772,6 +772,9 @@ def estimate(parts: list[dict], options: dict, quantities: list[int], config: di
     freight = _f(options.get("freight_per_lot"), cfg["default_freight_per_lot"])
     per_lot.append(_line("freight", "outbound freight", freight, basis="per_lot"))
 
+    per_set += pricing.handling_lines(cfg, per_set)
+    per_lot += pricing.handling_lines(cfg, per_lot, "per_lot")
+    h_rate = float(cfg.get("material_handling_rate", 0) or 0)
     ga, profit = cfg["ga_rate"], cfg["profit_rate"]
     set_cost = sum(l["cost"] for l in per_set)
     lot_cost = sum(l["cost"] for l in per_lot)
@@ -779,7 +782,7 @@ def estimate(parts: list[dict], options: dict, quantities: list[int], config: di
     for q in qtys:
         mat_lot = nst["by_quantity"][q]["sheets"] * sheet_cost if full_sheets else 0.0
         fin = sum(max(pp * parts_per_set * q, lm) for _, pp, lm, _ in finish_lot)
-        cost = set_cost * q + lot_cost + fin + mat_lot
+        cost = set_cost * q + lot_cost + fin + mat_lot * (1 + h_rate)  # full sheets bought for the lot carry the handling too
         price = max(cost * (1 + ga) * (1 + profit), cfg["min_lot_charge"])
         days = cfg["lead_time"]["base_days"] + lead_extra + math.ceil(q * parts_per_set / max(cfg["lead_time"]["parts_per_day"], 1) / 4)
         breaks.append({"quantity": q, "total_cost": round(cost, 2), "unit_cost": round(cost / q, 2), "unit_price": round(price / q, 2),

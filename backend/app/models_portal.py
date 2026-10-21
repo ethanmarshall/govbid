@@ -89,6 +89,9 @@ class PortalSettings(Base):
     # frame is priced from that parts list with a narrow range (frame_band_pct above the price, none below). With
     # frame_review on, an engineer still confirms the frame before it can be ordered.
     frame_review: Mapped[bool] = mapped_column(Boolean, default=True)
+    # card processing fee allowance, percent: website prices include it, and invoices paid by check or bank transfer get
+    # the same amount off (a cash discount, which card network rules and state laws allow where a card surcharge may not be)
+    card_fee_pct: Mapped[float] = mapped_column(Float, default=3.0)
     frame_band_pct: Mapped[float] = mapped_column(Float, default=5.0)
     frame_panel_material: Mapped[str] = mapped_column(String(10), default="PC")  # infill panels with no material in their name
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

@@ -588,6 +588,11 @@ function PortalSettings({ onSaved }) {
         <label className="f">How to pay, printed on invoices<textarea value={s.pay_instructions || ''} onChange={(e) => setS({ ...s, pay_instructions: e.target.value })} style={{ minHeight: 80 }} placeholder={'Bank transfer (ACH): bank name, routing and account number.\nChecks payable to Valley Power Systems LLC, mailed to the address above.'} /></label>
       </div>
       <p className="small muted" style={{ margin: '4px 0 0' }}>Only customers with an order see these, on their invoice. Approve net terms per customer in Customer accounts.</p>
+      <div className="grid g3" style={{ marginTop: 8 }}>
+        {f('card_fee_pct', 'Card fee allowance, % (0 to 4)', 'number', { min: 0, max: 4, step: 0.1 })}
+      </div>
+      <p className="small muted" style={{ margin: '4px 0 0' }}>Website prices include this so card payments cover the processing fee (Stripe is about 2.9% plus 30 cents).
+        Invoices paid by check or bank transfer get the same percent off. This is a cash discount, which is allowed everywhere, unlike a card surcharge. Set 0 to turn it off.</p>
       <h3>Design assistant</h3>
       <label className="check"><input type="checkbox" checked={s.design_ai !== false} onChange={(e) => setS({ ...s, design_ai: e.target.checked })} /> Let customers describe a part to the AI on Design a part (needs ANTHROPIC_API_KEY in Render; without it they still get the sizes form, 3D model and price)</label>
       <div className="grid g2" style={{ marginTop: 6 }}>

@@ -128,7 +128,7 @@ def _small_config(mode="cut_to_length"):
     ext["prices"]["profiles"]["1515"] = 1.0
     ext["prices"]["hardware"]["BRKT-4H-15"] = 5.0
     return {"extrusion": ext, "rates": {"assembly": 60.0, "fabrication": 40.0}, "packaging": {"commercial": {"per_part": 1.0, "per_lot": 0.0}},
-            "default_freight_per_lot": 10.0, "ga_rate": 0.1, "profit_rate": 0.2, "min_lot_charge": 0.0,
+            "default_freight_per_lot": 10.0, "ga_rate": 0.1, "profit_rate": 0.2, "min_lot_charge": 0.0, "material_handling_rate": 0.0,
             "lead_time": {"base_days": 5, "first_article_days": 10, "parts_per_day": 25}}
 
 
