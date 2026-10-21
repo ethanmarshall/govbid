@@ -63,3 +63,44 @@ def test_bom_with_8020_numbers():
     assert by["ANCHOR-15"]["qty"] == 8 and by["CASTER-15"]["qty"] == 4
     order = {x["part_number"]: x for x in extrusion.price_build(lines)["order_8020"]["rows"]}
     assert "#7033 end tap 7/16-14" in order["1530"]["callout"]
+
+
+def _box(x, y, z, dx, dy, dz):
+    from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox
+    from OCP.gp import gp_Pnt
+
+    mm = 25.4
+    return BRepPrimAPI_MakeBox(gp_Pnt(x * mm, y * mm, z * mm), dx * mm, dy * mm, dz * mm).Shape()
+
+
+def _turned(shape, deg, axis=(1, 0, 0)):
+    from OCP.BRepBuilderAPI import BRepBuilderAPI_Transform
+    from OCP.gp import gp_Ax1, gp_Dir, gp_Pnt, gp_Trsf
+    import math
+
+    t = gp_Trsf()
+    t.SetRotation(gp_Ax1(gp_Pnt(0, 0, 0), gp_Dir(*axis)), math.radians(deg))
+    return BRepBuilderAPI_Transform(shape, t, True).Shape()
+
+
+def test_square_bar_turned_about_its_length_measures_true():
+    # a model with rails turned 15 degrees about their length read as 1.86 in square and was machined from solid bar
+    from OCP.BRepAlgoAPI import BRepAlgoAPI_Cut
+
+    from app import tslot
+
+    bar = BRepAlgoAPI_Cut(_box(0, 0, 0, 13.3125, 1.5, 1.5), _box(-1, 0.5, 0.5, 16, 0.5, 0.5)).Shape()  # hollow, like a T-slot
+    for deg in (0, 15, 33, 45):
+        (a, b, L), _ = tslot._obb(_turned(bar, deg))
+        assert abs(a - 1.5) < 0.01 and abs(b - 1.5) < 0.01 and abs(L - 13.3125) < 0.01, (deg, a, b, L)
+        c = tslot.classify(_turned(bar, deg), "Part 22")
+        assert c and c["profile"] == "1515"
+
+
+def test_standard_parts_by_size():
+    from app import tslot
+
+    cap = _turned(_box(0, 0, 0, 1.5, 1.5, 0.188), 20, (0, 0, 1))
+    assert tslot.standard_part(cap) == ("ENDCAP", "15", "2030")
+    assert tslot.standard_part(_box(0, 0, 0, 3, 3, 3)) is None
+    assert c.match_part("2333 <7>")[0] == "CASTER-LOCK-15" and c.match_part("2420")[0] == "CASTER-PLATE-15"

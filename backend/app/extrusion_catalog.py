@@ -123,6 +123,7 @@ _HARDWARE: list[tuple[str, str, str, dict[str, float]]] = [
     ("FOOT", "Leveling foot", "accessory", {"10": 6.00, "15": 8.00, "MS": 5.00, "ML": 7.00}),
     ("CASTER", "Caster, swivel", "accessory", {"10": 15.00, "15": 20.00, "MS": 14.00, "ML": 18.00}),
     ("CASTER-LOCK", "Caster, swivel with brake", "accessory", {"10": 20.00, "15": 25.00, "MS": 18.00, "ML": 23.00}),
+    ("CASTER-PLATE", "Caster base plate with bolts", "accessory", {"10": 14.00, "15": 18.00, "MS": 12.00, "ML": 16.00}),
     ("RETAINER", "Panel retainer (gasket or clip)", "fastener", {"10": 0.50, "15": 0.60, "MS": 0.40, "ML": 0.50}),
     ("HINGE", "Hinge, lift-off (mounting hardware included)", "accessory", {"10": 8.00, "15": 12.00, "MS": 7.00, "ML": 10.00}),
     ("HANDLE", "Door handle with mounting screws and T-nuts", "accessory", {"10": 8.00, "15": 10.00, "MS": 7.00, "ML": 9.00}),

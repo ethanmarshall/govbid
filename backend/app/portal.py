@@ -759,7 +759,7 @@ def _tslot_frame(ctx, req: PortalRequest, key: str, name: str, groups: list[dict
     catalog, not machined from solid. Returns (line or None, group numbers it covers)."""
     from collections import Counter
 
-    from . import extrusion, tslot
+    from . import catalog_8020, extrusion, tslot
     from . import frame as frame_mod
 
     s = ctx.s
@@ -775,18 +775,32 @@ def _tslot_frame(ctx, req: PortalRequest, key: str, name: str, groups: list[dict
         if c:
             members.append((g, c))
             continue
-        base, _ = tslot.hardware_for(names)
-        if base and base.startswith("CASTER"):
-            cast.append((g, base))
+        # an 80/20 part number in the name (2420, "2333 <7>"), the name (hinge, caster ...), or the size of a standard
+        # 80/20 part (end cap, inside corner bracket) for parts named only "Part 12"
+        hit = catalog_8020.match_part(" ".join(names))
+        base, pn = (hit[0].rsplit("-", 1)[0], hit[1]) if hit else (tslot.hardware_for(names)[0], "")
+        if not base and not g.get("bought") and g.get("file_id"):
+            try:
+                std = tslot.standard_part(tslot.load_group_shape(g["file_id"]), g.get("volume"))
+            except Exception:  # noqa: BLE001
+                std = None
+            if std:
+                base, _, pn = std
+        if base and base.startswith("CASTER") and base != "CASTER-PLATE":
+            cast.append((g, base, pn))
             continue
         if base:
-            hardware.append((g, base))
+            hardware.append((g, base, pn))
             continue
         sm = (g.get("sheet_thickness") or 0)
         bb = g.get("bounding_box") or {}
         dims = sorted([bb.get("length") or 0, bb.get("width") or 0, bb.get("height") or 0])
         t = sm or dims[0]
         pid = tslot.panel_for(names[0], t, s.frame_panel_material or "PC") if t and t <= 0.4 and dims[1] > 4 else None
+        if not pid and t and dims[1] > 4 and any(abs(t - x) <= 0.004 for x in (0.118, 0.177, 0.236)) and \
+                not re.search(r"\b(alum\w*|6061|5052|steel|stainless|plate)\b", " ".join(names).replace("_", " "), re.I):
+            # 3, 4.5 and 6 mm are 80/20 panel stock, not aluminum gauges: a panel of the default material (assumed)
+            pid = tslot.panel_for("panel", t, s.frame_panel_material or "PC")
         if pid:
             panels.append((g, pid, dims[2], dims[1]))
     if sum(int(g.get("qty", 1)) for g, _ in members) < 4:  # not a frame: price the parts as usual
@@ -795,6 +809,7 @@ def _tslot_frame(ctx, req: PortalRequest, key: str, name: str, groups: list[dict
     pieces = sum(int(g.get("qty", 1)) for g, _ in members)
     # joints: measured from where each member's ends touch other members (small files), else one per member end
     joints = None
+    base_ends: dict = {}
     if parent_id and size <= isolate.BIG_FILE:
         try:
             from .assembly import _load_solids
@@ -802,6 +817,11 @@ def _tslot_frame(ctx, req: PortalRequest, key: str, name: str, groups: list[dict
             solids = _load_solids(parent_id)
             body_c = [(i, c) for g, c in members for i in (g.get("bodies") or [g.get("representative")]) if i is not None and i < len(solids)]
             joints = tslot.measure_joints(solids, body_c)
+            # which member ends carry the base: caster plates if any, else stem casters and feet (by their bodies)
+            plates = [i for g, b, _ in hardware if b == "CASTER-PLATE" for i in (g.get("bodies") or [])]
+            stems = [i for g, b, pn in hardware + cast if b in ("CASTER", "CASTER-LOCK", "FOOT") and pn not in catalog_8020.FLANGE_CASTERS
+                     for i in (g.get("bodies") or [])]
+            base_ends = tslot.ends_touching(solids, body_c, plates or stems)
         except Exception:  # noqa: BLE001
             joints = None
     by_cut: dict = {}
@@ -813,30 +833,56 @@ def _tslot_frame(ctx, req: PortalRequest, key: str, name: str, groups: list[dict
             anchors = j["anchors"] if j else 2
             if not c["miters"]:  # a mitered end joins with 80/20's miter cut counterbore service, hardware included (10-12)
                 anchors_total += anchors
-            k = (c["profile"], round(c["length_in"] * 16) / 16, c["miters"], anchors)
+            k = (c["profile"], round(c["length_in"] * 16) / 16, c["miters"], anchors, base_ends.get(b, 0))
             e = by_cut.setdefault(k, {"qty": 0, "names": []})
             e["qty"] += 1
             if g["name"] not in e["names"]:
                 e["names"].append(g["name"])
     lines = []
-    for (pid, length, miters, anchors), e in sorted(by_cut.items(), key=lambda kv: (kv[0][0], -kv[0][1])):
+    for (pid, length, miters, anchors, taps), e in sorted(by_cut.items(), key=lambda kv: (kv[0][0], -kv[0][1])):
         if miters:
             ops = [{"op": "miter_cut", "count": miters}] + ([{"op": "miter_cbore", "count": min(anchors, miters)}] if anchors else [])
         else:
             ops = [{"op": "counterbore", "count": anchors}] if anchors else []
+        if taps:
+            ops = ops + [{"op": "end_tap", "count": taps}]  # thread set below with the base hardware
         lines.append({"kind": "profile", "catalog_id": pid, "qty": e["qty"], "length_in": length, "machining": ops, "description": ", ".join(e["names"])[:200]})
-    hw = Counter()
-    for g, base in hardware:
-        hw[base] += int(g.get("qty", 1))
-    if cast:  # a caster drawn as several bodies (plate, swivel, fork, wheel) is one caster
-        hw[cast[0][1] if all(b == cast[0][1] for _, b in cast) else "CASTER"] += min(int(g.get("qty", 1)) for g, _ in cast)
+    hw = Counter()  # (base, 80/20 part number or "")
+    for g, base, pn in hardware:
+        hw[(base, pn)] += int(g.get("qty", 1))
+    if cast:
+        # a caster drawn as several bodies (plate, swivel, fork, wheel) is one caster: per caster model, add up each kind
+        # of piece (same volume) over all its groups; the count is the smallest of those sums
+        by_model: dict = {}
+        for g, base, pn in cast:
+            kind = round(float(g.get("volume") or 0), 2)
+            m = by_model.setdefault((base, pn), Counter())
+            m[kind] += int(g.get("qty", 1))
+        for (base, pn), kinds in by_model.items():
+            hw[(base, pn)] += min(kinds.values()) if len(kinds) > 1 else sum(kinds.values())
     if anchors_total:
-        hw["ANCHOR"] += anchors_total
+        hw[("ANCHOR", "")] += anchors_total
     # stem casters and leveling feet thread into the bottom ends of the posts (80/20 catalog 5-4, 5-24): add the end tap
     # to the longest pieces whose name says they stand upright, else to the longest pieces
-    base_n = hw.get("CASTER", 0) + hw.get("CASTER-LOCK", 0) + hw.get("FOOT", 0)
+    tot = Counter()
+    for (b, pn), q in hw.items():
+        tot["FLANGE" if pn in catalog_8020.FLANGE_CASTERS else b] += q
+    plates = tot["CASTER-PLATE"]
+    base_n = (tot["CASTER"] + tot["CASTER-LOCK"] + tot["FOOT"]) or plates  # flange casters bolt to plates, the plates take the tap
     if base_n and fam in ("10", "15"):
-        thread = {"15": "7/16-14" if hw.get("FOOT", 0) < base_n else "3/8-16", "10": "1/4-20"}[fam]
+        thread = {"15": "5/16-18" if plates else ("7/16-14" if tot["FOOT"] < base_n else "3/8-16"), "10": "1/4-20"}[fam]
+        tapped = [o for ln in lines if ln.get("kind") == "profile" for o in ln["machining"] if o["op"] == "end_tap"]
+        for o in tapped:
+            o["thread"] = thread
+        if plates and joints is not None:
+            # 2420 plates mount to a tapped profile end with 4 x 3123, or to the T-slot face with 4 x 3458 and T-nuts (5-36)
+            if tapped:
+                hw[("SCREW-BHSCS", "3123")] += 4 * plates
+            else:
+                hw[("TNUT-ECON", "3458")] += 4 * plates
+            base_n = 0
+        elif tapped:  # found from the model where the base parts sit
+            base_n = 0
         upright = re.compile(r"post|leg|upright|riser|vertical|column", re.I)
         order = sorted(lines, key=lambda l: (not upright.search(l.get("description") or ""), -(l.get("length_in") or 0)))
         left = base_n
@@ -849,7 +895,7 @@ def _tslot_frame(ctx, req: PortalRequest, key: str, name: str, groups: list[dict
                 lines.append(rest)
             ln["machining"] = ln["machining"] + [{"op": "end_tap", "count": 1, "thread": thread}]
             left -= ln["qty"]
-    lines += [{"kind": "hardware", "catalog_id": f"{b}-{fam}", "qty": q} for b, q in hw.items()]
+    lines += [{"kind": "hardware", "catalog_id": f"{b}-{fam}", "qty": q, **({"part_number": pn} if pn else {})} for (b, pn), q in hw.items()]
     pan = Counter()
     for g, pid, a, b in panels:
         pan[(pid, round(a, 3), round(b, 3), g["name"])] += int(g.get("qty", 1))
@@ -864,13 +910,16 @@ def _tslot_frame(ctx, req: PortalRequest, key: str, name: str, groups: list[dict
         from . import portal_lines as PL
 
         return PL.new_line(tkey, "T-slot frame", "frame", "manual", group=name, qty=qty, public_reason="We will price the frame by hand.",
-                           internal_reasons=[str(exc)]), {g["group"] for g, _ in members + hardware + cast}
+                           internal_reasons=[str(exc)]), {t[0]["group"] for t in members + hardware + cast}
     from .extrusion_catalog import PANELS
 
     facts = [{"label": f"Cut {pid}", "value": f"{e['qty']} x {frame_mod._frac(length)} in" + (f", {miters} miter{'s' if miters > 1 else ''} each" if miters else "")
               + (f", {anchors} counterbore{'s' if anchors > 1 else ''} each" if anchors else "")
-              + f": {', '.join(sorted(set(e['names'])))[:120].lower()}"} for (pid, length, miters, anchors), e in sorted(by_cut.items(), key=lambda kv: (kv[0][0], -kv[0][1]))]
-    facts.append({"label": "Hardware", "value": ", ".join(f"{q} {frame_mod.HW_LABEL.get(b, b).lower()}" for b, q in hw.items())})
+              + f": {', '.join(sorted(set(e['names'])))[:120].lower()}"} for (pid, length, miters, anchors, _t), e in sorted(by_cut.items(), key=lambda kv: (kv[0][0], -kv[0][1]))]
+    hw_tot = Counter()
+    for (b, pn), q in hw.items():
+        hw_tot[(frame_mod.HW_LABEL.get(b, b).lower(), pn)] += q
+    facts.append({"label": "Hardware", "value": ", ".join(f"{q} {lab}" + (f" (80/20 {pn})" if pn else "") for (lab, pn), q in hw_tot.items())})
     for (pid, a, b, nm), q in pan.items():
         facts.append({"label": "Panel", "value": f"{q} x {frame_mod._frac(a)} x {frame_mod._frac(b)} in {PANELS[pid][0].lower()}: {nm.lower()}",
                       "flag": None if tslot.PANEL_HINTS and any(rx.search(nm) for rx, _ in tslot.PANEL_HINTS) else "assumed"})
@@ -890,7 +939,7 @@ def _tslot_frame(ctx, req: PortalRequest, key: str, name: str, groups: list[dict
     ln["group"] = name
     if confident:
         ln["band"] = [0.0, float(s.frame_band_pct or 0)]
-    return ln, {g["group"] for g, _ in members + hardware + cast} | {g["group"] for g, *_ in panels}
+    return ln, {t[0]["group"] for t in members + hardware + cast} | {g["group"] for g, *_ in panels}
 
 
 def _frame_line(ctx, req: PortalRequest, f: dict, cfg: dict) -> dict:

@@ -145,6 +145,11 @@ HARDWARE: dict[tuple[str, str], list[tuple[str, str, float, str]]] = {
     ("CASTER-LOCK", "10"): [("2300", "Threaded stem swivel caster, 3 in soft rubber, side brake, 3/8-16 stem, 100 lb", 1, "5-4"),
                             ("2129", "3 hole center tap base plate, 1 in, 3/8-16 center (mounts with 1/4 SHCS)", 1, "5-40")],
     ("FOOT", "15"): [("2191", "Economy leveling foot, 3/8-16, 2550 lb", 1, "5-24")],
+    # flange mount caster base plate: mounts to the profile end (end tap 5/16-18) and takes a flanged caster with 4 bolts
+    ("CASTER-PLATE", "15"): [("2420", "Flange mount caster base plate, 15 Series", 1, "5-36"),
+                             ("3110", "5/16-18 x 5/8 SHCS (caster to base plate)", 4, "5-6")],
+    ("CASTER-PLATE", "10"): [("2418", "Flange mount caster base plate, 10 Series", 1, "5-36"),
+                             ("3110", "5/16-18 x 5/8 SHCS (caster to base plate)", 4, "5-6")],
     ("FOOT", "10"): [("2193", "Economy leveling foot, 1/4-20, 1050 lb", 1, "5-24")],
 }
 # thread each base part needs in the end of a profile (for the end tap service)
@@ -220,8 +225,15 @@ def order_list(lines: list[dict], builds: int = 1) -> dict:
                          "callout": "; ".join(calls), "page": p.get("page"), "kind": "profile"})
             caps[p["part_no"]] += 0  # end caps are added only when the build lists them
         elif kind == "hardware":
-            parts = hardware_parts(ln.get("catalog_id"), q)
             base, fam = _base_family(ln.get("catalog_id"))
+            pn = str(ln.get("part_number") or "").strip()
+            if pn and pn in PART_DESC:  # the model or BOM named the exact 80/20 part
+                extra = HARDWARE.get((base, fam), [])[1:] if base not in ("CASTER", "CASTER-LOCK") else []
+                rows.append({"part_number": pn, "description": PART_DESC[pn], "qty": q, "unit": "each", "callout": "", "kind": "hardware"})
+                rows += [{"part_number": e[0], "description": e[1], "qty": int(math.ceil(q * e[2] - 1e-9)), "unit": "each", "callout": "",
+                          "page": e[3], "kind": "hardware"} for e in extra]
+                continue
+            parts = hardware_parts(ln.get("catalog_id"), q)
             if base == "ENDCAP":
                 caps["__qty__"] += q
                 continue
@@ -347,7 +359,9 @@ def check(lines: list[dict], panel_thickness: dict | None = None) -> list[dict]:
                     "7042 on 10 Series) in the end of the member that butts in.", "3-12, 10-7")
     if cb and not hw["ANCHOR"] and not hw["BUTT"]:
         add("warn", f"{cb} counterbores but no anchor fasteners listed. Add the anchors (3360 on 15 Series) or remove the counterbores.", "3-12")
-    stems = hw["CASTER"] + hw["CASTER-LOCK"] + hw["FOOT"]
+    flange = sum(int(l.get("qty") or 0) for l in lines if l.get("kind") == "hardware" and str(l.get("part_number") or "") in FLANGE_CASTERS)
+    face_plates = sum(int(l.get("qty") or 0) for l in lines if str(l.get("part_number") or "") == "3458") // 4
+    stems = hw["CASTER"] + hw["CASTER-LOCK"] - flange + hw["FOOT"] + hw["CASTER-PLATE"] - face_plates  # each takes one tapped end
     need_taps = stems + hw["ENDFAST"]
     if stems and "10" in fams and (hw["CASTER"] + hw["CASTER-LOCK"]):
         add("info", "10 Series ends only tap to 1/4-20, so stem casters go on a center tap base plate (2129 for a 3/8-16 stem).", "10-3, 5-40")
@@ -355,6 +369,9 @@ def check(lines: list[dict], panel_thickness: dict | None = None) -> list[dict]:
         add("warn", f"{stems} casters or feet and {hw['ENDFAST']} end fasteners need {need_taps} tapped profile ends, but {taps} end taps are listed. "
                     "Stem casters and leveling feet thread into an end tap (7054 for a 7/16-14 stem on 1515, 7033 on 1530) or a base plate.",
             "5-4, 5-24, 10-3")
+    if flange and hw["CASTER-PLATE"] < flange:
+        add("warn", f"{flange} flange mount casters need a caster base plate each (2420 on 15 Series) to mount to the frame; "
+                    f"{hw['CASTER-PLATE']} listed.", "5-6, 5-36")
     if hw["ENDFAST"] and access < hw["ENDFAST"]:
         add("warn", f"{hw['ENDFAST']} end fasteners need an access hole (7050 on 15 Series) in the mating profile for each one; {access} listed.", "3-16, 10-5")
     if hw["HINGE"] and hw["HINGE"] % 2:
@@ -405,7 +422,10 @@ PART_TO_BASE.update({
     "2105": ("HINGE", "15"), "2065": ("HINGE", "10"), "2842": ("HINGE", "15"), "2836": ("HINGE", "15"), "2841": ("HINGE", "10"), "2835": ("HINGE", "10"),
     "2060": ("HANDLE", "15"), "2884": ("HANDLE", "15"), "2886": ("HANDLE", "15"),
     "2300": ("CASTER", "15"), "2310": ("CASTER", "15"), "2305": ("CASTER", "15"), "2307": ("CASTER", "15"), "2317": ("CASTER", "15"), "2318": ("CASTER", "15"),
-    "2295": ("CASTER", "15"), "2296": ("CASTER-LOCK", "15"), "2190": ("FOOT", "15"), "2194": ("FOOT", "15"), "2195": ("FOOT", "15"), "2192": ("FOOT", "10"),
+    "2295": ("CASTER", "15"), "2296": ("CASTER-LOCK", "15"),
+    "2321": ("CASTER-LOCK", "15"), "2323": ("CASTER-LOCK", "15"), "2333": ("CASTER-LOCK", "15"),
+    "2420": ("CASTER-PLATE", "15"), "2426": ("CASTER-PLATE", "15"), "2418": ("CASTER-PLATE", "10"), "2419": ("CASTER-PLATE", "10"),
+    "4303": ("BRKT-4H", "15"), "4113": ("BRKT-4H", "10"), "2190": ("FOOT", "15"), "2194": ("FOOT", "15"), "2195": ("FOOT", "15"), "2192": ("FOOT", "10"),
     **{cap: ("ENDCAP", "15" if cap in ("2030", "2045", "2046", "2050") else "10") for cap in END_CAPS.values()},
 })
 
@@ -456,3 +476,26 @@ def match_part(text: str) -> tuple[str, str, str] | None:
             note = "80/20 hinge assemblies hold two hinges; set the quantity to hinges." if base == "HINGE" else ""
             return f"{base}-{fam}", m.group(1), note
     return None
+
+
+# descriptions for parts a model or BOM names exactly (beyond the defaults in HARDWARE)
+PART_DESC = {
+    "2321": "Flanged mount swivel caster, 4 in soft rubber, front brake, 255 lb (5-7)",
+    "2323": "Flanged mount swivel caster, 5 in soft rubber, front brake, 280 lb (5-7)",
+    "2333": "Deluxe flange mount swivel caster, 4 in polyurethane, brake included, 250 lb (5-10)",
+    "2317": "Flanged mount swivel caster, soft rubber, 150 lb (5-6)",
+    "2318": "Flanged mount swivel caster, hard rubber, 200 lb (5-6)",
+    "2426": "Flange mount caster base plate, 15 Series (5-36)",
+    "4303": "15 Series 4 hole wide inside corner bracket (3-87)",
+    "4301": "15 Series 4 hole tall inside corner bracket (3-88)",
+    "4332": "15 Series 2 hole gusseted inside corner bracket (3-116)",
+    "2045": "End cap for 1530 with push-in fastener (8-11)", "2046": "End cap for 1545 with push-in fastener (8-11)",
+    "2050": "End cap for 3030 with push-in fastener (8-11)", "2030": "End cap for 1515 with push-in fastener (8-11)",
+    "2015": "End cap for 1010 with push-in fastener (8-11)", "2025": "End cap for 1020 with push-in fastener (8-11)",
+}
+for (_b, _f), _rows in HARDWARE.items():
+    for _pn, _d, _q, _pg in _rows[:1]:
+        PART_DESC.setdefault(_pn, f"{_d} ({_pg})")
+PART_DESC.update({"3458": "5/16-18 x 7/8 SHCS and economy T-nut (caster base plate to the T-slot) (5-36)",
+                  "3123": "5/16-18 x 1.25 SHCS (caster base plate to a tapped profile end) (5-36)"})
+FLANGE_CASTERS = {"2317", "2318", "2321", "2323", "2333"}
