@@ -32,6 +32,12 @@ export default function CustomerRequests() {
   useEffect(() => { api.get('/api/portal/settings').then((v) => setOpen(v.enabled)).catch(() => {}) }, [showSettings])
   const load = () => api.get('/api/portal/requests?' + new URLSearchParams({ status: filter, include_drafts: drafts })).then(setRows).catch((e) => setErr(e.message))
   useEffect(() => { load() }, [filter, drafts])
+  // how many unsubmitted quotes the list is hiding, so an empty list says so
+  const [hidden, setHidden] = useState(0)
+  useEffect(() => {
+    if (drafts || filter) { setHidden(0); return }
+    api.get('/api/portal/requests?include_drafts=true').then((all) => setHidden(all.filter((x) => x.status === 'draft').length)).catch(() => {})
+  }, [drafts, filter, rows])
   const publicUrl = `${window.location.origin}/quote`
 
   return (
@@ -62,7 +68,10 @@ export default function CustomerRequests() {
       </div>
       <div className={sel ? 'crm-split' : ''}>
         <div className="panel">
-          {!rows ? <p className="muted">Loading…</p> : !rows.length ? <p className="muted">No requests yet. Share the customer page link once the portal is on.</p> : (
+          {!rows ? <p className="muted">Loading…</p> : !rows.length ? (hidden > 0
+            ? <div><p className="muted">No submitted requests yet. {hidden} quote{hidden === 1 ? '' : 's'} people priced but did not send {hidden === 1 ? 'is' : 'are'} hidden.</p>
+              <button className="small-btn" onClick={() => setDrafts(true)}>Show {hidden === 1 ? 'it' : `all ${hidden}`}</button></div>
+            : <p className="muted">No requests yet. Share the customer page link once the portal is on.</p>) : (
             <table className="small">
               <thead><tr><th>Request</th><th>Customer</th><th>Type</th><th>Shown</th><th>Status</th></tr></thead>
               <tbody>{rows.map((r) => (
