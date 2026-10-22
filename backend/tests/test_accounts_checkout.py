@@ -182,3 +182,15 @@ def test_staff_picks_material_and_process_per_part(client):
     # the customer sees the same choice
     pub = client.get(f"/api/public/quote/{q['ref']}", params={"token": q["token"]}).json()
     assert pub["result"]["items"][0]["material"] == "304 stainless steel"
+
+
+def test_money_summary_on_request(client):
+    q = _quote(client, FIX / "cad" / "machined_block.step", quantity=3)
+    rid = next(x["id"] for x in client.get("/api/portal/requests?include_drafts=true").json() if x["ref"] == q["ref"])
+    d = client.get(f"/api/portal/requests/{rid}").json()
+    m = d["summary"]
+    it = d["internal"]["items"][0]
+    assert m["price"] == pytest.approx(it["unit_price"] * it["qty"], abs=0.02)
+    assert m["cost"] == pytest.approx(it["unit_cost"] * it["qty"], abs=0.02)
+    assert m["profit"] == pytest.approx(m["price"] - m["cost"] - m["overhead"] - m["card_fee"], abs=0.02)
+    assert sum(m["split"].values()) == pytest.approx(m["cost"], abs=0.05) and m["shop_hours"] > 0 and m["profit_per_hour"]

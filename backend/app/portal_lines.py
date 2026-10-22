@@ -59,12 +59,19 @@ def _price_calibrated(fs: dict, process: str, raw: float) -> tuple[float, float,
 
 def _breakdown(est: dict, qty: int) -> dict:
     """Setup (per lot) and run (per part) cost split, for the review page."""
-    lot = sum(l["cost"] for l in est.get("per_lot_lines") or est.get("lot_lines") or [] if isinstance(l, dict))
-    per = {}
+    lots = [l for l in est.get("per_lot_lines") or est.get("lot_lines") or [] if isinstance(l, dict)]
+    lot = sum(l["cost"] for l in lots)
+    per, hours = {}, 0.0
     for l in est.get("per_part_lines") or est.get("part_lines") or []:
         if isinstance(l, dict):
             per[l["category"]] = per.get(l["category"], 0) + l["cost"]
-    return {"lot_cost": round(lot, 2), "per_part": {k: round(v, 2) for k, v in per.items()}, "qty": qty}
+            hours += float(l.get("hours") or 0)
+    lot_by = {}
+    for l in lots:
+        lot_by[l["category"]] = lot_by.get(l["category"], 0) + l["cost"]
+    return {"lot_cost": round(lot, 2), "per_part": {k: round(v, 2) for k, v in per.items()}, "qty": qty,
+            "lot": {k: round(v, 2) for k, v in lot_by.items()}, "hours_each": round(hours, 3),
+            "lot_hours": round(sum(float(l.get("hours") or 0) for l in lots), 3)}
 
 
 ALT_MAX_RATIO = 5  # other processes offered to the customer: up to this many times the best price
@@ -109,6 +116,8 @@ def apply_final(ctx: Ctx, ln: dict) -> dict:
         if ln.get("unit_price") is not None:
             ln["unit_price"] = round(float(ln["unit_price"]) * (1 + fee), 2)
             ln["card_fee_pct"] = fee * 100
+            if ln.get("unit_cost") and ln["unit_price"]:
+                ln["margin_pct"] = round((ln["unit_price"] - ln["unit_cost"]) / ln["unit_price"] * 100, 1)
         for o in (ln.get("options") or {}).get("processes") or []:
             if o.get("unit_price") is not None:
                 o["unit_price"] = round(float(o["unit_price"]) * (1 + fee), 2)
@@ -255,7 +264,8 @@ def assembly_line(ctx: Ctx, key: str, name: str, made: list[dict], bought: list[
                   calibration={"factor": f, "why": why, "process": "assembly"} if f != 1 else None, facts=facts, view=view,
                   public_reason="An engineer confirms how it goes together (welded, fastened or bonded) and the assembly time.",
                   breakdown={"lot_cost": 0, "per_part": {"assembly": round(minutes / 60 * rates["assembly"], 2),
-                                                          "inspection": round(insp / 60 * rates["inspection"], 2)}, "qty": ctx.n})
+                                                          "inspection": round(insp / 60 * rates["inspection"], 2)}, "qty": ctx.n,
+                             "hours_each": round((minutes + insp) / 60, 3), "lot_hours": 0})
     return apply_final(ctx, ln)
 
 

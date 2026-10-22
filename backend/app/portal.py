@@ -1568,6 +1568,72 @@ def notify(req: PortalRequest, s: PortalSettings) -> str:
 
 
 # ================================================================ internal
+# what a cost line is, for the money summary
+SUMMARY_GROUPS = {"bought": {"material", "hardware", "panels", "components", "wire", "consumables", "pcb", "linked", "enclosure", "contact"},
+                  "handling": {"handling"}, "ship": {"packaging", "freight"}}
+
+
+def money_summary(req: PortalRequest) -> dict:
+    """Is this job worth it: price, your cost split into bought material, shop time and shipping, the card fee allowance,
+    the G&A (overhead) share, profit, and profit per shop hour where the hours are known."""
+    from sqlalchemy.orm import object_session
+
+    db = object_session(req)
+    s = get_settings(db) if db is not None else None
+    cfg = quotes.get_config(db) if db is not None else pricing.merged_config(None)
+    ga = float(cfg.get("ga_rate") or 0)
+    split = defaultdict(float)
+    price = cost = hours = 0.0
+    unpriced, uncosted, no_hours = [], [], []
+    for it in (req.internal or {}).get("items") or []:
+        q = int(it.get("qty") or 1)
+        u, c = it.get("unit_price"), it.get("unit_cost")
+        if u is None:
+            unpriced.append(it.get("name") or "line")
+            continue
+        price += float(u) * q
+        if c is None:
+            uncosted.append(it.get("name") or "line")
+            continue
+        cost += float(c) * q
+        sp = it.get("spec") or {}
+        parts: list[tuple[str, float]] = []
+        h = None
+        if sp.get("costs"):  # frames: cost lines for one build, plus per-lot lines
+            parts = [(l["category"], l["cost"] * q) for l in sp["costs"]] + [(l["category"], l["cost"]) for l in sp.get("lot") or []]
+            h = sum(float(l.get("hours") or 0) for l in sp["costs"]) * q + sum(float(l.get("hours") or 0) for l in sp.get("lot") or [])
+        elif it.get("breakdown") and (it["breakdown"].get("per_part") or it["breakdown"].get("lot")):
+            b = it["breakdown"]
+            parts = [(k, v * q) for k, v in (b.get("per_part") or {}).items()] + list((b.get("lot") or {}).items())
+            if not b.get("lot") and b.get("lot_cost"):
+                parts.append(("setup", b["lot_cost"]))
+            if "hours_each" in b:
+                h = b["hours_each"] * q + float(b.get("lot_hours") or 0)
+        got = 0.0
+        frame = bool(sp.get("costs"))
+        for cat, v in parts:
+            # a frame's cuts and machining are 80/20's services when ordered cut to length: bought, not your shop time
+            g = "bought" if frame and cat in ("cutting", "machining") else next((k for k, cats in SUMMARY_GROUPS.items() if cat in cats), "shop")
+            split[g] += v
+            got += v
+        split["other"] += max(0.0, float(c) * q - got)  # anything the breakdown does not show
+        if h is None:
+            no_hours.append(it.get("name") or "line")
+        else:
+            hours += h
+    pct = float(getattr(s, "card_fee_pct", 0) or 0) if s else 0.0
+    card = price * pct / (100 + pct)
+    overhead = cost * ga
+    profit = price - card - cost - overhead
+    out = {"price": round(price, 2), "cost": round(cost, 2), "card_fee": round(card, 2), "card_fee_pct": pct, "ga_rate": ga,
+           "overhead": round(overhead, 2), "profit": round(profit, 2), "profit_pct": round(profit / price * 100, 1) if price else None,
+           "split": {k: round(v, 2) for k, v in split.items() if v > 0.005}, "shop_hours": round(hours, 2),
+           "profit_per_hour": round(profit / hours, 2) if hours > 0.05 else None,
+           "unpriced": unpriced, "uncosted": uncosted, "no_hours": no_hours,
+           "customer_saw": {k: (req.public_result or {}).get(k) for k in ("total", "total_low", "total_high", "kind")}}
+    return out
+
+
 def internal_dict(req: PortalRequest, full: bool = False) -> dict:
     d = {"id": req.id, "ref": req.ref, "status": req.status, "kind": req.kind, "quantity": req.quantity, "contact_name": req.contact_name,
          "company": req.company, "email": req.email, "phone": req.phone, "needed_by": req.needed_by,
@@ -1580,6 +1646,10 @@ def internal_dict(req: PortalRequest, full: bool = False) -> dict:
         d.update(material=req.material, finish=req.finish, thickness=req.thickness, customer_notes=req.customer_notes,
                  internal=req.internal or {}, internal_notes=req.internal_notes, token=req.token, line_opts=req.line_opts or {},
                  concept=[{"label": a, "text": b} for a, b in portal_concept.brief_lines(req.concept or {})] if req.kind == "concept" else [])
+        try:
+            d["summary"] = money_summary(req)
+        except Exception:  # noqa: BLE001
+            d["summary"] = None
     return d
 
 

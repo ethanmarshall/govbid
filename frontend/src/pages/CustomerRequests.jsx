@@ -148,9 +148,11 @@ function RequestDetail({ id, onChange, onClose }) {
         </>
       )}
       {r.kind !== 'concept' && <>
+      <MoneySummary m={r.summary} />
       <h3>Your numbers, line by line</h3>
       <p className="small muted" style={{ marginTop: 0 }}>Tool price is before calibration. A final price replaces the tool's for the customer and is saved as a calibration sample, so the tool learns from each job.</p>
       <LineTable r={r} id={id} setR={setR} setMsg={setMsg} setErr={setErr} />
+      <ColumnKey />
       <div className="pq pq-embed"><PartsTable req={{ ...r, result: p, submitted: true }} info={{}} viewUrl={(key) => `/api/portal/requests/${id}/views/${key}.svg`} /></div>
       </>}
       <h3>Review</h3>
@@ -429,6 +431,75 @@ function FrameBom({ it, id, setR, setMsg, setErr }) {
           <tr><td /><td><b>Cost for one build</b> (before G&A, profit and per-lot costs)</td><td /><td className="mono"><b>{usd(total)}</b></td></tr></tbody>
       </table></div>
     </div>
+  )
+}
+
+// Is the job worth it: the whole request at a glance (portal.money_summary).
+function MoneySummary({ m }) {
+  if (!m || !m.price) return null
+  const saw = m.customer_saw || {}
+  const sawText = saw.total != null ? usd(saw.total) : saw.total_low != null ? `${usd(saw.total_low)} to ${usd(saw.total_high)}` : ''
+  const pct = (v) => (m.price ? `${Math.round((v / m.price) * 100)}%` : '')
+  const split = m.split || {}
+  const rows = [
+    ['Bought material and hardware', split.bought, 'Extrusion, plate, casters, fasteners and parts you buy, plus 80/20 cuts and machining'],
+    ['Material handling', split.handling, 'Your markup on bought material for ordering, receiving and paying for it up front'],
+    ['Shop time', split.shop, 'Your labor and machine time at your shop rates: setup, machining, cutting, assembly, inspection'],
+    ['Packaging and freight', split.ship, ''],
+    ['Other', split.other, ''],
+  ].filter((x) => x[1] > 0.5)
+  const good = m.profit_pct != null && m.profit_pct >= 10
+  return (
+    <div className="panel" style={{ margin: '10px 0' }}>
+      <div className="row spread" style={{ alignItems: 'baseline' }}>
+        <h3 style={{ margin: 0 }}>Is it worth it?</h3>
+        {sawText && <span className="small muted">Customer was shown {sawText}</span>}
+      </div>
+      <div className="grid g3" style={{ marginTop: 8 }}>
+        <div><div className="small muted">Price (our number)</div><div style={{ fontSize: 22 }}><b>{usd(m.price)}</b></div></div>
+        <div><div className="small muted">Your cost</div><div style={{ fontSize: 22 }}><b>{usd(m.cost)}</b></div></div>
+        <div><div className="small muted">Profit after overhead and card fee</div>
+          <div style={{ fontSize: 22 }} className={good ? 'okline' : 'due-soon'}><b>{usd(m.profit)}</b>{m.profit_pct != null && <span className="small"> ({m.profit_pct}%)</span>}</div></div>
+      </div>
+      {(m.shop_hours > 0 || m.profit_per_hour != null) && (
+        <p className="small" style={{ margin: '8px 0 0' }}>About <b>{m.shop_hours} hours</b> of shop time{m.profit_per_hour != null ? <>, so about <b>{usd(m.profit_per_hour)}</b> profit per hour on top of the wages in your shop rates</> : ''}.
+          {m.no_hours?.length > 0 && <span className="muted"> Hours not known for: {m.no_hours.join(', ')}.</span>}</p>
+      )}
+      <table className="small" style={{ marginTop: 8 }}>
+        <tbody>
+          {rows.map(([label, v, note]) => (
+            <tr key={label}><td>{label}{note && <div className="muted">{note}</div>}</td><td className="mono">{usd(v)}</td><td className="mono muted">{pct(v)}</td></tr>
+          ))}
+          <tr><td><b>Your cost</b></td><td className="mono"><b>{usd(m.cost)}</b></td><td className="mono muted">{pct(m.cost)}</td></tr>
+          <tr><td>Overhead (G&A, {Math.round(m.ga_rate * 100)}% of cost)<div className="muted">Rent, insurance, software, quoting time: the G&A rate in your shop rates</div></td><td className="mono">{usd(m.overhead)}</td><td className="mono muted">{pct(m.overhead)}</td></tr>
+          {m.card_fee > 0 && <tr><td>Card fee allowance ({m.card_fee_pct}%)<div className="muted">Goes to Stripe if they pay by card, or comes off as the discount if they pay by check or transfer</div></td><td className="mono">{usd(m.card_fee)}</td><td className="mono muted">{pct(m.card_fee)}</td></tr>}
+          <tr><td><b>Profit</b></td><td className="mono"><b>{usd(m.profit)}</b></td><td className="mono muted">{pct(m.profit)}</td></tr>
+        </tbody>
+      </table>
+      {(m.unpriced?.length > 0 || m.uncosted?.length > 0) && (
+        <p className="small due-soon" style={{ margin: '6px 0 0' }}>Not counted yet: {[...m.unpriced, ...m.uncosted].join(', ')} (no price or cost; set a final price or price it by hand).</p>
+      )}
+      <p className="small muted" style={{ margin: '6px 0 0' }}>These use your shop rates and extrusion prices. While those are still the placeholders, treat this as a rough guide.</p>
+    </div>
+  )
+}
+
+function ColumnKey() {
+  return (
+    <details style={{ marginTop: 8 }}>
+      <summary className="small"><b>What the columns mean</b></summary>
+      <dl className="small" style={{ margin: '6px 0 0' }}>
+        <dt><b>Route</b></dt><dd>Instant: priced and orderable now. Estimate: shown as a range until you review it. Manual: no price; you price it.</dd>
+        <dt><b>Setup (lot)</b></dt><dd>One-time cost for the whole order however many parts: programming, machine setup, first article, supplier order charge. It is why one part costs far more each than ten.</dd>
+        <dt><b>Run (each)</b></dt><dd>Cost to make one more part: material, machine or cutting time, labor, inspection, packaging. Hover to see the split.</dd>
+        <dt><b>Cost each</b></dt><dd>Your total cost per part at this quantity: run cost plus the setup spread over the quantity. Labor is at your shop rates, which include wages and shop overhead per hour.</dd>
+        <dt><b>Tool price</b></dt><dd>What the pricing tool works out: cost, plus material handling, then G&A (overhead) and profit, plus the card fee allowance on the website. Before calibration.</dd>
+        <dt><b>Calibration</b></dt><dd>A factor learned from the final prices you set on past jobs of the same kind (x1.10 means the tool ran 10% low before). None until you have set some.</dd>
+        <dt><b>Price each</b></dt><dd>What the customer pays per part: the tool price after calibration, or your final price.</dd>
+        <dt><b>Margin</b></dt><dd>(Price minus cost) divided by price. It includes the G&A share and the card fee allowance, so your profit is lower than the margin: see the summary above.</dd>
+        <dt><b>Final price each</b></dt><dd>Type a price to replace the tool's. The customer sees it, and it is saved as a calibration sample.</dd>
+      </dl>
+    </details>
   )
 }
 
