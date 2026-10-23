@@ -102,8 +102,10 @@ DEFAULT_CONFIG: dict[str, Any] = {
     # 3D printing. Machine rates are $/hour of printer time (machine, power, wear), separate from labor.
     "additive": {
         "technologies": {
-            "fdm": {"label": "FDM (filament)", "machine_rate": 6.0, "cm3_per_hour": 12.0, "minutes_per_inch_height": 6.0,
-                    "setup_minutes": 10.0, "post_minutes": 6.0, "support_factor": 0.20, "max_in": [13.5, 13.5, 13.5], "packs_build": False},
+            # a current printer with a 0.4 mm nozzle averages about 30 cm3 (38 g of PETG) an hour on a solid part, perimeters and
+            # travel included; supports print sparse, so they add about a tenth. Set yours from a slicer estimate.
+            "fdm": {"label": "FDM (filament)", "machine_rate": 6.0, "cm3_per_hour": 30.0, "minutes_per_inch_height": 6.0,
+                    "setup_minutes": 10.0, "post_minutes": 6.0, "support_factor": 0.10, "max_in": [13.5, 13.5, 13.5], "packs_build": False},
             "sla": {"label": "SLA (resin)", "machine_rate": 8.0, "cm3_per_hour": 20.0, "minutes_per_inch_height": 25.0,
                     "setup_minutes": 10.0, "post_minutes": 12.0, "support_factor": 0.15, "max_in": [5.7, 5.7, 7.3], "packs_build": False},
             "sls": {"label": "SLS (nylon powder)", "machine_rate": 30.0, "cm3_per_hour": 90.0, "minutes_per_inch_height": 0.0,

@@ -51,6 +51,17 @@ def print_extras(geo: dict, config: dict | None = None) -> dict:
     return {"inserts": n_ins, "bushings": len(bush), "notes": notes}
 
 
+def fits(geo: dict, config: dict | None = None, material: str = SUGGEST_MATERIAL) -> bool:
+    """Whether the part fits the printer for that material."""
+    from . import pricing
+
+    cfg = pricing.merged_config(config)["additive"]
+    tech = cfg["technologies"].get((cfg["materials"].get(material) or {}).get("tech") or "fdm") or {}
+    bb = geo.get("bounding_box") or {}
+    dims = sorted((float(bb.get(k) or 0) for k in ("length", "width", "height")), reverse=True)
+    return all(d <= m for d, m in zip(dims, sorted(tech.get("max_in") or [99, 99, 99], reverse=True)))
+
+
 def print_opts(geo: dict, opts: dict, config: dict | None = None) -> tuple[dict, dict]:
     ex = print_extras(geo, config)
     o = {**opts, "process": "3d_print", "material": opts.get("material") or SUGGEST_MATERIAL}
@@ -69,7 +80,7 @@ def suggestion(file_id: str, geo: dict, opts: dict, machined: dict | None, confi
         return None
     cx = cad_quote.complexity_of(geo)
     hard = bool(machined.get("five_axis") or cx.get("five_axis")) or int(geo.get("estimated_setups") or 0) >= 4
-    if not hard:
+    if not hard or not fits(geo, config):
         return None
     o, ex = print_opts(geo, {**opts, "material": SUGGEST_MATERIAL}, config)
     try:

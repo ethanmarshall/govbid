@@ -184,6 +184,8 @@ def part_line(ctx: Ctx, key: str, file_id: str, name: str, *, group: str = "", q
         from . import suggest
 
         try:
+            if not suggest.fits(g, ctx.over):
+                raise ValueError("too big for the printer")
             po, _ = suggest.print_opts(g, {**opts, "material": suggest.SUGGEST_MATERIAL}, ctx.over)
             pr = cad_quote.quote(file_id, po, ctx.over)["estimate"]["price_breaks"]
             options = options + [{"process": "3d_print", "material": suggest.SUGGEST_MATERIAL, "label": "3D printed", "five_axis": False,
