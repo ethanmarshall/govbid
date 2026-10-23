@@ -756,7 +756,11 @@ def price_request(db: Session, req: PortalRequest) -> None:
         for g in sp["groups"]:  # decided now, not from the cache, so naming rules can improve
             g["name"] = re.sub(r"\s*<\d+>$", "", g["name"])  # Onshape instance numbers: "Door Latch <4>"
             g["_choice"] = choice_for(g)
-            g["bought"], g["_why"], g["_src"] = PK.decide(g, st=st, rules=rules, choice=g["_choice"])
+            try:
+                geo = cad_quote.load(g["file_id"])["geometry"] if g.get("file_id") else None
+            except Exception:  # noqa: BLE001
+                geo = None
+            g["bought"], g["_why"], g["_src"] = PK.decide(g, st=st, rules=rules, choice=g["_choice"], geo=geo)
         for e in st.values():  # a choice on one piece of a bought sub-assembly ("Door Latch", piece 2) is for all of it
             ch = next((g["_choice"] for g in e["groups"] if g["_choice"]), None)
             if ch and e["instanced"]:

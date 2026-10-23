@@ -39,6 +39,11 @@ MADE = re.compile(
     r"\b(spacer|housing|cover|retainer|boss|cap|holder|mount|seat|block|plate|bracket|tunnel|shaft|sleeve|frame|carrier|"
     r"weldment|chassis|enclosure|base|body|adapter|flange|bezel|panel|lid|tray|arm|rail|beam|gusset|custom|machined|"
     r"fabricated)s?\b", re.I)
+# a body named after a CAD feature or a default name tells us nothing ("CirPattern2", "Fillet4", "Part 1")
+NO_NAME = re.compile(r"^(fillet|chamfer|cirpattern|linpattern|pattern|cut-?extrude|boss-?extrude|extrude|revolve|cut-?revolve|"
+                     r"sweep|cut-?sweep|loft|mirror|shell|body|solid|part|imported|component|surface)[\s_-]*\d*$", re.I)
+# the customer's own sub-assembly ("Shaft Assembly <1>"): its name describes the assembly, not each body in it
+OWN_ASSEMBLY = re.compile(r"\b(assembly|assy|asm|weldment|master)\b", re.I)
 MCMASTER = re.compile(r"(?<![A-Z0-9])\d{4,5}[A-Z]\d{1,4}(?![A-Z0-9])", re.I)
 
 
@@ -78,9 +83,33 @@ def _dims(g: dict) -> list[float]:
     return sorted(float(bb.get(k) or 0) for k in ("length", "width", "height"))
 
 
+def detail(geo: dict | None, g: dict) -> str:
+    """Why a small body looks like catalog CAD (modeled threads, knurling, a ball, a washer), or ""."""
+    if not geo:
+        return ""
+    d = _dims(g)
+    f = geo.get("faces") or {}
+    faces = sum(f.values())
+    vol = float(geo.get("volume") or g.get("volume") or 0)
+    if not d[2]:
+        return ""
+    if d[2] <= 2.5 and faces >= 100:
+        return "modeled in fine detail (threads or knurling), like a catalog part's CAD"
+    if d[2] <= 4 and f.get("cone", 0) >= 20:
+        return "has modeled threads, like a catalog screw or stud"
+    if d[2] <= 1.0 and faces <= 2 and f.get("sphere", 0) >= 1:
+        return "a ball, like a bearing or detent ball"
+    if d[2] <= 2 and d[0] <= 0.12 and len(geo.get("holes") or []) == 1 and d[1] >= 0.8 * d[2]:
+        return "a thin ring with one hole, like a washer"
+    if d[2] <= 1.25 and vol < 0.3 and (geo.get("suggested_process") or g.get("suggested_process")) == "cnc_lathe":
+        return "small and shaped like a fastener"
+    return ""
+
+
 def decide(g: dict, *, st: dict | None = None, rules: dict | None = None, choice: str | None = None,
-           bom_buy: bool | None = None) -> tuple[bool, str, str]:
-    """(bought, how we know, source). source: chosen | bom | learned | name | model | default."""
+           bom_buy: bool | None = None, geo: dict | None = None) -> tuple[bool, str, str]:
+    """(bought, how we know, source). source: chosen | bom | learned | name | model | default.
+    geo: the body's geometry (faces, holes), for the shape checks."""
     s = group_stem(g)
     names = " ".join([g.get("name") or ""] + list(g.get("raw_names") or [])).replace("_", " ")
     if choice in ("bought", "make"):
@@ -98,16 +127,18 @@ def decide(g: dict, *, st: dict | None = None, rules: dict | None = None, choice
         return True, "catalog part number in the name", "name"
     if ALWAYS_BUY.search(names):
         return True, "the name says it is bought hardware", "name"
-    if MADE.search(names):
+    meaningful = bool(s) and not NO_NAME.match(s) and not OWN_ASSEMBLY.search(s)
+    if meaningful and MADE.search(names):
         return False, "the name says it is made", "name"
-    if BUY.search(names):
+    if meaningful and BUY.search(names):
         return True, "the name says it is a bought part", "name"
     e = (st or {}).get(s)
-    if e and e["instanced"] and e["shapes"] >= 2 and e["max_dim"] <= 10:
+    if e and e["instanced"] and e["shapes"] >= 2 and e["max_dim"] <= 6 and not OWN_ASSEMBLY.search(s):
         return True, "drawn as a set of small pieces under one sub-assembly name, like a bought part", "model"
-    d = _dims(g)
-    if d[2] and d[2] <= 1.25 and (g.get("volume") or 0) < 0.3 and g.get("suggested_process") == "cnc_lathe":
-        return True, "small and shaped like a fastener", "model"
+    why = detail(geo, g) if geo else ("small and shaped like a fastener" if _dims(g)[2] and _dims(g)[2] <= 1.25
+                                      and (g.get("volume") or 0) < 0.3 and g.get("suggested_process") == "cnc_lathe" else "")
+    if why:
+        return True, why, "model"
     return False, "", "default"
 
 

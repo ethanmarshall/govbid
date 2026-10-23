@@ -377,7 +377,7 @@ def analyze(shape) -> dict:
 
     min_dim = dims[2]
     thin_ratio = t_est / min_dim if min_dim else 0
-    is_sheet = t_est <= 0.26 and (bends or (min_dim <= t_est * 1.15 and dims[1] > 6 * t_est))
+    is_sheet = 0.001 < t_est <= 0.26 and (bends or (min_dim <= t_est * 1.15 and dims[1] > 6 * t_est))
     # a flat plate up to 1/2 in thick with only through features: profile cut on a waterjet, not milled from a block
     is_plate = not is_sheet and not bends and 0.26 < t_est <= 0.51 and min_dim <= t_est * 1.15 and dims[1] > 6 * t_est \
         and all(h["depth"] <= 1.5 * t_est for h in holes)

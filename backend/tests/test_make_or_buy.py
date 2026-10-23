@@ -75,3 +75,18 @@ def test_vendor_unit_is_one_bought_line_and_switches(client):
         s = portal.get_settings(db)
         s.part_rules = None
         db.commit()
+
+
+def test_shape_checks_for_unnamed_bodies():
+    screw = g("CirPattern2", 4, (1.26, 0.38, 0.38))
+    geo = {"faces": {"plane": 20, "cylinder": 40, "cone": 105, "sphere": 0, "torus": 2, "freeform": 2}, "volume": 0.057, "holes": []}
+    assert PK.decide(screw, geo=geo)[2] == "model"  # modeled threads
+    ball = g("Shaft Assembly <1>", 24, (0.29, 0.29, 0.29), ["Shaft Assembly <1>"] * 24)
+    assert PK.decide(ball, geo={"faces": {"sphere": 1}, "volume": 0.013, "holes": []})[0] is True
+    shaft = g("Shaft Assembly <1>", 1, (10, 1, 1), ["Shaft Assembly <1>"])
+    assert PK.decide(shaft, geo={"faces": {"plane": 4, "cylinder": 20, "cone": 4}, "volume": 7.7, "holes": [1]})[0] is False
+    washer = g("Imported1", 6, (0.62, 0.62, 0.05))
+    assert PK.decide(washer, geo={"faces": {"plane": 2, "cylinder": 2, "torus": 2}, "volume": 0.012, "holes": [{}]})[0] is True
+    # the customer's own sub-assembly name does not make every body in it a made part, nor a bought unit
+    pieces = [g("Handwheel Assembly <1>", 1, (7, 7, 1.85), ["Handwheel Assembly <1>"]), g("Handwheel Assembly <1>", 1, (3.75, 1, 1), ["Handwheel Assembly <1>"])]
+    assert PK.decide(pieces[0], st=PK.structure(pieces), geo={"faces": {"plane": 40, "cylinder": 20}, "volume": 36, "holes": [1] * 14})[0] is False
