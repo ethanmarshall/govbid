@@ -112,3 +112,51 @@ def test_add_a_bom_after_the_model(client):
     bad = client.post(f"/api/public/quote/{q['ref']}/files", data={"token": "wrong"},
                       files=[("files", ("bom.csv", BOM.encode(), "text/csv"))])
     assert bad.status_code == 400
+
+
+def _workbook(path):
+    from openpyxl import Workbook
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Cut list"
+    for r in [["Cart: cut list"], ["Item", "Profile", "Qty", "Cut length (in)"], ["Verticals", "1530", 4, 30.75], ["Door rails", "1515", 8, 13.3125],
+              ["Totals", None, 12, None]]:
+        ws.append(r)
+    ws = wb.create_sheet("Hardware")
+    for r in [["Item", "80/20 part no.", "Used on", "Units", "Qty per unit", "Total qty"],
+              ["Hinge", "12068", "Doors", 4, 2, 8], ["Fasteners for 12068", "75-3628", "", 8, 4, 32], ["Slide latch", "2053", "", 4, 1, 4],
+              ["Caster", "TBD", "", 4, 1, 4], ["Mounting plate screw, M8 x 25 SHCS", "TBD", "", 2, 12, 24]]:
+        ws.append(r)
+    wb.save(path)
+
+
+def test_reads_a_hand_made_workbook(tmp_path):
+    p = tmp_path / "bom.xlsx"
+    _workbook(p)
+    rows = portal_bom.parse(p.name, p.read_bytes())["rows"]
+    by = {r["label"]: r for r in rows}
+    assert set(by) == {"Verticals", "Door rails", "Hinge", "Fasteners for 12068", "Slide latch", "Caster", "Mounting plate screw, M8 x 25 SHCS"}
+    assert by["Verticals"]["profile"] == "1530" and by["Hinge"]["qty"] == 8  # the Total qty column, not Qty per unit
+    assert by["Caster"]["part"] == ""  # TBD is not a part number
+
+
+def test_bom_sets_frame_hardware_counts(tmp_path):
+    p = tmp_path / "bom.xlsx"
+    _workbook(p)
+    bom = portal_bom.Bom([{"name": p.name, **portal_bom.parse(p.name, p.read_bytes())}])
+    counts, covered, notes = portal_bom.frame_hardware(bom)
+    assert counts == {("HINGE", "12068"): 8, ("LATCH", "2053"): 4}
+    assert len(covered) == 5 and len(bom.left()) == 0  # profiles, the hinge screws, the caster and the M8 screws: in the frame quote
+
+
+def test_hardware_counted_by_instance_not_body():
+    from app import tslot
+
+    hinges = [{"qty": 16, "body_names": [f"Hinge Subassembly <{i}>" for i in range(1, 9) for _ in range(2)]},
+              {"qty": 8, "body_names": [f"Hinge Subassembly <{i}>" for i in range(1, 9)]},
+              {"qty": 64, "body_names": [f"Hinge Hardware <{i}>" for i in range(1, 9) for _ in range(8)]}]
+    assert tslot.unit_count(hinges) == 8  # 3 bodies per hinge; the hinge screws come with the hinges
+    assert tslot.unit_count([{"qty": 4, "body_names": ["Caster"] * 4}]) == 4  # no instance names: one body each
+    assert tslot.fastener_base(["Mounting Plate Hardware <3>"], {"length": 1.3, "width": 0.52, "height": 0.52}) == "SCREW-BHSCS"
+    assert tslot.fastener_base(["Mounting Plate Hardware <3>"], {"length": 0.63, "width": 0.63, "height": 0.24}) == "TNUT-DROP"

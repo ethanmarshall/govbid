@@ -127,6 +127,7 @@ _HARDWARE: list[tuple[str, str, str, dict[str, float]]] = [
     ("RETAINER", "Panel retainer (gasket or clip)", "fastener", {"10": 0.50, "15": 0.60, "MS": 0.40, "ML": 0.50}),
     ("HINGE", "Hinge, lift-off (mounting hardware included)", "accessory", {"10": 8.00, "15": 12.00, "MS": 7.00, "ML": 10.00}),
     ("HANDLE", "Door handle with mounting screws and T-nuts", "accessory", {"10": 8.00, "15": 10.00, "MS": 7.00, "ML": 9.00}),
+    ("LATCH", "Door latch (mounting hardware included)", "accessory", {"10": 16.00, "15": 20.00, "MS": 15.00, "ML": 18.00}),
 ]
 
 # Panels: id -> (label, material key, thickness in, placeholder price per square foot)

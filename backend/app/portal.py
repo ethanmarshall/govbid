@@ -552,9 +552,12 @@ def _with_bom(ln: dict, facts: list | None, notes: list | None) -> dict:
     return ln
 
 
-def _bom_leftovers(ctx, bom, group: str, key: str, frame: bool = False, bought_out: list | None = None) -> list[dict]:
+def _bom_leftovers(ctx, bom, group: str, key: str, frame: bool = False, bought_out: list | None = None,
+                   model_names: list | None = None, unplaced: list | None = None) -> list[dict]:
     """Lines for BOM rows no model body matched. Bought rows are priced from the hardware library (and, with
-    bought_out, also counted in the assembly labor); made rows with nothing to measure go to an engineer."""
+    bought_out, also counted in the assembly labor). A made row the BOM describes (material or process given) that
+    looks like nothing in the model goes to an engineer as its own line; other made rows are probably in the model
+    under another name, so they are listed in unplaced instead of being priced twice."""
     from . import catalog_8020, portal_read
     from . import portal_bom as PB
     from . import portal_lines as PL
@@ -577,6 +580,11 @@ def _bom_leftovers(ctx, bom, group: str, key: str, frame: bool = False, bought_o
             out.append(_with_bom(ln, facts, notes))
             if bought_out is not None:
                 bought_out.append(g)
+            continue
+        described = bool(e.get("material") or e.get("process") or e["buy"] is False)
+        alike = any(set(re.findall(r"[a-z]{4,}", e["label"].lower())) & set(re.findall(r"[a-z]{4,}", m.lower())) for m in model_names or [])
+        if model_names and unplaced is not None and (not described or alike):
+            unplaced.append(e["label"])
             continue
         facts = facts + ([portal_read.material_row(e["material"], "bom")] if e.get("material") else [])
         out.append(PL.new_line(k, e["label"], "part", "manual", group=group, qty=ctx.qty(k, e["qty"]), qty_per=e["qty"],
@@ -696,22 +704,26 @@ def price_request(db: Session, req: PortalRequest) -> None:
         from .assembly import is_bought
 
         for g in sp["groups"]:  # decided now, not from the cache, so naming rules can improve
+            g["name"] = re.sub(r"\s*<\d+>$", "", g["name"])  # Onshape instance numbers: "Door Latch <4>"
             g["bought"] = all(is_bought(x) for x in (g.get("raw_names") or [g["name"]]))
         bom_hits: dict[int, dict] = {}
-        if bom:  # the BOM says what each body is made of, how it's made, whether it's bought, and how many
+        if bom:
             bom.skip_top(name, f["name"])
-            bom_hits = bom.match_groups(sp["groups"])
-            for gi, e in bom_hits.items():
-                g = sp["groups"][gi]
-                g["_defaults"], g["_bom_facts"], g["_bom_notes"] = PB.apply(g, e, defaults)
-        frame_line, used = _tslot_frame(ctx, req, key, name, sp["groups"], cfg, stored["file_id"], f.get("size", 0))
+        frame_line, used = _tslot_frame(ctx, req, key, name, sp["groups"], cfg, stored["file_id"], f.get("size", 0), bom=bom)
         groups = [g for g in sp["groups"] if g["group"] not in used]
+        if bom:  # the BOM says what each other part is made of, how it's made, whether it's bought, and how many
+            bom_hits = bom.match_groups(groups)
+            for gi, e in bom_hits.items():
+                g = groups[gi]
+                g["_defaults"], g["_bom_facts"], g["_bom_notes"] = PB.apply(g, e, defaults)
         made = [g for g in groups if not g.get("bought")] or ([] if used else groups)
         bought = [g for g in groups if g.get("bought") and g not in made]
         extra: list[dict] = []
         extra_bought: list[dict] = []
+        unplaced: list[str] = []
         if bom and len(steps) == 1:  # BOM rows that aren't in the model: screws, labels, parts not drawn
-            extra = _bom_leftovers(ctx, bom, name, f"{key}#bom", frame=bool(frame_line), bought_out=extra_bought)
+            extra = _bom_leftovers(ctx, bom, name, f"{key}#bom", frame=bool(frame_line), bought_out=extra_bought,
+                                   model_names=[g["name"] for g in sp["groups"]], unplaced=unplaced)
         if frame_line:
             lines.append(frame_line)
         totals: dict[str, int] = {}
@@ -738,7 +750,9 @@ def price_request(db: Session, req: PortalRequest) -> None:
         if bom:
             if any(g.get("_defaults", {}).get("material_source") == "bom" for g in made):
                 afacts = [r for r in afacts if r["label"] != "Material"] + [portal_read.row("Material", "Set part by part, from your BOM")]
-            afacts.append(portal_read.row("Your BOM", f"{bom.names}: {len(bom_hits)} of {len(sp['groups'])} parts in the model matched to it"))
+            afacts.append(portal_read.row("Your BOM", f"{bom.names}: {sum(1 for n in range(len(bom.rows)) if n in bom.used)} of {len(bom.rows)} rows used"))
+            if unplaced:
+                afacts.append(portal_read.row("Not found in the model", "; ".join(unplaced)[:300] + ". We check these in review.", "check"))
         lines.append(PL.assembly_line(ctx, f"{key}#asm", name, made, bought + extra_bought, geom, view, afacts))
 
     # ---- drawings with no model
@@ -858,7 +872,8 @@ def price_request(db: Session, req: PortalRequest) -> None:
     _finish(req, s, lines)
 
 
-def _tslot_frame(ctx, req: PortalRequest, key: str, name: str, groups: list[dict], cfg: dict, parent_id: str = "", size: int = 0) -> tuple[dict | None, set]:
+def _tslot_frame(ctx, req: PortalRequest, key: str, name: str, groups: list[dict], cfg: dict, parent_id: str = "", size: int = 0,
+                 bom=None) -> tuple[dict | None, set]:
     """An uploaded frame or cart: T-slot extrusion members are priced cut to length with their hardware from the extrusion
     catalog, not machined from solid. Returns (line or None, group numbers it covers)."""
     from collections import Counter
@@ -868,6 +883,10 @@ def _tslot_frame(ctx, req: PortalRequest, key: str, name: str, groups: list[dict
 
     s = ctx.s
     members, hardware, cast, panels = [], [], [], []
+    # words naming panels in the customer's BOM ("Top panel"): a 6 mm "Top Plate" in the model is that panel
+    bom_panels = [set(re.findall(r"[a-z]{3,}", e["label"].lower())) - {"panel", "panels", "the", "and"}
+                  for e in (bom.rows if bom else []) if re.search(r"\bpanels?\b", e["label"], re.I)]
+    bom_panels = [w for w in bom_panels if w]
     for g in groups:
         names = g.get("raw_names") or [g["name"]]
         c = None
@@ -883,6 +902,8 @@ def _tslot_frame(ctx, req: PortalRequest, key: str, name: str, groups: list[dict
         # 80/20 part (end cap, inside corner bracket) for parts named only "Part 12"
         hit = catalog_8020.match_part(" ".join(names))
         base, pn = (hit[0].rsplit("-", 1)[0], hit[1]) if hit else (tslot.hardware_for(names)[0], "")
+        if not base and g.get("bought"):
+            base = tslot.fastener_base(names, g.get("bounding_box") or {})
         if not base and not g.get("bought") and g.get("file_id"):
             try:
                 std = tslot.standard_part(tslot.load_group_shape(g["file_id"]), g.get("volume"))
@@ -901,8 +922,9 @@ def _tslot_frame(ctx, req: PortalRequest, key: str, name: str, groups: list[dict
         dims = sorted([bb.get("length") or 0, bb.get("width") or 0, bb.get("height") or 0])
         t = sm or dims[0]
         pid = tslot.panel_for(names[0], t, s.frame_panel_material or "PC") if t and t <= 0.4 and dims[1] > 4 else None
+        said_panel = any(set(re.findall(r"[a-z]{3,}", n.lower())) & w for n in names for w in bom_panels)  # "Top Plate", BOM "Top panel"
         if not pid and t and dims[1] > 4 and any(abs(t - x) <= 0.004 for x in (0.118, 0.177, 0.236)) and \
-                not re.search(r"\b(alum\w*|6061|5052|steel|stainless|plate)\b", " ".join(names).replace("_", " "), re.I):
+                (said_panel or not re.search(r"\b(alum\w*|6061|5052|steel|stainless|plate)\b", " ".join(names).replace("_", " "), re.I)):
             # 3, 4.5 and 6 mm are 80/20 panel stock, not aluminum gauges: a panel of the default material (assumed)
             pid = tslot.panel_for("panel", t, s.frame_panel_material or "PC")
         if pid:
@@ -952,9 +974,25 @@ def _tslot_frame(ctx, req: PortalRequest, key: str, name: str, groups: list[dict
             ops = ops + [{"op": "end_tap", "count": taps}]  # thread set below with the base hardware
         lines.append({"kind": "profile", "catalog_id": pid, "qty": e["qty"], "length_in": length, "machining": ops, "description": ", ".join(e["names"])[:200]})
     hw = Counter()  # (base, 80/20 part number or "")
+    by_hw: dict = {}
     for g, base, pn in hardware:
-        hw[(base, pn)] += int(g.get("qty", 1))
-    if cast:
+        by_hw.setdefault((base, pn), []).append(g)
+    def only_hardware(gs):  # "Door Handle Hardware": the screws of a part counted under its own key
+        return all(re.search(r"\bhardware\b", g["name"], re.I) for g in gs)
+
+    for k, gs in list(by_hw.items()):
+        if only_hardware(gs) and any(k2[0] == k[0] and not only_hardware(g2) for k2, g2 in by_hw.items()):
+            continue
+        loose = k[0].startswith(("SCREW", "TNUT", "ANCHOR", "BUTT", "ENDFAST"))  # one body is one fastener
+        hw[k] += sum(int(g.get("qty", 1)) for g in gs) if loose else tslot.unit_count(gs)  # a hinge drawn as 3 bodies is one hinge
+    named = [(g, base, pn) for g, base, pn in cast if tslot.unit_count([g]) != int(g.get("qty", 1))]
+    if named:  # casters named by sub-assembly instance: count the instances
+        by_c: dict = {}
+        for g, base, pn in cast:
+            by_c.setdefault((base, pn), []).append(g)
+        for k, gs in by_c.items():
+            hw[k] += tslot.unit_count(gs)
+    if cast and not named:
         # a caster drawn as several bodies (plate, swivel, fork, wheel) is one caster: per caster model, add up each kind
         # of piece (same volume) over all its groups; the count is the smallest of those sums
         by_model: dict = {}
@@ -966,6 +1004,15 @@ def _tslot_frame(ctx, req: PortalRequest, key: str, name: str, groups: list[dict
             hw[(base, pn)] += min(kinds.values()) if len(kinds) > 1 else sum(kinds.values())
     if anchors_total:
         hw[("ANCHOR", "")] += anchors_total
+    bom_notes, bom_covered = [], []
+    if bom:  # the customer's BOM: its 80/20 part numbers set the hardware counts; the rest is in the model
+        from . import portal_bom as PB
+
+        bom_hw, bom_covered, bom_notes = PB.frame_hardware(bom)
+        for (b, pn), q in bom_hw.items():
+            for k in [k for k in hw if k[0] == b and k[1] != pn and not (b, k[1]) in bom_hw]:
+                del hw[k]
+            hw[(b, pn)] = q
     # stem casters and leveling feet thread into the bottom ends of the posts (80/20 catalog 5-4, 5-24): add the end tap
     # to the longest pieces whose name says they stand upright, else to the longest pieces
     tot = Counter()
@@ -978,7 +1025,13 @@ def _tslot_frame(ctx, req: PortalRequest, key: str, name: str, groups: list[dict
         tapped = [o for ln in lines if ln.get("kind") == "profile" for o in ln["machining"] if o["op"] == "end_tap"]
         for o in tapped:
             o["thread"] = thread
-        if plates and joints is not None:
+        bom_mount = {k[1] for k in hw if k[1] in ("3123", "3458")}
+        if plates and bom_mount:  # the BOM says how the caster plates mount: 3458 to the T-slot face needs no tapped ends
+            if "3123" not in bom_mount:
+                for ln in lines:
+                    ln["machining"] = [o for o in ln.get("machining") or [] if o["op"] != "end_tap"]
+            base_n = 0
+        elif plates and joints is not None:
             # 2420 plates mount to a tapped profile end with 4 x 3123, or to the T-slot face with 4 x 3458 and T-nuts (5-36)
             if tapped:
                 hw[("SCREW-BHSCS", "3123")] += 4 * plates
@@ -1039,8 +1092,11 @@ def _tslot_frame(ctx, req: PortalRequest, key: str, name: str, groups: list[dict
                                                                                   "joints_measured": confident}, facts=facts,
                                      public_reason=("Priced from the parts list in your model; an engineer confirms it before the order." if confident else
                                                     "Frame members are priced as cut-to-length extrusion. An engineer confirms the joining hardware."),
-                                     internal_reasons=_bom_notes(edits) + [x for x in r.get("warnings", [])[:4] + [r.get("config_note") or ""] if x]), qty, "extrusion")
+                                     internal_reasons=bom_notes + _bom_notes(edits) + [x for x in r.get("warnings", [])[:4] + [r.get("config_note") or ""] if x]), qty, "extrusion")
     ln["group"] = name
+    if bom_notes or bom_covered:
+        ln["facts"] = ln["facts"] + [portal_read.row("Your BOM", "; ".join(bom_notes + ([f"{len(bom_covered)} more rows (profiles, panels and fasteners) "
+                                                                                         "are in the frame quote above"] if bom_covered else [])))]
     if confident:
         ln["band"] = [0.0, float(s.frame_band_pct or 0)]
     return ln, {t[0]["group"] for t in members + hardware + cast} | {g["group"] for g, *_ in panels}

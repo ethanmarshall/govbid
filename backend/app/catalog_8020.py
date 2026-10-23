@@ -131,6 +131,8 @@ HARDWARE: dict[tuple[str, str], list[tuple[str, str, float, str]]] = {
     # standard lift-off hinge assembly: two hinges (one long pin, one short pin) with mounting hardware (4-70, 4-76)
     ("HINGE", "15"): [("2104", "15 Series standard lift-off hinge assembly, right hand (2104) or left hand (2105): 2 hinges, hardware included", 0.5, "4-76")],
     ("HINGE", "10"): [("2064", "10 Series standard lift-off hinge assembly, right hand (2064) or left hand (2065): 2 hinges, hardware included", 0.5, "4-76")],
+    # 0 degree deadbolt latch, spring loaded, hardware to mount it to the T-slot included (4-124)
+    ("LATCH", "15"): [("2053", "15 Series 0 degree deadbolt latch, mounting hardware included", 1, "4-124")],
     ("HANDLE", "15"): [("2061", "Plastic door handle, 5/16 mount, black", 1, "4-108"),
                        ("3454", "5/16-18 x 5/8 SHCS and economy T-nut (handle mount)", 2, "4-108")],
     ("HANDLE", "10"): [("2062", "Plastic door handle, 1/4 mount, black", 1, "4-108"),
@@ -421,6 +423,7 @@ PART_TO_BASE.update({
     "3321": ("TNUT-ECON", "10"), "3203": ("TNUT-SLIDE", "15"), "3703": ("TNUT-SLIDE", "15"),
     "2105": ("HINGE", "15"), "2065": ("HINGE", "10"), "2842": ("HINGE", "15"), "2836": ("HINGE", "15"), "2841": ("HINGE", "10"), "2835": ("HINGE", "10"),
     "2060": ("HANDLE", "15"), "2884": ("HANDLE", "15"), "2886": ("HANDLE", "15"),
+    "2053": ("LATCH", "15"), "4346": ("PLATE-L", "15"), "12068": ("HINGE", "15"), "2120": ("RETAINER", "15"), "3458": ("TNUT-ECON", "15"),
     "2300": ("CASTER", "15"), "2310": ("CASTER", "15"), "2305": ("CASTER", "15"), "2307": ("CASTER", "15"), "2317": ("CASTER", "15"), "2318": ("CASTER", "15"),
     "2295": ("CASTER", "15"), "2296": ("CASTER-LOCK", "15"),
     "2321": ("CASTER-LOCK", "15"), "2323": ("CASTER-LOCK", "15"), "2333": ("CASTER-LOCK", "15"),
@@ -468,7 +471,7 @@ def parse_ops(text: str) -> list[dict]:
 
 def match_part(text: str) -> tuple[str, str, str] | None:
     """An 80/20 hardware part number in text -> (catalog id, part number, note)."""
-    for m in re.finditer(r"(?<![\w.-])(\d{4})(-Black)?(?![\w.]|-\d)", text or "", re.I):
+    for m in re.finditer(r"(?<![\w.-])(\d{4,5})(-Black)?(?![\w.]|-\d)", text or "", re.I):
         pn = m.group(1) + (m.group(2) or "")
         hit = PART_TO_BASE.get(pn) or PART_TO_BASE.get(m.group(1))
         if hit:

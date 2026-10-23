@@ -18,10 +18,12 @@ TABLE_EXTS = (".csv", ".tsv", ".xlsx", ".xlsm")
 COLS = [
     ("item", r"^ITEM|^FIND|^NO\.?$|^#$|^LINE$|^BALLOON|^POS(ITION)?$"),
     ("buy", r"MAKE ?(/|OR|-) ?BUY|^BUY|^PROCURE|^SOURCING|^PART TYPE$|^TYPE$"),
+    ("profile", r"^PROFILE|^EXTRUSION$|^SERIES$"),
     ("part", r"PART ?(NO|NUM|#)|^P/?N\.?$|^PART$|^NUMBER$|^DWG|^DRAWING|^MPN|MFR\.? ?(PART|P/?N)|MANUFACTURER ?(PART|P/?N)|"
              r"^CATALOG|^SKU|VENDOR ?(PART|P/?N|#)|SUPPLIER ?(PART|P/?N|#)|^ORDER ?(NO|NUM|#)"),
     ("name", r"^NAME$|^PART ?NAME|^COMPONENT|^TITLE$|^FILE ?NAME|^COMPONENT NAME"),
     ("desc", r"^DESC|^DESCRIPTION"),
+    ("total_qty", r"^TOTAL ?(QTY|QUANTITY|REQ)"),  # wins over "Qty per unit" when a sheet has both
     ("qty", r"^QTY|^QUANTITY|^Q'?TY|^COUNT$|^AMOUNT$|^REQ|^PCS$|^EA$"),
     ("material", r"^MAT(ERIA)?L?\.?$|^MATERIAL|^STOCK$|^ALLOY"),
     ("finish", r"^FINISH|^COATING|^PLATING|^TREATMENT|^SURFACE"),
@@ -56,7 +58,8 @@ class BomError(ValueError):
 
 
 # ---------------------------------------------------------------- reading
-def read_rows(name: str, data: bytes) -> list[list]:
+def read_sheets(name: str, data: bytes) -> list[tuple[str, list[list]]]:
+    """[(sheet name, rows)]: every sheet of a workbook (a BOM is often split into cut list, panels and hardware)."""
     low = name.lower()
     if low.endswith((".xlsx", ".xlsm")):
         from openpyxl import load_workbook
@@ -65,13 +68,16 @@ def read_rows(name: str, data: bytes) -> list[list]:
             wb = load_workbook(io.BytesIO(data), read_only=True, data_only=True)
         except Exception as exc:  # noqa: BLE001
             raise BomError(f"Could not read the spreadsheet: {exc}") from exc
-        best: list[list] = []
-        for ws in wb.worksheets[:6]:  # the first sheet with a header row we know
-            rows = [list(r) for r in ws.iter_rows(values_only=True, max_row=5000)]
-            if header(rows) is not None:
-                return rows
-            best = best or rows
-        return best
+        return [(ws.title, [list(r) for r in ws.iter_rows(values_only=True, max_row=5000)]) for ws in wb.worksheets[:12]]
+    return [("", read_rows(name, data))]
+
+
+def read_rows(name: str, data: bytes) -> list[list]:
+    """The rows of the first sheet with a header we know (the first sheet if none has one)."""
+    low = name.lower()
+    if low.endswith((".xlsx", ".xlsm")):
+        sheets = read_sheets(name, data)
+        return next((rows for _, rows in sheets if header(rows) is not None), sheets[0][1] if sheets else [])
     text = data.decode("utf-8-sig", errors="replace")
     first = text.split("\n", 1)[0]
     tab = low.endswith(".tsv") or ("\t" in first and "," not in first)
@@ -93,10 +99,23 @@ def _map(cells: list) -> dict[str, int]:
     return found
 
 
+def _texty(rows: list[list], col: int) -> bool:
+    """A column of words ("Door stiles"), not item numbers."""
+    vals = [str(r[col]).strip() for r in rows[:40] if col < len(r) and r[col] not in (None, "")]
+    return len(vals) >= 1 and sum(1 for v in vals if re.search(r"[A-Za-z]{3}", v)) >= 0.6 * len(vals)
+
+
 def header(rows: list[list]) -> tuple[int, dict[str, int]] | None:
     for i, r in enumerate(rows[:30]):
         c = _map(r)
-        if "qty" in c and ({"part", "name", "desc"} & set(c)) and len(c) >= 2:
+        if not ({"qty", "total_qty"} & set(c)) or len(c) < 2:
+            continue
+        if not ({"name", "desc"} & set(c)) and "item" in c and _texty(rows[i + 1:], c["item"]):
+            c["name"] = c.pop("item")  # "Item" holding the part names, as many hand-made BOMs do
+        if {"part", "name", "desc"} & set(c):
+            return i, c
+        if "profile" in c:  # an extrusion cut list: the profile is the part
+            c["part"] = c["profile"]
             return i, c
     return None
 
@@ -195,23 +214,40 @@ def _buy(e: dict) -> bool | None:
     return None
 
 
+TBD = re.compile(r"^(tbd|tba|n/?a|none|-+|\?+|x+)$", re.I)
+
+
 def parse(name: str, data: bytes, cfg: dict | None = None) -> dict:
-    """Rows of a BOM: [{item, part, name, desc, qty, material, finish, process, vendor, buy, label, raw}]."""
-    rows = read_rows(name, data)
-    hit = header(rows)
-    if not hit:
+    """Rows of a BOM, from every sheet with a header: [{item, part, name, desc, qty, material, finish, process,
+    vendor, buy, profile, label, sheet, raw}]."""
+    out, warnings, columns = [], [], set()
+    for sheet, rows in read_sheets(name, data):
+        hit = header(rows)
+        if hit:
+            columns |= set(hit[1])
+            out += _rows(sheet, rows, hit, cfg, warnings)
+    if not columns:
         raise BomError("No header row found. A BOM needs a Qty column and a Part number, Name or Description column.")
+    if not out:
+        raise BomError("The BOM has a header row but no parts under it.")
+    return {"rows": out, "warnings": warnings, "columns": sorted(columns)}
+
+
+def _rows(sheet: str, rows: list[list], hit: tuple, cfg: dict | None, warnings: list[str]) -> list[dict]:
     hi, cols = hit
-    out, warnings = [], []
+    out = []
     for r in rows[hi + 1:]:
         if not any(str(x or "").strip() for x in r):
             continue
         part, nm, desc = _cell(r, cols, "part"), _cell(r, cols, "name"), _cell(r, cols, "desc")
+        part = "" if TBD.match(part) else part
         if not (part or nm or desc):
             continue
-        if re.match(r"^(total|subtotal|grand total)\b", f"{part or nm or desc}", re.I):
+        if re.match(r"^((sub|grand) ?)?totals?\b", f"{nm or desc or part}", re.I):
             continue
-        q = _cell(r, cols, "qty")
+        q = _cell(r, cols, "total_qty") or _cell(r, cols, "qty")
+        if not q and len(nm or desc) > 50:
+            continue  # a note under the table, not a part
         try:
             qf = float(re.sub(r"[^\d.]", "", q)) if q else 1.0
         except ValueError:
@@ -225,13 +261,12 @@ def parse(name: str, data: bytes, cfg: dict | None = None) -> dict:
              "material_raw": mat_raw, "material": map_material(mat_raw, cfg), "finish_raw": fin_raw, "finish": map_finish(fin_raw),
              "process_raw": proc_raw, "process": map_process(proc_raw) or map_process(_cell(r, cols, "buy")),
              "vendor": _cell(r, cols, "vendor"), "buy_raw": _cell(r, cols, "buy"), "notes": _cell(r, cols, "notes"),
+             "profile": _cell(r, cols, "profile"), "sheet": sheet,
              "raw": " | ".join(str(x) for x in r if x not in (None, ""))[:240]}
         e["buy"] = _buy(e)
         e["label"] = (nm or desc or part)[:80]
         out.append(e)
-    if not out:
-        raise BomError("The BOM has a header row but no parts under it.")
-    return {"rows": out, "warnings": warnings, "columns": sorted(k for k in cols)}
+    return out
 
 
 # ---------------------------------------------------------------- matching to the model
@@ -247,6 +282,7 @@ def _forms(s: str) -> set[str]:
     n = norm(s)
     if not n:
         return set()
+    n = " ".join(w[:-1] if len(w) > 4 and w.endswith("s") and not w.endswith("ss") else w for w in n.split())  # plurals
     out = {n}
     stripped = re.sub(r"^\d{1,3} ", "", n)  # "04 guide vane" -> "guide vane"
     if stripped and stripped != n:
@@ -261,12 +297,16 @@ def _score(e: dict, texts: list[str]) -> int:
     if not mine:
         return 0
     best = 0
+    words = lambda t: {w for w in re.findall(r"[a-z0-9]{4,}", t)}  # noqa: E731
+    mine_w = set().union(*(words(m) for m in mine))
     for key, exact in (("part", 4), ("name", 4), ("desc", 3)):
         for f in _forms(e.get(key) or ""):
             if f in mine:
                 best = max(best, exact)
             elif key == "part" and len(f) >= 4 and any(m.startswith(f + " ") for m in mine):
                 best = max(best, 2)  # "VP-101" and a body named "VP-101 base plate"
+            elif len(words(f)) >= 2 and len(words(f) & mine_w) >= max(2, round(len(words(f)) * 2 / 3)):
+                best = max(best, 1)  # "Upright mounting plates" and "CCDP Mounting Plate"
             elif len(f) >= 5 and any(re.search(rf"(^| ){re.escape(f)}( |$)", m) or (len(m) >= 5 and re.search(rf"(^| ){re.escape(m)}( |$)", f))
                                      for m in mine):
                 best = max(best, 1)
@@ -340,6 +380,39 @@ class Bom:
                 self.used.add(n)
 
 
+FASTENER_ROW = re.compile(r"\b(fasteners?|screws?|bolts?|t-?nuts?|washers?|shcs|bhcs|bhscs|fhcs|fbhscs|hardware)\b", re.I)
+PANEL_ROW = re.compile(r"\b(panels?|shelf|shelves|gaskets?|retainers?)\b", re.I)
+
+
+def frame_hardware(bom: "Bom") -> tuple[dict, list[str], list[str]]:
+    """BOM rows a T-slot frame quote covers, marked used. A row with an 80/20 part number sets the count of that
+    hardware (the BOM is what gets ordered). Profiles, panels and other hardware are already in the frame quote
+    from the model. Returns ({(base, 80/20 part number): qty}, covered row labels, notes)."""
+    from collections import Counter
+
+    from . import catalog_8020, tslot
+    from .assembly import is_bought
+
+    counts: Counter = Counter()
+    covered, notes = [], []
+    for n, e in enumerate(bom.rows):
+        if n in bom.used:
+            continue
+        label = e["label"]
+        hit = catalog_8020.match_part(e["part"]) if e["part"] else None
+        if hit:
+            counts[(hit[0].rsplit("-", 1)[0], hit[1])] += e["qty"]
+            bom.used.add(n)
+            continue
+        if e.get("profile") or catalog_8020.profile(e["part"]) or PANEL_ROW.search(label) or FASTENER_ROW.search(label) \
+                or is_bought(label) or tslot.hardware_for([label])[0] or e["buy"] is True:
+            covered.append(label if not e["part"] else f"{label} ({e['part']})")
+            bom.used.add(n)
+    if counts:
+        notes.append("Hardware counts from your BOM: " + ", ".join(f"{q} x {pn}" for (_b, pn), q in counts.items()))
+    return dict(counts), covered, notes
+
+
 def apply(g: dict, e: dict, defaults: dict) -> tuple[dict, list[dict], list[str]]:
     """BOM row -> (defaults for this part, facts, staff notes). Changes g in place (bought, qty, raw_names)."""
     from . import portal_read
@@ -358,11 +431,11 @@ def apply(g: dict, e: dict, defaults: dict) -> tuple[dict, list[dict], list[str]
         g["qty"] = e["qty"]
     if d.get("material_source") != "chosen" and e.get("material"):
         d["material"], d["material_source"] = e["material"], "bom"
-    elif e.get("material_raw") and not e.get("material"):
+    elif e.get("material_raw") and not e.get("material") and not TBD.match(e["material_raw"]):
         notes.append(f"{g.get('name')}: BOM material '{e['material_raw']}' isn't in our list; pick the closest in review.")
     if d.get("finish_source") != "chosen" and e.get("finish"):
         d["finishes"], d["finish_source"] = ([] if e["finish"] == "none" else [e["finish"]]), "bom"
-    elif e.get("finish_raw") and not e.get("finish"):
+    elif e.get("finish_raw") and not e.get("finish") and not TBD.match(e["finish_raw"]):
         notes.append(f"{g.get('name')}: BOM finish '{e['finish_raw']}' needs a look.")
     if e.get("process"):
         d["process"] = e["process"]

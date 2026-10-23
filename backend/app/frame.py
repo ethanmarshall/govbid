@@ -296,7 +296,9 @@ def extrusion_lines(parts: dict, family: str) -> list[dict]:
 
 HW_LABEL = {"ANCHOR": "Anchor fasteners", "BRKT-4H": "Corner brackets", "BRKT-2H": "Corner brackets", "BUTT": "Butt fasteners", "ENDFAST": "End fasteners", "TNUT-DROP": "Drop-in T-nuts", "SCREW-BHSCS": "Button head screws",
             "CASTER": "Swivel casters", "CASTER-LOCK": "Swivel casters with brakes", "FOOT": "Leveling feet", "HINGE": "Hinges",
-            "HANDLE": "Handles", "ENDCAP": "End caps", "CASTER-PLATE": "Caster base plates"}
+            "HANDLE": "Handles", "ENDCAP": "End caps", "CASTER-PLATE": "Caster base plates", "LATCH": "Latches", "PLATE-L": "Joining plates",
+            "PLATE-T": "T joining plates", "PLATE-FLAT": "Flat joining plates", "TNUT-ECON": "Screws with economy T-nuts",
+            "TNUT-SLIDE": "Slide-in T-nuts", "RETAINER": "Panel retainers", "BRKT-GUSSET": "Gusseted brackets", "BRKT-5H": "Corner brackets"}
 
 
 def summary(f: dict, parts: dict, units: str) -> list[tuple[str, str]]:

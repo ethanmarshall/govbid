@@ -28,6 +28,7 @@ HARDWARE = [  # (pattern, catalog base)
     (re.compile(r"\bcaster", re.I), "CASTER"),
     (re.compile(r"\bhinge", re.I), "HINGE"),
     (re.compile(r"\b(handle|pull)\b", re.I), "HANDLE"),
+    (re.compile(r"\b(latch|deadbolt)", re.I), "LATCH"),
     (re.compile(r"\b(lev(el|eling|eller)?[ _-]?foot|feet|foot)\b", re.I), "FOOT"),
     (re.compile(r"\banchor\b", re.I), "ANCHOR"),
     (re.compile(r"\bend[ _-]?cap\b", re.I), "ENDCAP"),
@@ -257,6 +258,41 @@ def hardware_for(names: list[str]) -> tuple[str | None, int]:
         ids = {CASTER_PART.sub("", n).strip("_ -").lower() for n in names}
         return base, max(1, len(ids))
     return base, len(names)
+
+
+INSTANCE = re.compile(r"\s*<\d+>\s*$")
+
+
+def unit_count(groups: list[dict]) -> int:
+    """How many units a set of bought body groups makes. Onshape names each body after its sub-assembly instance
+    ("Hinge Subassembly <3>"), so the bodies of one unit share a name: 24 hinge bodies named for 8 instances are 8
+    hinges, not 24. A "... Hardware" sub-assembly next to its part (hinge screws next to the hinges) comes with the
+    part. Without instance names, every body counts."""
+    from collections import Counter
+
+    bodies = sum(int(g.get("qty", 1)) for g in groups)
+    names = [n for g in groups for n in (g.get("body_names") or [])]
+    if not names or len(names) != bodies or not all(INSTANCE.search(n) for n in names):
+        return bodies
+    stems: dict[str, list[str]] = {}
+    for n in names:
+        stems.setdefault(INSTANCE.sub("", n).strip().lower(), []).append(n)
+    main = {k: v for k, v in stems.items() if not re.search(r"\bhardware\b|\bfasteners?\b", k)} or stems
+    total = 0
+    for v in main.values():
+        per = Counter(Counter(v).values()).most_common(1)[0][0]  # bodies in one unit
+        total += max(1, round(len(v) / per))
+    return total
+
+
+def fastener_base(names: list[str], bb: dict) -> str | None:
+    """Loose screws and T-nuts in a "... Hardware" sub-assembly: a long body is a screw, a short one a T-nut."""
+    if not re.search(r"\b(hardware|fasteners?|screws?|bolts?|nuts?|t[ _-]?nuts?|washers?)\b", " ".join(names).replace("_", " "), re.I):
+        return None
+    d = sorted(float(bb.get(k) or 0) for k in ("length", "width", "height"))
+    if not d[2] or d[2] > 3:
+        return None
+    return "SCREW-BHSCS" if d[1] and d[2] / d[1] >= 1.8 else "TNUT-DROP"
 
 
 def load_group_shape(file_id: str):

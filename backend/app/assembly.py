@@ -106,7 +106,7 @@ MADE = re.compile(r"\b(spacer|housing|cover|retainer|boss|cap|holder|mount|seat|
 def is_bought(raw: str) -> bool:
     """A part shown for fit that we buy: '08_bearing_608_reference' yes, '07_rear_bearing_spacer' no."""
     n = (raw or "").replace("_", " ")
-    if re.search(r"\breference\b|\bref\b|\bpurchased\b|\bcots\b|\bmcmaster\b", n, re.I):
+    if re.search(r"\breference\b|\bref\b|\bpurchased\b|\bcots\b|\bmcmaster\b|\bhardware\b|\blatch|\bhinge|\bcaster|\bdeadbolt", n, re.I):
         return True
     return bool(BOUGHT.search(n)) and not MADE.search(n)
 
@@ -115,6 +115,7 @@ def part_name(raw: str) -> str:
     """'04_compressor_outlet_guide_vanes' -> 'compressor outlet guide vanes'."""
     n = re.sub(r"^\s*\d+[\s_.-]+", "", raw or "")
     n = re.sub(r"[_]+", " ", n).strip()
+    n = re.sub(r"\s*<\d+>$", "", n)  # Onshape instance number: "Door Latch <4>"
     return n[:80]
 
 
@@ -161,7 +162,7 @@ def bodies(file_id: str, with_mesh: bool = True) -> dict:
         for i in g["bodies"]:
             next(r for r in rows if r["index"] == i)["group"] = n
         out_groups.append({"group": n, "name": name, "qty": len(g["bodies"]), "bodies": g["bodies"], "representative": g["bodies"][0],
-                           "bought": bool(raw) and all(is_bought(x) for x in raw), "raw_names": sorted(set(raw))[:5],
+                           "bought": bool(raw) and all(is_bought(x) for x in raw), "raw_names": sorted(set(raw))[:5], "body_names": [solid_names[i] for i in g["bodies"]],
                            "suggested_process": geo["suggested_process"], "volume": geo["volume"], "bounding_box": bb,
                            "holes": len(geo["holes"]), "sheet_thickness": (geo.get("sheet_metal") or {}).get("thickness")})
     joints = []
@@ -196,6 +197,14 @@ def split(file_id: str) -> dict:
     cache = _cache_path(file_id)
     full = json.loads(cache.read_text())
     if full.get("split"):
+        if any("body_names" not in g for g in full["split"]):  # cached before body names were kept
+            try:
+                _, names = _load_solids(file_id, with_names=True)
+                for g in full["split"]:
+                    g["body_names"] = [names[i] if i < len(names) else "" for i in g.get("bodies") or []]
+                cache.write_text(json.dumps(full))
+            except Exception:  # noqa: BLE001
+                pass
         return {"file_id": file_id, "filename": data["filename"], "groups": full["split"], "joints": data["joints"],
                 "weld_estimate_in": data["weld_estimate_in"], "weld_note": data["weld_note"]}
     solids = _load_solids(file_id)
