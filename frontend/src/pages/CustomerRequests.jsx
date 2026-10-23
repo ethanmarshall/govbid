@@ -524,9 +524,9 @@ function MadeAs({ it, info, change }) {
         </select>
       )}
       {ed.process && procs.length > 1 && (
-        <select value={`${it.process}|${it.material}`} title="How it is made"
+        <select value={`${it.process}|${it.material}`} title="How it is made. Choosing Bought or Make it here is remembered for parts with this name on later quotes."
           onChange={(e) => { const [process, material] = e.target.value.split('|'); change(it.key, { process, process_material: material }) }}>
-          {procs.map((o) => <option key={`${o.process}|${o.material}`} value={`${o.process}|${o.material}`}>{o.label}{o.process === '3d_print' ? ` (${o.material})` : ''}, {usd(o.unit_price)}</option>)}
+          {procs.map((o) => <option key={`${o.process}|${o.material}`} value={`${o.process}|${o.material}`}>{o.label}{o.process === '3d_print' ? ` (${o.material})` : ''}{o.unit_price != null ? `, ${usd(o.unit_price)}` : ''}</option>)}
         </select>
       )}
       {ed.finish && (

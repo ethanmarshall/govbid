@@ -544,6 +544,45 @@ def _load_bom(ctx, req: PortalRequest, lines: list[dict]):
     return PB.Bom(files)
 
 
+def _slug(s: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "-", (s or "").lower()).strip("-")[:40] or "part"
+
+
+MAKE_OPT = {"process": "make", "material": "", "label": "Make it here (price it as a made part)", "unit_price": None, "note": ""}
+BUY_OPT = {"process": "bought", "material": "", "label": "Bought (off the shelf)", "unit_price": None, "note": ""}
+
+
+def _make_buy(ln: dict, g: dict, made: bool) -> dict:
+    """Let you (and the customer) switch a part between made and bought, say why we chose, and flag a made part
+    priced high for its size: it is often a bought part nobody named."""
+    from . import part_kind as PK
+
+    ln["stem"] = PK.group_stem(g)
+    ln["make_buy_source"] = g.get("_src") or ""
+    opts = dict(ln.get("options") or {})
+    procs = [o for o in opts.get("processes") or [] if o.get("process") not in ("bought", "make")]
+    if made:
+        if not procs and ln.get("process"):
+            procs = [{"process": ln["process"], "material": ln.get("material") or "", "label": ln.get("process_label") or ln["process"],
+                      "unit_price": ln.get("unit_price"), "note": ""}]
+        opts["processes"] = procs + [BUY_OPT]
+        if g.get("_src") == "default" and PK.looks_bought(ln, g):
+            ln["facts"] = list(ln.get("facts") or []) + [portal_read.row(
+                "Bought part?", "This is priced as a part we make, but its price is high for its size. If it is a part you buy, "
+                                "choose Bought under Made by.", "check")]
+            ln["internal_reasons"] = ["Small part priced high as a made part: check whether it is bought."] + list(ln.get("internal_reasons") or [])
+    else:
+        opts["processes"] = [BUY_OPT, MAKE_OPT]
+        ln["process"] = "bought"
+        if g.get("_why") and g.get("_src") in ("name", "model", "learned"):
+            ln["facts"] = list(ln.get("facts") or []) + [portal_read.row(
+                "Why bought", f"{g['_why'][0].upper()}{g['_why'][1:]}. If we should make it, choose Make it here under Made by.",
+                "assumed" if g.get("_src") == "model" else "")]
+    ln["options"] = opts
+    ln["editable"] = {**(ln.get("editable") or {}), "process": True}
+    return ln
+
+
 def _with_bom(ln: dict, facts: list | None, notes: list | None) -> dict:
     if facts:
         ln["facts"] = list(facts) + list(ln.get("facts") or [])
@@ -598,6 +637,7 @@ def price_request(db: Session, req: PortalRequest) -> None:
     """Price the request line by line from its stored files and options (see portal_lines.py).
     Fills req.kind, req.public_result (what the customer sees) and req.internal (costs, margins, specs)."""
     from . import box_build, cad, cad_quote, drawing_assembly, drawing_quote, pcb_files
+    from . import part_kind as PK
     from . import portal_bom as PB
     from . import portal_lines as PL
     from . import portal_views as pv
@@ -703,9 +743,25 @@ def price_request(db: Session, req: PortalRequest) -> None:
             continue
         from .assembly import is_bought
 
+        st = PK.structure(sp["groups"])
+        rules = getattr(ctx.s, "part_rules", None) or {}
+
+        def choice_for(g):
+            for k in (f"{key}#g{g['group']}", f"{key}#s{_slug(PK.group_stem(g))}"):
+                c = ctx.opt(k).get("process")
+                if c in ("bought", "make"):
+                    return c
+            return None
+
         for g in sp["groups"]:  # decided now, not from the cache, so naming rules can improve
             g["name"] = re.sub(r"\s*<\d+>$", "", g["name"])  # Onshape instance numbers: "Door Latch <4>"
-            g["bought"] = all(is_bought(x) for x in (g.get("raw_names") or [g["name"]]))
+            g["_choice"] = choice_for(g)
+            g["bought"], g["_why"], g["_src"] = PK.decide(g, st=st, rules=rules, choice=g["_choice"])
+        for e in st.values():  # a choice on one piece of a bought sub-assembly ("Door Latch", piece 2) is for all of it
+            ch = next((g["_choice"] for g in e["groups"] if g["_choice"]), None)
+            if ch and e["instanced"]:
+                for g in e["groups"]:
+                    g["_choice"], g["bought"], g["_why"], g["_src"] = ch, ch == "bought", "you chose", "chosen"
         bom_hits: dict[int, dict] = {}
         if bom:
             bom.skip_top(name, f["name"])
@@ -716,8 +772,12 @@ def price_request(db: Session, req: PortalRequest) -> None:
             for gi, e in bom_hits.items():
                 g = groups[gi]
                 g["_defaults"], g["_bom_facts"], g["_bom_notes"] = PB.apply(g, e, defaults)
-        made = [g for g in groups if not g.get("bought")] or ([] if used else groups)
-        bought = [g for g in groups if g.get("bought") and g not in made]
+                if g["_choice"]:  # a choice on the line beats the BOM
+                    g["bought"] = g["_choice"] == "bought"
+                elif e.get("buy") is not None:
+                    g["_why"], g["_src"] = "your BOM", "bom"
+        made = [g for g in groups if not g.get("bought")]
+        bought = [g for g in groups if g.get("bought")]
         extra: list[dict] = []
         extra_bought: list[dict] = []
         unplaced: list[str] = []
@@ -740,10 +800,26 @@ def price_request(db: Session, req: PortalRequest) -> None:
             gview = {"key": pv.cache_key(g["file_id"], "model", 2), "kind": "model", "note": VIEW_NOTES["model"], "src": g["file_id"]}
             ln = PL.part_line(ctx, gkey, g["file_id"], g["name"], group=name, qty_per=int(g.get("qty", 1)), defaults=g.get("_defaults") or defaults,
                               paired=paired, view=gview, raw_names=g.get("raw_names"))
-            lines.append(_with_bom(ln, g.get("_bom_facts"), g.get("_bom_notes")))
+            lines.append(_make_buy(_with_bom(ln, g.get("_bom_facts"), g.get("_bom_notes")), g, made=True))
+        # bought pieces of one sub-assembly ("Door Latch <1>" to "<4>", three bodies each) are one line: 4 latches
+        units: dict[str, list] = {}
         for g in bought:
-            ln = PL.bought_line(ctx, f"{key}#g{g['group']}", g["name"], g.get("raw_names") or [g["name"]], int(g.get("qty", 1)), name)
-            lines.append(_with_bom(ln, g.get("_bom_facts"), g.get("_bom_notes")))
+            sg = PK.group_stem(g)
+            units.setdefault(sg if (st.get(sg) or {}).get("instanced") else f"#{g['group']}", []).append(g)
+        bought = []
+        for sg, gs in units.items():
+            g0 = gs[0]
+            if len(gs) > 1 or not sg.startswith("#"):
+                from . import tslot
+
+                g0 = {**g0, "name": PK.INSTANCE.sub("", PK.PIECE.sub("", g0["name"])), "qty": tslot.unit_count(gs),
+                      "raw_names": sorted({n for g in gs for n in (g.get("raw_names") or [])})[:5], "_unit_of": len(gs)}
+                ukey = f"{key}#s{_slug(sg)}"
+            else:
+                ukey = f"{key}#g{g0['group']}"
+            bought.append(g0)
+            ln = PL.bought_line(ctx, ukey, g0["name"], g0.get("raw_names") or [g0["name"]], int(g0.get("qty", 1)), name)
+            lines.append(_make_buy(_with_bom(ln, g0.get("_bom_facts"), g0.get("_bom_notes")), g0, made=False))
         lines += extra
         afacts = portal_read.step_assembly(geom, made, mat, msrc, bought=bought)
         afacts = [r for r in afacts if not r["label"][:1].isdigit()]  # the part rows are lines of their own now
@@ -1409,7 +1485,7 @@ def _clean_opts(req: PortalRequest, data: dict, max_qty: int) -> None:
         req.line_opts = merge_line_opts(req.line_opts or {}, data["lines"], max_qty)
 
 
-LINE_PROCESSES = {"cnc_mill", "cnc_lathe", "sheet_metal", "3d_print"}
+LINE_PROCESSES = {"cnc_mill", "cnc_lathe", "sheet_metal", "3d_print", "bought", "make"}  # bought / make: switch a part between the two
 
 
 BOM_KINDS = ("profile", "hardware", "panel", "custom")

@@ -958,7 +958,14 @@ async def set_lines(rid: int, body: LinesIn, db: Session = Depends(get_db)):
     before = {ln["key"]: ln for ln in (r.internal or {}).get("items") or []}
     from . import quotes
 
-    r.line_opts = _guard(portal.merge_line_opts, r.line_opts or {}, body.lines, portal.get_settings(db).max_quantity * 100, True, quotes.get_config(db))
+    s = portal.get_settings(db)
+    r.line_opts = _guard(portal.merge_line_opts, r.line_opts or {}, body.lines, s.max_quantity * 100, True, quotes.get_config(db))
+    from . import part_kind
+
+    for key, ch in body.lines.items():  # make or buy decided in review: remembered for parts of that name on later quotes
+        p = (ch or {}).get("process")
+        if p in ("bought", "make") and (before.get(key) or {}).get("stem"):
+            s.part_rules = part_kind.learn(s.part_rules, before[key]["stem"], p == "bought")
     await run_in_threadpool(portal.price_request, db, r)
     db.commit()
     for key, ch in body.lines.items():

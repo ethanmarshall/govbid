@@ -970,7 +970,7 @@ function PartRow({ it, info, editable, onLine, open, toggle, src }) {
         <label className="pq-mini pq-mini-wide">Made by
           {editable && ed.process && procs.length > 1 ? (
             <select value={procVal} onChange={(e) => { const [process, material] = e.target.value.split('|'); onLine(it.key, { process, process_material: material }) }}>
-              {procs.map((o) => <option key={`${o.process}|${o.material}`} value={`${o.process}|${o.material}`}>{o.label}{o.material !== it.material && o.process === '3d_print' ? ` (${o.material.replace(/ \(DMLS\)/, '')})` : ''}, {money(o.unit_price)}</option>)}
+              {procs.map((o) => <option key={`${o.process}|${o.material}`} value={`${o.process}|${o.material}`}>{o.label}{o.material !== it.material && o.process === '3d_print' ? ` (${o.material.replace(/ \(DMLS\)/, '')})` : ''}{o.unit_price != null ? `, ${money(o.unit_price)}` : ''}</option>)}
             </select>
           ) : <b>{it.process_label || '—'}</b>}
         </label>

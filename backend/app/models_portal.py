@@ -94,4 +94,6 @@ class PortalSettings(Base):
     card_fee_pct: Mapped[float] = mapped_column(Float, default=3.0)
     frame_band_pct: Mapped[float] = mapped_column(Float, default=5.0)
     frame_panel_material: Mapped[str] = mapped_column(String(10), default="PC")  # infill panels with no material in their name
+    # make or buy choices made in review, by part name: {"bought": {"door latch": 2}, "made": {...}} (see part_kind.py)
+    part_rules: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
