@@ -233,6 +233,23 @@ class OptionsIn(BaseModel):
     thickness: float | None = None
 
 
+@public.post("/quote/{ref}/files")
+async def add_quote_files(ref: str, request: Request, token: str = Form(...), files: list[UploadFile] = File(default=[]),
+                          db: Session = Depends(get_db)):
+    """Add a BOM or drawing to a quote you already started."""
+    _limit(portal.QUOTE_LIMIT, request)
+    req = _customer(db, ref, token)
+    uploads, total = [], 0
+    for f in files[: portal.MAX_FILES + 1]:
+        data = await f.read(portal.MAX_FILE + 1)
+        total += len(data)
+        if total > portal.MAX_TOTAL + portal.MAX_FILE:
+            raise HTTPException(413, "The files are too large.")
+        uploads.append((f.filename or "file", data))
+    req = await run_in_threadpool(_guard, portal.add_files, db, req, uploads)
+    return portal.public_view(req)
+
+
 @public.post("/quote/{ref}/options")
 async def options(ref: str, body: OptionsIn, request: Request, db: Session = Depends(get_db)):
     _limit(portal.REPRICE_LIMIT, request)

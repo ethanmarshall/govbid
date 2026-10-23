@@ -58,6 +58,8 @@ def material_row(mat: str, source: str) -> dict:
         return row("Material", f"{mat} (you chose)")
     if source == "drawing":
         return row("Material", f"{mat} (from your drawing)")
+    if source == "bom":
+        return row("Material", f"{mat} (from your BOM)")
     return row("Material", f"{mat} (not in your files, so we assumed it; choose yours above)", "assumed")
 
 
@@ -65,7 +67,7 @@ def finish_row(finishes: list, source: str) -> dict:
     finishes = [str(f.get("name") or f.get("finish") or f.get("type") or "") if isinstance(f, dict) else str(f) for f in finishes or []]
     finishes = [f for f in finishes if f]
     if finishes:
-        return row("Finish", ", ".join(finishes) + (" (from your drawing)" if source == "drawing" else ""))
+        return row("Finish", ", ".join(finishes) + ({"drawing": " (from your drawing)", "bom": " (from your BOM)"}.get(source, "")))
     return row("Finish", "None")
 
 

@@ -164,7 +164,7 @@ def part_line(ctx: Ctx, key: str, file_id: str, name: str, *, group: str = "", q
     if not options:
         return new_line(key, name, "part", "manual", group=group, qty=qty, qty_per=qty_per, material=mat, view=view,
                         public_reason="This part needs a quick look before we can price it.", internal_reasons=[err] if err else [])
-    want = o.get("process")
+    want = o.get("process") or defaults.get("process")
     chosen = next((x for x in options if want and x["process"] == want and (o.get("process_material") in (None, "", x["material"]))), None) \
         or next((x for x in options if not x["note"]), options[0])
     q_opts = {**opts, "process": chosen["process"], "material": chosen["material"]}
@@ -219,8 +219,10 @@ def bought_line(ctx: Ctx, key: str, name: str, raw_names: list[str], qty_per: in
 
     qty = ctx.qty(key, qty_per)
     hit = {"found": False}
+    pn_seen = ""  # a catalog number from any of the names (a BOM's part number column, say)
     for raw in raw_names or [name]:
         hit = hardware.price_bought(ctx.db, raw, qty)
+        pn_seen = pn_seen or hit.get("part_number") or ""
         if hit.get("found"):
             break
     out = ctx.cfg.get("outsourcing") or {}
@@ -239,7 +241,7 @@ def bought_line(ctx: Ctx, key: str, name: str, raw_names: list[str], qty_per: in
                       margin_pct=round((price - hit["each"]) / price * 100, 1) if price else None, lead_days=5, facts=facts,
                       internal_reasons=[f"{it['source']} price, {it['priced_at'] or 'date unknown'}"])
     else:
-        pn = hit.get("part_number")
+        pn = hit.get("part_number") or pn_seen
         facts.append(portal_read.row("Catalog part", f"McMaster-Carr {pn}" if pn else "Not matched to a catalog part yet", "check"))
         ln = new_line(key, name, "bought", "manual", group=group, qty=qty, qty_per=qty_per, desc="Bought part", process="bought",
                       process_label="Bought", facts=facts, public_reason="A bought part: we add its price when we confirm.",

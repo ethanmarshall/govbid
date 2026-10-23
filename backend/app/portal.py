@@ -47,7 +47,8 @@ KINDS = {
     "step": (".step", ".stp"),
     "pdf": (".pdf",),
     "dxf": (".dxf",),
-    "pcb": (".zip", ".gbr", ".ger", ".gtl", ".gbl", ".gko", ".gm1", ".drl", ".xln", ".pos", ".csv", ".xlsx", ".tsv"),
+    "pcb": (".zip", ".gbr", ".ger", ".gtl", ".gbl", ".gko", ".gm1", ".drl", ".xln", ".pos"),
+    "table": (".csv", ".xlsx", ".xlsm", ".tsv"),  # a parts list (BOM) or a circuit board file: decided by what's in it
     "ref": (".png", ".jpg", ".jpeg", ".heic", ".webp", ".gif", ".txt", ".docx", ".doc", ".pptx", ".mp4", ".mov"),
 }
 ACCEPT = ",".join(e for v in KINDS.values() for e in v)
@@ -342,17 +343,25 @@ def req_dir(req: PortalRequest) -> Path:
     return PORTAL_DIR / req.ref
 
 
-def store_files(req: PortalRequest, uploads: list[tuple[str, bytes]]) -> None:
-    if len(uploads) > MAX_FILES:
-        raise PortalError(f"Upload {MAX_FILES} files or fewer (zip PCB files together).")
-    total = 0
-    out = []
+def store_files(req: PortalRequest, uploads: list[tuple[str, bytes]], append: bool = False) -> None:
+    """append: files added to a quote that already has some (a BOM sent after the model, say)."""
+    have = [f for f in (req.files or []) if not f["removed"]] if append else []
+    if len(uploads) + len(have) > MAX_FILES:
+        raise PortalError(f"Upload {MAX_FILES} files or fewer in all (zip PCB files together).")
+    from . import portal_bom
+
+    total = sum(int(f.get("size") or 0) for f in have)
+    out = list(req.files or []) if append else []
+    start = len(out)
     d = req_dir(req)
     d.mkdir(parents=True, exist_ok=True)
+    board_files = any(kind_of(n) == "pcb" for n, _ in uploads) or any(f["kind"] == "pcb" for f in have)
     for i, (name, data) in enumerate(uploads):
         k = kind_of(name)
         if not k:
-            raise PortalError(f"{Path(name).name}: that file type is not accepted. Send STEP, PDF, DXF or PCB files.")
+            raise PortalError(f"{Path(name).name}: that file type is not accepted. Send STEP, PDF, DXF, BOM (CSV or Excel) or PCB files.")
+        if k == "table":  # a mechanical BOM, or a board BOM / pick-and-place file
+            k = portal_bom.sniff(name, data) or ("pcb" if board_files else "bom")
         if not data:
             raise PortalError(f"{Path(name).name} is empty.")
         if len(data) > MAX_FILE:
@@ -360,7 +369,7 @@ def store_files(req: PortalRequest, uploads: list[tuple[str, bytes]]) -> None:
         total += len(data)
         if total > MAX_TOTAL:
             raise PortalError(f"The files add up to more than {MAX_TOTAL // (1024 * 1024)} MB.")
-        stored = f"{i + 1:02d}_{_safe(name)}"
+        stored = f"{start + i + 1:02d}_{_safe(name)}"
         (d / stored).write_bytes(data)
         out.append({"name": Path(name).name[:120], "stored": stored, "kind": k, "size": len(data), "removed": False})
     req.files = out
@@ -517,10 +526,71 @@ def _read_pdfs(req: PortalRequest) -> tuple[list[dict], bool]:
     return reads, controlled
 
 
+def _load_bom(ctx, req: PortalRequest, lines: list[dict]):
+    """Every BOM file in the request, read into one list of rows. A BOM we can't read becomes a line for review."""
+    from . import portal_bom as PB
+    from . import portal_lines as PL
+
+    files = []
+    for f in [x for x in req.files if x["kind"] == "bom" and not x["removed"]]:
+        try:
+            got = PB.parse(f["name"], file_path(req, f).read_bytes(), ctx.cfg)
+        except Exception as exc:  # noqa: BLE001
+            lines.append(PL.new_line(f["stored"], Path(f["name"]).stem, "bom", "manual", desc="Parts list (BOM)", qty=1,
+                                     public_reason="We couldn't read this parts list automatically, so an engineer will go through it.",
+                                     internal_reasons=[str(exc)]))
+            continue
+        files.append({"name": f["name"], **got})
+    return PB.Bom(files)
+
+
+def _with_bom(ln: dict, facts: list | None, notes: list | None) -> dict:
+    if facts:
+        ln["facts"] = list(facts) + list(ln.get("facts") or [])
+    if notes:
+        ln["internal_reasons"] = list(notes) + list(ln.get("internal_reasons") or [])
+    return ln
+
+
+def _bom_leftovers(ctx, bom, group: str, key: str, frame: bool = False, bought_out: list | None = None) -> list[dict]:
+    """Lines for BOM rows no model body matched. Bought rows are priced from the hardware library (and, with
+    bought_out, also counted in the assembly labor); made rows with nothing to measure go to an engineer."""
+    from . import catalog_8020, portal_read
+    from . import portal_bom as PB
+    from . import portal_lines as PL
+    from .assembly import is_bought
+
+    out = []
+    for n, e in enumerate(bom.rows):
+        if n in bom.used:
+            continue
+        bom.used.add(n)
+        k = f"{key}{e['src'][:20]}{e['idx']}"
+        names = [x for x in (e.get("part"), e.get("desc"), e.get("name")) if x]
+        if frame and any(catalog_8020.match_part(x) for x in names):
+            continue  # 80/20 hardware: the frame line already counts the fasteners, brackets and casters it needs
+        bought = e["buy"] is True or (e["buy"] is None and any(is_bought(x) for x in names))
+        g = {"name": e["label"], "qty": e["qty"], "raw_names": names, "group": k}
+        _, facts, notes = PB.apply(g, e, {"material": "", "material_source": "", "finishes": [], "finish_source": ""})
+        if bought:
+            ln = PL.bought_line(ctx, k, e["label"], names, e["qty"], group)
+            out.append(_with_bom(ln, facts, notes))
+            if bought_out is not None:
+                bought_out.append(g)
+            continue
+        facts = facts + ([portal_read.material_row(e["material"], "bom")] if e.get("material") else [])
+        out.append(PL.new_line(k, e["label"], "part", "manual", group=group, qty=ctx.qty(k, e["qty"]), qty_per=e["qty"],
+                               material=e.get("material") or "", desc="In your BOM, not in the model", facts=facts,
+                               public_reason="This part is in your BOM but not in your model, so an engineer will price it.",
+                               internal_reasons=notes + [f"BOM row: {e['raw']}"], incomplete=True))
+    return out
+
+
 def price_request(db: Session, req: PortalRequest) -> None:
     """Price the request line by line from its stored files and options (see portal_lines.py).
     Fills req.kind, req.public_result (what the customer sees) and req.internal (costs, margins, specs)."""
     from . import box_build, cad, cad_quote, drawing_assembly, drawing_quote, pcb_files
+    from . import portal_bom as PB
     from . import portal_lines as PL
     from . import portal_views as pv
 
@@ -551,6 +621,7 @@ def price_request(db: Session, req: PortalRequest) -> None:
     pcbs = [f for f in req.files if f["kind"] == "pcb" and not f["removed"]]
     refs = [f for f in req.files if f["kind"] == "ref" and not f["removed"]]
     pairs, loose_reads = PL.pair_drawings(steps, reads)
+    bom = _load_bom(ctx, req, lines)
 
     # ---- T-slot frames made with the design tool
     for f in [x for x in req.files if x["kind"] == "frame" and not x["removed"]]:
@@ -595,7 +666,14 @@ def price_request(db: Session, req: PortalRequest) -> None:
             else _view(req, (stored["file_id"],), lambda p=step_path: cad.load_step(p), "model")
 
         if solids == 1:
-            lines.append(PL.part_line(ctx, key, stored["file_id"], name, defaults=defaults, paired=paired, geometry=geom, view=view))
+            e = bom.match_name(name, f["name"]) if bom else None
+            g1 = {"name": name, "qty": 1}
+            d1, bfacts, bnotes = PB.apply(g1, e, defaults) if e else (defaults, [], [])
+            ln = PL.part_line(ctx, key, stored["file_id"], name, qty_per=int(g1["qty"]), defaults=d1, paired=paired, geometry=geom, view=view)
+            _with_bom(ln, bfacts, bnotes)
+            lines.append(ln)
+            if bom and len(steps) == 1:
+                lines += _bom_leftovers(ctx, bom, name, f"{key}#bom")
             continue
 
         # an assembly: one line per part (identical bodies grouped), bought parts, and the assembly itself
@@ -619,10 +697,21 @@ def price_request(db: Session, req: PortalRequest) -> None:
 
         for g in sp["groups"]:  # decided now, not from the cache, so naming rules can improve
             g["bought"] = all(is_bought(x) for x in (g.get("raw_names") or [g["name"]]))
+        bom_hits: dict[int, dict] = {}
+        if bom:  # the BOM says what each body is made of, how it's made, whether it's bought, and how many
+            bom.skip_top(name, f["name"])
+            bom_hits = bom.match_groups(sp["groups"])
+            for gi, e in bom_hits.items():
+                g = sp["groups"][gi]
+                g["_defaults"], g["_bom_facts"], g["_bom_notes"] = PB.apply(g, e, defaults)
         frame_line, used = _tslot_frame(ctx, req, key, name, sp["groups"], cfg, stored["file_id"], f.get("size", 0))
         groups = [g for g in sp["groups"] if g["group"] not in used]
         made = [g for g in groups if not g.get("bought")] or ([] if used else groups)
         bought = [g for g in groups if g.get("bought") and g not in made]
+        extra: list[dict] = []
+        extra_bought: list[dict] = []
+        if bom and len(steps) == 1:  # BOM rows that aren't in the model: screws, labels, parts not drawn
+            extra = _bom_leftovers(ctx, bom, name, f"{key}#bom", frame=bool(frame_line), bought_out=extra_bought)
         if frame_line:
             lines.append(frame_line)
         totals: dict[str, int] = {}
@@ -637,13 +726,20 @@ def price_request(db: Session, req: PortalRequest) -> None:
         for g in made:
             gkey = f"{key}#g{g['group']}"
             gview = {"key": pv.cache_key(g["file_id"], "model", 2), "kind": "model", "note": VIEW_NOTES["model"], "src": g["file_id"]}
-            lines.append(PL.part_line(ctx, gkey, g["file_id"], g["name"], group=name, qty_per=int(g.get("qty", 1)), defaults=defaults,
-                                      paired=paired, view=gview, raw_names=g.get("raw_names")))
+            ln = PL.part_line(ctx, gkey, g["file_id"], g["name"], group=name, qty_per=int(g.get("qty", 1)), defaults=g.get("_defaults") or defaults,
+                              paired=paired, view=gview, raw_names=g.get("raw_names"))
+            lines.append(_with_bom(ln, g.get("_bom_facts"), g.get("_bom_notes")))
         for g in bought:
-            lines.append(PL.bought_line(ctx, f"{key}#g{g['group']}", g["name"], g.get("raw_names") or [g["name"]], int(g.get("qty", 1)), name))
+            ln = PL.bought_line(ctx, f"{key}#g{g['group']}", g["name"], g.get("raw_names") or [g["name"]], int(g.get("qty", 1)), name)
+            lines.append(_with_bom(ln, g.get("_bom_facts"), g.get("_bom_notes")))
+        lines += extra
         afacts = portal_read.step_assembly(geom, made, mat, msrc, bought=bought)
         afacts = [r for r in afacts if not r["label"][:1].isdigit()]  # the part rows are lines of their own now
-        lines.append(PL.assembly_line(ctx, f"{key}#asm", name, made, bought, geom, view, afacts))
+        if bom:
+            if any(g.get("_defaults", {}).get("material_source") == "bom" for g in made):
+                afacts = [r for r in afacts if r["label"] != "Material"] + [portal_read.row("Material", "Set part by part, from your BOM")]
+            afacts.append(portal_read.row("Your BOM", f"{bom.names}: {len(bom_hits)} of {len(sp['groups'])} parts in the model matched to it"))
+        lines.append(PL.assembly_line(ctx, f"{key}#asm", name, made, bought + extra_bought, geom, view, afacts))
 
     # ---- drawings with no model
     for rd in loose_reads:
@@ -748,6 +844,10 @@ def price_request(db: Session, req: PortalRequest) -> None:
         except Exception as exc:  # noqa: BLE001
             lines.append(PL.new_line(key, "Circuit board files", "pcb", "manual", desc="Circuit board", qty=qty,
                                      public_reason="We will review your board files by hand.", internal_reasons=[str(exc)]))
+
+    # ---- BOM rows no model covered (several models, or a BOM on its own)
+    if bom and bom.left():
+        lines += _bom_leftovers(ctx, bom, "Parts from your BOM", "bom")
 
     if refs and not lines:
         lines.append(PL.new_line("refs", "Reference files", "ref", "manual", desc="Images or documents", qty=n,
@@ -1468,6 +1568,31 @@ def get_for_customer(db: Session, ref: str, token: str) -> PortalRequest:
     req = db.scalar(select(PortalRequest).where(PortalRequest.ref == ref))
     if not req or not token or not hmac.compare_digest(req.token, token):
         raise PortalError("Quote not found. Check the link.")
+    return req
+
+
+def add_files(db: Session, req: PortalRequest, uploads: list[tuple[str, bytes]]) -> PortalRequest:
+    """More files for a quote not yet submitted: a BOM or drawing for the model already uploaded. Prices again."""
+    if req.status != "draft":
+        raise PortalError("This request was already submitted. Contact us to change it.")
+    if req.export_controlled or req.kind == "concept":
+        raise PortalError("Files can't be added to this request.")
+    if not uploads:
+        raise PortalError("Choose a file to add.")
+    if (req.order or {}).get("status") == "awaiting_payment":
+        checkout.retire_session(req)
+    before = list(req.files or [])
+    try:
+        store_files(req, uploads, append=True)
+        price_request(db, req)
+    except Exception:
+        added = list(req.files or [])[len(before):]
+        db.rollback()
+        for f in added:
+            remove_file(req, f)
+        raise
+    db.commit()
+    ensure_job(req)
     return req
 
 

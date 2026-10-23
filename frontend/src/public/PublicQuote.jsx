@@ -151,7 +151,7 @@ function PathChooser({ path, setPath }) {
   )
   return (
     <div className="pq-paths three" role="tablist" aria-label="How do you want to start?">
-      {opt('files', 'I have drawings or models', 'Upload STEP, PDF, DXF or board files and get a price now.')}
+      {opt('files', 'I have drawings or models', 'Upload STEP, PDF, DXF, a BOM, or board files and get a price now.')}
       {opt('design', 'Design it here', 'A simple part like a plate, bracket or spacer? Describe it or enter sizes, see it in 3D, and get a price.')}
       {opt('idea', 'I have an idea', 'No drawings yet? Tell us what you need and an engineer will help you get there.')}
     </div>
@@ -449,7 +449,7 @@ function SiteSections({ info }) {
       <section className="pq-sec" aria-labelledby="how-h">
         <h2 id="how-h">How quoting works</h2>
         <ol className="pq-steps">
-          <li><b>Upload your files</b><span>A STEP model, PDF drawing, DXF, or circuit board files, with the quantity you need.</span></li>
+          <li><b>Upload your files</b><span>A STEP model, PDF drawing, DXF, or circuit board files, with the quantity you need. Add your BOM as a separate file if you have one.</span></li>
           <li><b>See your price</b><span>Single parts get an instant price. Assemblies and complex builds get an estimate range.</span></li>
           <li><b>Send it to us</b><span>Add your contact details. Save the quote as a PDF or a link if you are not ready yet.</span></li>
           <li><b>We confirm, then build</b><span>We confirm the details and final price with you{info.review_days ? ` within ${info.review_days} business day${info.review_days === 1 ? '' : 's'}` : ''} before any work starts.</span></li>
@@ -538,7 +538,7 @@ function QuoteForm({ info }) {
     setFiles(next.slice(0, info.max_files))
     setStale(!!req)
     setErr(big.length ? `${big.join(', ')} is larger than ${info.max_file_mb} MB. Email it to us${info.contact_email ? ` at ${info.contact_email}` : ''} or send a share link in the notes.`
-      : bad.length ? `We can't use ${bad.join(', ')}. Send STEP (.step or .stp), PDF, DXF, or circuit board files (a .zip of Gerbers is best).`
+      : bad.length ? `We can't use ${bad.join(', ')}. Send STEP (.step or .stp), PDF, DXF, a BOM (.csv or .xlsx), or circuit board files (a .zip of Gerbers is best).`
       : next.length > info.max_files ? `Up to ${info.max_files} files. Zip PCB files together.` : '')
   }
   const removeFile = (i) => { setFiles(files.filter((_, j) => j !== i)); setStale(!!req) }
@@ -639,7 +639,8 @@ function QuoteForm({ info }) {
             onDrop={(e) => { e.preventDefault(); setDrag(false); addFiles(e.dataTransfer.files) }}>
             <input ref={input} type="file" multiple hidden onChange={(e) => { addFiles(e.target.files); e.target.value = '' }} />
             <div className="pq-drop-main">Drop your files here, or choose files</div>
-            <div className="pq-drop-sub">3D model (STEP), drawing (PDF), flat pattern (DXF), or circuit board files (zip of Gerbers, BOM and pick-and-place). Up to {info.max_files} files, {info.max_file_mb} MB each.</div>
+            <div className="pq-drop-sub">3D model (STEP), drawing (PDF), flat pattern (DXF), parts list or BOM (CSV or Excel), or circuit board files (zip of Gerbers, BOM and pick-and-place). Up to {info.max_files} files, {info.max_file_mb} MB each.</div>
+            <div className="pq-drop-sub">Send a model with its BOM and we use the BOM's materials, finishes, quantities and bought parts.</div>
           </div>
         )}
         {files.length > 0 && !controlled && (
@@ -1033,6 +1034,36 @@ function Forget({ refId, token }) { // a saved entry whose link no longer works 
   return null
 }
 
+// A BOM or drawing for a quote already started: added to the same quote and priced again.
+function AddFiles({ r, token, info, onDone, setErr }) {
+  const input = useRef()
+  const [progress, setProgress] = useState(null)
+  const okExt = (info.accept || '').toLowerCase().split(',').filter(Boolean)
+  const send = async (list) => {
+    const picked = [...list]
+    const bad = picked.filter((f) => okExt.length && !okExt.includes((f.name.match(/\.[^.]+$/) || [''])[0].toLowerCase()))
+    if (!picked.length) return
+    if (bad.length) { setErr(`We can't use ${bad.map((f) => f.name).join(', ')}.`); return }
+    const form = new FormData()
+    form.append('token', token)
+    picked.forEach((f) => form.append('files', f))
+    try {
+      setProgress(0)
+      onDone(await upload(`/api/public/quote/${r.ref}/files`, form, setProgress))
+    } catch (e) { setErr(e.message) }
+    setProgress(null)
+  }
+  return (
+    <p className="pq-addfiles">
+      <input ref={input} type="file" multiple hidden onChange={(e) => { send(e.target.files); e.target.value = '' }} />
+      {progress === null
+        ? <><button type="button" className="pq-link" onClick={() => input.current.click()}>Add a BOM or drawing</button>
+          <span className="pq-muted"> We price the quote again with it.</span></>
+        : <span className="pq-muted" role="status">{progress < 1 ? `Uploading, ${Math.round(progress * 100)}%` : 'Reading your files…'}</span>}
+    </p>
+  )
+}
+
 function Status({ refId, token, info }) {
   const [r, setR] = useState(null)
   const [err, setErr] = useState('')
@@ -1098,6 +1129,7 @@ function Status({ refId, token, info }) {
         )}
         {err && <p className="pq-err" role="alert">{err}</p>}
         {r.files?.length > 0 && <ul className="pq-files">{r.files.map((f, i) => <li key={i}><span>{f.name}</span><span className="pq-muted">{f.removed ? 'not kept (export-controlled)' : ''}</span><span /></li>)}</ul>}
+        {draft && res.kind !== 'concept' && !r.export_controlled && <AddFiles r={r} token={token} info={info} onDone={(v) => { setR(v); remember(v, token); setErr('') }} setErr={setErr} />}
         {r.notes && <p className="pq-muted" style={{ whiteSpace: 'pre-wrap' }}>{r.notes}</p>}
         <p><button className="pq-link" onClick={() => navigate('/quote')}>Start another quote</button></p>
       </section>
