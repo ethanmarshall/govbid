@@ -19,8 +19,7 @@ BUSHING_MINUTES = 1.5
 
 def print_extras(geo: dict, config: dict | None = None) -> dict:
     """Hardware for a printed part from its holes: {"inserts": n, "bushings": n, "notes": [...]}.
-    Index holes: four or more holes of one size on different axes (a radial pattern, like a handwheel's), or at
-    least eight on one axis. Insert holes: sized for a heat-set insert's mounting hole or a tap drill."""
+    Index holes: four or more holes of one size on different axes (a radial pattern, like a handwheel's). Insert holes: sized for a heat-set insert's mounting hole or a tap drill."""
     from . import inserts as ins
 
     holes = [h for h in geo.get("holes") or [] if h.get("diameter")]
@@ -30,7 +29,7 @@ def print_extras(geo: dict, config: dict | None = None) -> dict:
     bush, rest = [], []
     for d, hs in by_d.items():
         axes = {tuple(round(abs(a), 2) for a in h.get("axis") or []) for h in hs}
-        if d >= 0.2 and ((len(hs) >= 4 and len(axes) >= 3) or len(hs) >= 8):
+        if d >= 0.2 and len(hs) >= 4 and len(axes) >= 3:  # a radial set; holes on one axis are mounting or clearance holes
             bush += hs
         else:
             rest += hs
