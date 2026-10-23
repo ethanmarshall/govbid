@@ -171,6 +171,11 @@ def build_spec(geometry: dict, opts: dict, inserts_used: list[dict] | None = Non
             unit = float(ins_cfg.get("default_unit_cost", 0.25))
             spec["operations"].append({"type": "hardware_insert", "count": threaded, "unit_cost": unit, "minutes_each": minutes_each})
             notes.append(f"{threaded} threaded hole(s) priced as heat-set brass inserts.")
+        nb = max(0, int(opts.get("bushings") or 0))
+        if nb:  # drill bushings pressed into index holes so they wear like metal (see suggest.py)
+            spec["operations"].append({"type": "hardware_insert", "count": nb, "unit_cost": float(opts.get("bushing_unit_cost") or 5.0),
+                                       "minutes_each": 1.5})
+            notes.append(f"{nb} drill bushing(s) pressed into the index holes.")
         if opts.get("weld_length_in"):
             notes.append("Weld length ignored for a printed part.")
             opts = {**opts, "weld_length_in": 0}

@@ -165,22 +165,48 @@ def part_line(ctx: Ctx, key: str, file_id: str, name: str, *, group: str = "", q
         return new_line(key, name, "part", "manual", group=group, qty=qty, qty_per=qty_per, material=mat, view=view,
                         public_reason="This part needs a quick look before we can price it.", internal_reasons=[err] if err else [])
     want = o.get("process") or defaults.get("process")
+    g = geometry or cad_quote.load(file_id)["geometry"]
+    sug = None
+    if mat_src == "default" and mat not in ctx.cfg["additive"]["materials"]:
+        # no material from the customer: for a part costly to machine, price it printed too (see suggest.py)
+        from . import suggest
+
+        try:
+            sug = suggest.suggestion(file_id, g, opts, next((x for x in options if not x["note"]), options[0]), ctx.over)
+        except Exception:  # noqa: BLE001  (a suggestion never fails the quote)
+            sug = None
+        if sug:
+            options = options + [sug]
     chosen = next((x for x in options if want and x["process"] == want and (o.get("process_material") in (None, "", x["material"]))), None) \
-        or next((x for x in options if not x["note"]), options[0])
-    q_opts = {**opts, "process": chosen["process"], "material": chosen["material"]}
+        or (sug if sug and not want else None) or next((x for x in options if not x["note"] and not x.get("suggested")), options[0])
+    q_opts = sug["opts"] if chosen is sug else {**opts, "process": chosen["process"], "material": chosen["material"]}
+    extras = None
+    if chosen is not sug and chosen["process"] == "3d_print" and "DMLS" not in chosen["material"]:
+        from . import suggest  # a printed plastic part gets heat-set inserts and bushings where its holes call for them
+
+        q_opts, extras = suggest.print_opts(g, q_opts, ctx.over)
     r = cad_quote.quote(file_id, q_opts, ctx.over)
     est = r["estimate"]
     b = est["price_breaks"][0]
     five = bool(r["spec"]["operations"] and r["spec"]["operations"][0].get("five_axis"))
     pkey = "cnc_5axis" if five else chosen["process"]
     price, f, why = _price_calibrated(ctx.fs, pkey, b["unit_price"])
-    g = geometry or cad_quote.load(file_id)["geometry"]
     cx = cad_quote.complexity_of(g)
     label = chosen["label"]
     density = (ctx.cfg["materials"].get(chosen["material"]) or ctx.cfg["additive"]["materials"].get(chosen["material"]) or {}).get("density")
     if chosen["material"] in ctx.cfg["additive"]["materials"]:
         density = (density or 0) * 0.0361273  # g/cm3 to lb/in3
-    facts = portal_read.step_part(g, chosen["material"], "chosen" if chosen["material"] != mat else mat_src, fins, fin_src, label, density)
+    msrc_shown = "suggested" if chosen is sug else ("chosen" if chosen["material"] != mat else mat_src)
+    facts = portal_read.step_part(g, chosen["material"], msrc_shown, fins, fin_src, label, density)
+    if sug and chosen is sug:
+        facts.insert(0, portal_read.row("Suggested method", f"{sug['summary'][0].upper()}{sug['summary'][1:]}. We suggest it because you didn't give a "
+                                        f"material and {sug['why']} (about ${sug['machined_price']:,.0f} each machined in {mat}). "
+                                        "Choose another way under Made by.", "assumed"))
+    if extras and extras["notes"]:
+        facts.append(portal_read.row("Inserts", "; ".join(extras["notes"]).capitalize()))
+    if sug and chosen is not sug:
+        facts.append(portal_read.row("Another way", f"{sug['summary'][0].upper()}{sug['summary'][1:]}: about ${sug['unit_price']:,.0f} each. "
+                                     "Choose it under Made by.", ""))
     if cx.get("level") in ("complex", "very complex"):
         facts.insert(1, portal_read.row("Complexity", f"{cx['level'].capitalize()}: " + "; ".join(cx.get("reasons") or []), "check"))
     if paired:
@@ -202,6 +228,8 @@ def part_line(ctx: Ctx, key: str, file_id: str, name: str, *, group: str = "", q
         route, reason = "estimate", ("A 5-axis part: " if five else "A complex part: ") + "an engineer confirms the machining plan and price."
     if chosen["note"]:
         route, reason = "estimate", f"Priced {chosen['note']}; an engineer confirms it."
+    if chosen is sug:
+        route, reason = "estimate", "We suggested how to make this part; an engineer confirms it with you."
     ln = new_line(key, name, "part", route, group=group, qty=qty, qty_per=qty_per, material=chosen["material"], finish=", ".join(fins) or "none",
                   process=chosen["process"], process_label=label, desc=f"{label}, {chosen['material']}", raw_unit_price=b["unit_price"],
                   unit_price=price, unit_cost=b.get("unit_cost"), margin_pct=round((price - b["unit_cost"]) / price * 100, 1) if b.get("unit_cost") else None,
