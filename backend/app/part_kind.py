@@ -101,6 +101,8 @@ def detail(geo: dict | None, g: dict) -> str:
         return "a ball, like a bearing or detent ball"
     if d[2] <= 2 and d[0] <= 0.12 and len(geo.get("holes") or []) == 1 and d[1] >= 0.8 * d[2]:
         return "a thin ring with one hole, like a washer"
+    if d[2] <= 4 and abs(d[2] - d[1]) <= 0.02 * d[2] and d[0] <= 0.6 * d[2] and len(geo.get("holes") or []) == 1 and f.get("torus", 0) >= 1:
+        return "a ring with one bore and a rounded raceway, like a ball bearing"
     if d[2] <= 1.25 and vol < 0.3 and (geo.get("suggested_process") or g.get("suggested_process")) == "cnc_lathe":
         return "small and shaped like a fastener"
     return ""

@@ -90,3 +90,8 @@ def test_shape_checks_for_unnamed_bodies():
     # the customer's own sub-assembly name does not make every body in it a made part, nor a bought unit
     pieces = [g("Handwheel Assembly <1>", 1, (7, 7, 1.85), ["Handwheel Assembly <1>"]), g("Handwheel Assembly <1>", 1, (3.75, 1, 1), ["Handwheel Assembly <1>"])]
     assert PK.decide(pieces[0], st=PK.structure(pieces), geo={"faces": {"plane": 40, "cylinder": 20}, "volume": 36, "holes": [1] * 14})[0] is False
+
+
+def test_ball_bearing_shape():
+    brg = g("Shaft Assembly <1>", 1, (2.0, 2.0, 0.5), ["Shaft Assembly <1>"])
+    assert PK.decide(brg, geo={"faces": {"plane": 2, "cylinder": 3, "cone": 2, "torus": 1}, "volume": 0.41, "holes": [{}]})[0] is True
