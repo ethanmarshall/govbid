@@ -974,6 +974,15 @@ function PartRow({ it, info, editable, onLine, open, toggle, src }) {
             </select>
           ) : <b>{it.process_label || '—'}</b>}
         </label>
+        {ed.infill && (
+          <label className="pq-mini">Infill
+            {editable ? (
+              <select value={it.infill || 40} onChange={(e) => onLine(it.key, { infill: Number(e.target.value) })}>
+                {[20, 40, 60, 80, 100].map((v) => <option key={v} value={v}>{v}%</option>)}
+              </select>
+            ) : <b>{it.infill}%</b>}
+          </label>
+        )}
         <div className="pq-line-price">
           {price ? <><b>{price}</b><span className="pq-muted"> each</span>{total && <div className="pq-muted">{total}</div>}</> : <span className="pq-muted">{it.route === 'processing' ? 'Reading…' : 'By review'}</span>}
           {it.confirmed && <div className="pq-ok">Confirmed</div>}

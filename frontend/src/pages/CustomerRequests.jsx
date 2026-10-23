@@ -535,6 +535,11 @@ function MadeAs({ it, info, change }) {
           {(info.finishes || []).map((f) => <option key={f}>{f}</option>)}
         </select>
       )}
+      {ed.infill && (
+        <select value={it.infill || 40} title="Infill" onChange={(e) => change(it.key, { infill: Number(e.target.value) })}>
+          {[20, 40, 60, 80, 100].map((v) => <option key={v} value={v}>{v}% infill</option>)}
+        </select>
+      )}
       {assumed && <span className="due-soon">material assumed</span>}
     </div>
   )

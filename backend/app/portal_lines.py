@@ -148,6 +148,8 @@ def part_line(ctx: Ctx, key: str, file_id: str, name: str, *, group: str = "", q
     else:
         fins, fin_src = defaults["finishes"], defaults["finish_source"]
     opts = {"material": mat, "finishes": fins, "quantities": [qty], "name": name}
+    if o.get("infill"):  # FDM infill, percent; printing reads it, the other processes ignore it
+        opts["infill"] = float(o["infill"]) / 100
     tol = (read.get("tolerance") or {}).get("class")
     if tol in ("tight", "precision"):
         opts["tolerance"] = tol
@@ -177,6 +179,17 @@ def part_line(ctx: Ctx, key: str, file_id: str, name: str, *, group: str = "", q
             sug = None
         if sug:
             options = options + [sug]
+    if not sug and mat not in ctx.cfg["additive"]["materials"] and not any(x["process"] == "3d_print" and "DMLS" not in x["material"] for x in options):
+        # always offer printing in a tough plastic, with its inserts and bushings, so it is one click away
+        from . import suggest
+
+        try:
+            po, _ = suggest.print_opts(g, {**opts, "material": suggest.SUGGEST_MATERIAL}, ctx.over)
+            pr = cad_quote.quote(file_id, po, ctx.over)["estimate"]["price_breaks"]
+            options = options + [{"process": "3d_print", "material": suggest.SUGGEST_MATERIAL, "label": "3D printed", "five_axis": False,
+                                  "breaks": pr, "unit_price": pr[0]["unit_price"], "note": ""}]
+        except Exception:  # noqa: BLE001  (too big for the printer, say)
+            pass
     chosen = next((x for x in options if want and x["process"] == want and (o.get("process_material") in (None, "", x["material"]))), None) \
         or (sug if sug and not want else None) or next((x for x in options if not x["note"] and not x.get("suggested")), options[0])
     q_opts = sug["opts"] if chosen is sug else {**opts, "process": chosen["process"], "material": chosen["material"]}
@@ -204,6 +217,9 @@ def part_line(ctx: Ctx, key: str, file_id: str, name: str, *, group: str = "", q
                                         "Choose another way under Made by.", "assumed"))
     if extras and extras["notes"]:
         facts.append(portal_read.row("Inserts", "; ".join(extras["notes"]).capitalize()))
+    fdm = chosen["process"] == "3d_print" and (ctx.cfg["additive"]["materials"].get(chosen["material"]) or {}).get("tech") == "fdm"
+    if fdm:
+        facts.append(portal_read.row("Infill", f"{int(round(float(o.get('infill') or 40)))}%" + ("" if o.get("infill") else " (our standard; choose more for a stronger part)")))
     if sug and chosen is not sug:
         facts.append(portal_read.row("Another way", f"{sug['summary'][0].upper()}{sug['summary'][1:]}: about ${sug['unit_price']:,.0f} each. "
                                      "Choose it under Made by.", ""))
@@ -236,7 +252,9 @@ def part_line(ctx: Ctx, key: str, file_id: str, name: str, *, group: str = "", q
                   lead_days=b.get("lead_time_days"), calibration={"factor": f, "why": why, "process": pkey} if f != 1 else None,
                   facts=facts, view=view, public_reason=reason, internal_reasons=est.get("warnings", [])[:6], spec=r["spec"],
                   options={"processes": alts}, breakdown=_breakdown(est, qty),
-                  editable={"qty": True, "material": True, "finish": True, "process": len(alts) > 1})
+                  editable={"qty": True, "material": True, "finish": True, "process": len(alts) > 1, "infill": fdm})
+    if fdm:
+        ln["infill"] = int(round(float(o.get("infill") or 40)))
     if raw_names:
         ln["raw_names"] = raw_names
     return apply_final(ctx, ln)

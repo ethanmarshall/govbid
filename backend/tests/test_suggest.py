@@ -21,3 +21,13 @@ def test_suggest_print_only_when_machining_is_hard_and_far_dearer(monkeypatch):
     assert s and s["material"] == suggest.SUGGEST_MATERIAL and s["opts"]["process"] == "3d_print"
     assert suggest.suggestion("x", geo, {}, {"process": "cnc_mill", "unit_price": 700.0, "five_axis": True}) is None  # print not much cheaper
     assert suggest.suggestion("x", {"holes": [], "estimated_setups": 2}, {}, {"process": "cnc_mill", "unit_price": 3000.0, "five_axis": False}) is None
+
+
+def test_infill_choice_is_validated():
+    import pytest
+
+    from app import portal
+
+    assert portal.merge_line_opts({}, {"a": {"infill": 100}}, 100) == {"a": {"infill": 100}}
+    with pytest.raises(portal.PortalError):
+        portal.merge_line_opts({}, {"a": {"infill": 5}}, 100)

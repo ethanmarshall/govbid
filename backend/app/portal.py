@@ -1269,7 +1269,7 @@ def _finish(req: PortalRequest, s: PortalSettings, lines: list[dict], manual_rea
     pub = []
     for ln in lines:
         row = {k: ln.get(k) for k in ("key", "name", "group", "kind", "route", "qty", "qty_per", "material", "finish", "process", "process_label",
-                                       "desc", "facts", "view", "lead_days")}
+                                       "desc", "facts", "view", "lead_days", "infill")}
         row["note"] = ln.get("public_reason") or ""
         row["editable"] = ln.get("editable") or {}
         row["options"] = {"processes": [{k: x.get(k) for k in ("process", "material", "label", "unit_price", "note")}
@@ -1613,6 +1613,10 @@ def merge_line_opts(current: dict, changes: dict, max_qty: int, internal: bool =
             elif k == "process":
                 if v not in LINE_PROCESSES:
                     raise PortalError("Unknown process.")
+            elif k == "infill":
+                v = int(float(v))
+                if not 10 <= v <= 100:
+                    raise PortalError("Infill must be between 10 and 100 percent.")
             elif k == "thickness":
                 v = float(v)
                 if not 0.005 <= v <= 6:
