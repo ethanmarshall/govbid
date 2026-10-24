@@ -160,3 +160,20 @@ def test_hardware_counted_by_instance_not_body():
     assert tslot.unit_count([{"qty": 4, "body_names": ["Caster"] * 4}]) == 4  # no instance names: one body each
     assert tslot.fastener_base(["Mounting Plate Hardware <3>"], {"length": 1.3, "width": 0.52, "height": 0.52}) == "SCREW-BHSCS"
     assert tslot.fastener_base(["Mounting Plate Hardware <3>"], {"length": 0.63, "width": 0.63, "height": 0.24}) == "TNUT-DROP"
+
+
+def test_material_and_infill_from_part_names():
+    from app import pricing, portal
+
+    c = pricing.DEFAULT_CONFIG
+    cases = {"Pedestal PETG": "PETG", "Bearing Cup 6061": "6061-T6 aluminum", "Guard - Stainless": "304 stainless",
+             "Spacer Delrin": "delrin (acetal)", "Mount 304 SS": "304 stainless", "Knob ASA": "ASA (UV stable)",
+             "Bracket 304": None, "1530 End Cap": None, "Part 1": None, "CirPattern2": None, "PC Board mount": None}
+    for name, want in cases.items():
+        assert portal_bom.material_from_name(name, c) == want, name
+    assert portal_bom.infill_from_name("Cover PLA 80% infill") == 80
+    d = portal._named({"material": "6061-T6 aluminum", "material_source": "default", "finishes": [], "finish_source": ""}, "Pedestal PETG 80% infill", c)
+    assert d["material"] == "PETG" and d["material_source"] == "name" and d["infill"] == 80
+    # a material from the drawing, the BOM or the customer stays
+    kept = portal._named({"material": "316 stainless", "material_source": "drawing"}, "Pedestal PETG", c)
+    assert kept["material"] == "316 stainless"

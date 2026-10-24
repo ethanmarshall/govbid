@@ -60,6 +60,8 @@ def material_row(mat: str, source: str) -> dict:
         return row("Material", f"{mat} (from your drawing)")
     if source == "bom":
         return row("Material", f"{mat} (from your BOM)")
+    if source == "name":
+        return row("Material", f"{mat} (from the part name)")
     if source == "suggested":
         return row("Material", f"{mat} (suggested, since your files don't give one; choose yours above)", "assumed")
     return row("Material", f"{mat} (not in your files, so we assumed it; choose yours above)", "assumed")

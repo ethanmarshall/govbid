@@ -173,6 +173,54 @@ def map_material(raw: str, cfg: dict | None) -> str | None:
     return drawing.map_material(raw)
 
 
+# plain words people put in part names ("Pedestal PETG", "Bearing Cup Aluminum", "Guard - Stainless")
+NAME_WORDS = [
+    (r"\b(aluminum|aluminium|alum)\b", "6061-T6 aluminum"),
+    (r"\b(stainless|ss)\b", "304 stainless"),
+    (r"\b(mild steel|carbon steel|steel)\b", "A36 / 1018 steel"),
+    (r"\btitanium\b", "titanium Ti-6Al-4V"),
+    (r"\b(polycarbonate)\b", "PC (polycarbonate)"),
+    (r"\btpu\b", "TPU 95A (flexible)"),
+    (r"\b(carbon fiber nylon|nylon cf|pa ?cf)\b", "Nylon CF (carbon fiber)"),
+    (r"\bresin\b", "Standard resin"),
+]
+PART_NUMBERISH = re.compile(r"^\d{3,4}$")
+
+
+def material_from_name(name: str, cfg: dict | None = None) -> str | None:
+    """A material written in a part's name, for models whose CAD export carries no material (Onshape's STEP export
+    leaves it out). Strict: a bare 304 or 1018 in a name is more often a part number than an alloy."""
+    from . import drawing
+
+    n = re.sub(r"[_]+", " ", str(name or "")).strip()
+    if not n:
+        return None
+    pool = list((cfg or {}).get("materials") or {}) + list(((cfg or {}).get("additive") or {}).get("materials") or {})
+    exact = next((m for m in pool if re.search(rf"(^|[\s(-]){re.escape(m)}($|[\s)-])", n, re.I)), None)
+    if exact:
+        return exact
+    for m in ((cfg or {}).get("additive") or {}).get("materials") or {}:
+        short = m.split(" (")[0]
+        if len(short) >= 3 and not PART_NUMBERISH.match(short) and re.search(rf"\b{re.escape(short)}\b", n, re.I):
+            return m
+    hit = drawing.map_material(n, strict=True)
+    if hit:
+        return hit
+    m = re.search(r"\b(6061|7075|5052)\b", n)  # aluminum alloys, written bare
+    if m:
+        return {"6061": "6061-T6 aluminum", "7075": "7075-T6 aluminum", "5052": "5052-H32 aluminum"}[m.group(1)]
+    for pat, mat in NAME_WORDS:
+        if re.search(pat, n, re.I) and (not cfg or mat in pool):
+            return mat
+    return None
+
+
+def infill_from_name(name: str) -> int | None:
+    """'Pedestal PETG 80% infill' -> 80."""
+    m = re.search(r"\b(\d{2,3})\s*%\s*(infill|fill)\b", str(name or ""), re.I)
+    return int(m.group(1)) if m and 10 <= int(m.group(1)) <= 100 else None
+
+
 def map_finish(raw: str) -> str | None:
     if not raw:
         return None

@@ -640,7 +640,7 @@ function QuoteForm({ info }) {
             <input ref={input} type="file" multiple hidden onChange={(e) => { addFiles(e.target.files); e.target.value = '' }} />
             <div className="pq-drop-main">Drop your files here, or choose files</div>
             <div className="pq-drop-sub">3D model (STEP), drawing (PDF), flat pattern (DXF), parts list or BOM (CSV or Excel), or circuit board files (zip of Gerbers, BOM and pick-and-place). Up to {info.max_files} files, {info.max_file_mb} MB each.</div>
-            <div className="pq-drop-sub">Send a model with its BOM and we use the BOM's materials, finishes, quantities and bought parts.</div>
+            <div className="pq-drop-sub">Send a model with its BOM and we use the BOM's materials, finishes, quantities and bought parts. No BOM? Put the material in each part's name, like "Bracket 6061" or "Knob PETG 80% infill".</div>
           </div>
         )}
         {files.length > 0 && !controlled && (

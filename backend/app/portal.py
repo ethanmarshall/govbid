@@ -544,6 +544,21 @@ def _load_bom(ctx, req: PortalRequest, lines: list[dict]):
     return PB.Bom(files)
 
 
+def _named(defaults: dict, name: str, cfg: dict) -> dict:
+    """defaults with the material (and print infill) written in a part's name, if the material is only assumed."""
+    from . import portal_bom as PB
+
+    out = dict(defaults)
+    if out.get("material_source") in (None, "", "default"):
+        m = PB.material_from_name(name, cfg)
+        if m:
+            out["material"], out["material_source"] = m, "name"
+    inf = PB.infill_from_name(name)
+    if inf and not out.get("infill"):
+        out["infill"] = inf
+    return out
+
+
 def _slug(s: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", (s or "").lower()).strip("-")[:40] or "part"
 
@@ -716,7 +731,7 @@ def price_request(db: Session, req: PortalRequest) -> None:
         if solids == 1:
             e = bom.match_name(name, f["name"]) if bom else None
             g1 = {"name": name, "qty": 1}
-            d1, bfacts, bnotes = PB.apply(g1, e, defaults) if e else (defaults, [], [])
+            d1, bfacts, bnotes = PB.apply(g1, e, _named(defaults, name, cfg)) if e else (_named(defaults, name, cfg), [], [])
             ln = PL.part_line(ctx, key, stored["file_id"], name, qty_per=int(g1["qty"]), defaults=d1, paired=paired, geometry=geom, view=view)
             _with_bom(ln, bfacts, bnotes)
             lines.append(ln)
@@ -799,6 +814,8 @@ def price_request(db: Session, req: PortalRequest) -> None:
             if totals[base] > 1:
                 seen[base] = seen.get(base, 0) + 1
                 g["name"] = f"{base}, piece {seen[base]}"
+        for g in made:  # a material written in the part's name, when nothing better says what it is
+            g["_defaults"] = _named(g.get("_defaults") or defaults, " ".join([g["name"]] + list(g.get("raw_names") or [])), cfg)
         for g in made:
             gkey = f"{key}#g{g['group']}"
             gview = {"key": pv.cache_key(g["file_id"], "model", 2), "kind": "model", "note": VIEW_NOTES["model"], "src": g["file_id"]}

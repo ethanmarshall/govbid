@@ -162,8 +162,9 @@ def part_line(ctx: Ctx, key: str, file_id: str, name: str, *, group: str = "", q
     else:
         fins, fin_src = defaults["finishes"], defaults["finish_source"]
     opts = {"material": mat, "finishes": fins, "quantities": [qty], "name": name}
-    if o.get("infill"):  # FDM infill, percent; printing reads it, the other processes ignore it
-        opts["infill"] = float(o["infill"]) / 100
+    infill = o.get("infill") or defaults.get("infill")  # FDM infill, percent: your choice, else from the part name
+    if infill:  # printing reads it, the other processes ignore it
+        opts["infill"] = float(infill) / 100
     tol = (read.get("tolerance") or {}).get("class")
     if tol in ("tight", "precision"):
         opts["tolerance"] = tol
@@ -235,7 +236,7 @@ def part_line(ctx: Ctx, key: str, file_id: str, name: str, *, group: str = "", q
         facts.append(portal_read.row("Inserts", "; ".join(extras["notes"]).capitalize()))
     fdm = chosen["process"] == "3d_print" and (ctx.cfg["additive"]["materials"].get(chosen["material"]) or {}).get("tech") == "fdm"
     if fdm:
-        facts.append(portal_read.row("Infill", f"{int(round(float(o.get('infill') or 40)))}%" + ("" if o.get("infill") else " (our standard; choose more for a stronger part)")))
+        facts.append(portal_read.row("Infill", f"{int(round(float(infill or 40)))}%" + ("" if infill else " (our standard; choose more for a stronger part)")))
     if sug and chosen is not sug:
         facts.append(portal_read.row("Another way", f"{sug['summary'][0].upper()}{sug['summary'][1:]}: about ${sug['unit_price']:,.0f} each. "
                                      "Choose it under Made by.", ""))
@@ -270,7 +271,7 @@ def part_line(ctx: Ctx, key: str, file_id: str, name: str, *, group: str = "", q
                   options={"processes": alts}, breakdown=_breakdown(est, qty),
                   editable={"qty": True, "material": True, "finish": True, "process": len(alts) > 1, "infill": fdm})
     if fdm:
-        ln["infill"] = int(round(float(o.get("infill") or 40)))
+        ln["infill"] = int(round(float(infill or 40)))
     if raw_names:
         ln["raw_names"] = raw_names
     return apply_final(ctx, ln)
