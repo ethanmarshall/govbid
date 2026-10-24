@@ -55,6 +55,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
     },
     # Programming hours per setup (CAM), scaled by tolerance
     "programming_hours_per_setup": {"cnc_mill": 1.0, "cnc_5axis": 3.0, "cnc_lathe": 0.5, "laser_cut": 0.25, "waterjet": 0.25},
+    # a simple part (a ring, a disc, a plain block: few faces, few holes, no 5-axis work) programs and sets up in about
+    # half the time of a typical one
+    "simple_part": {"max_faces": 20, "max_holes": 4, "factor": 0.5},
     "tolerance_multiplier": {"standard": 1.0, "tight": 1.35, "precision": 1.8},
     # Materials: density lb/in^3, price per lb, machinability (1 = 6061 Al; higher = slower), cut factor for laser/waterjet
     "materials": {
@@ -389,9 +392,16 @@ def estimate(spec: dict, config: dict | None = None) -> dict:
         if t in ("cnc_mill", "cnc_lathe"):
             setups = max(1, int(_num(op, "setups", 1)))
             mk = "cnc_5axis" if t == "cnc_mill" and op.get("five_axis") and "cnc_5axis" in rates else t  # machine and rate used
-            prog = cfg["programming_hours_per_setup"].get(mk, cfg["programming_hours_per_setup"][t]) * setups * op_tol
-            per_lot.append(_line("programming", f"{mk} CAM programming, {setups} setup(s)", prog * rates["programming"], basis="per_lot", hours=prog, rate=rates["programming"]))
-            su = cfg["setup_hours"].get(mk, cfg["setup_hours"][t]) * setups
+            feats = op.get("features") or {}
+            sp_cfg = cfg.get("simple_part") or {}
+            n_holes = int(_num(feats, "holes", 0) + _num(feats, "tapped_holes", 0) + _num(feats, "cross_holes", 0))
+            simple = mk != "cnc_5axis" and op.get("cycle_minutes") is None and n_holes <= int(sp_cfg.get("max_holes", 4)) and (
+                0 < _num(feats, "faces", 999) <= float(sp_cfg.get("max_faces", 20)) if t == "cnc_mill" else _num(feats, "diameters", 99) <= 4)
+            sf = float(sp_cfg.get("factor", 1.0)) if simple else 1.0
+            prog = cfg["programming_hours_per_setup"].get(mk, cfg["programming_hours_per_setup"][t]) * setups * op_tol * sf
+            per_lot.append(_line("programming", f"{mk} CAM programming, {setups} setup(s)" + (", simple part" if simple else ""),
+                                 prog * rates["programming"], basis="per_lot", hours=prog, rate=rates["programming"]))
+            su = cfg["setup_hours"].get(mk, cfg["setup_hours"][t]) * setups * sf
             per_lot.append(_line("setup", f"{mk} setup, {setups} setup(s)", su * rates[mk], basis="per_lot", hours=su, rate=rates[mk]))
             if op.get("cycle_minutes") is not None:
                 minutes = _num(op, "cycle_minutes")

@@ -31,3 +31,25 @@ def test_infill_choice_is_validated():
     assert portal.merge_line_opts({}, {"a": {"infill": 100}}, 100) == {"a": {"infill": 100}}
     with pytest.raises(portal.PortalError):
         portal.merge_line_opts({}, {"a": {"infill": 5}}, 100)
+
+
+def test_simple_parts_program_and_set_up_faster():
+    from app import pricing
+
+    def lot(faces, holes):
+        spec = {"quantities": [1], "material": "6061-T6 aluminum", "stock": {"shape": "plate", "dims": {"length": 3, "width": 3, "thickness": 1}},
+                "operations": [{"type": "cnc_mill", "setups": 2, "features": {"holes": holes, "faces": faces, "volume_removed_in3": 1}}]}
+        r = pricing.estimate(spec)
+        return sum(l["cost"] for l in r["per_lot_lines"] if l["category"] in ("programming", "setup"))
+
+    assert abs(lot(10, 2) - lot(60, 2) / 2) < 0.01  # a ring with two holes: half the programming and setup
+    assert lot(10, 8) == lot(60, 8)  # many holes: not simple
+
+
+def test_parts_of_an_order_share_freight_and_the_minimum():
+    from app import pricing
+    from app.portal_lines import shared_lot
+
+    cfg = pricing.merged_config(shared_lot({"additive": {"technologies": {"fdm": {"cm3_per_hour": 40}}}}))
+    assert cfg["min_lot_charge"] == 0 and cfg["default_freight_per_lot"] == 0 and cfg["additive"]["min_lot_charge"] == 0
+    assert cfg["additive"]["technologies"]["fdm"]["cm3_per_hour"] == 40  # your own settings are kept

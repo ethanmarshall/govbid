@@ -133,9 +133,23 @@ def apply_final(ctx: Ctx, ln: dict) -> dict:
 
 
 # ------------------------------------------------------------------ STEP parts
+def shared_lot(over: dict | None) -> dict:
+    """Config for one part of a larger order: the order ships once and the minimum charge applies to the order,
+    so each part line carries neither outbound freight nor the per-lot minimum."""
+    import copy
+
+    o = copy.deepcopy(over or {})
+    o["min_lot_charge"] = 0
+    o["default_freight_per_lot"] = 0
+    o.setdefault("additive", {})["min_lot_charge"] = 0
+    return o
+
+
 def part_line(ctx: Ctx, key: str, file_id: str, name: str, *, group: str = "", qty_per: int = 1, defaults: dict,
               paired: dict | None = None, geometry: dict | None = None, view: dict | None = None, raw_names: list | None = None) -> dict:
     from . import cad, cad_quote, portal_read
+
+    over = shared_lot(ctx.over) if group else ctx.over
 
     o = ctx.opt(key)
     qty = ctx.qty(key, qty_per)
@@ -157,7 +171,7 @@ def part_line(ctx: Ctx, key: str, file_id: str, name: str, *, group: str = "", q
     if th:
         opts["threaded_holes"] = int(th)
     try:
-        options = cad_quote.process_options(file_id, opts, ctx.over)
+        options = cad_quote.process_options(file_id, opts, over)
     except (cad.CadError, pricing.SpecError, ValueError) as exc:
         options = []
         err = str(exc)
@@ -174,7 +188,7 @@ def part_line(ctx: Ctx, key: str, file_id: str, name: str, *, group: str = "", q
         from . import suggest
 
         try:
-            sug = suggest.suggestion(file_id, g, opts, next((x for x in options if not x["note"]), options[0]), ctx.over)
+            sug = suggest.suggestion(file_id, g, opts, next((x for x in options if not x["note"]), options[0]), over)
         except Exception:  # noqa: BLE001  (a suggestion never fails the quote)
             sug = None
         if sug:
@@ -184,10 +198,10 @@ def part_line(ctx: Ctx, key: str, file_id: str, name: str, *, group: str = "", q
         from . import suggest
 
         try:
-            if not suggest.fits(g, ctx.over):
+            if not suggest.fits(g, over):
                 raise ValueError("too big for the printer")
-            po, _ = suggest.print_opts(g, {**opts, "material": suggest.SUGGEST_MATERIAL}, ctx.over)
-            pr = cad_quote.quote(file_id, po, ctx.over)["estimate"]["price_breaks"]
+            po, _ = suggest.print_opts(g, {**opts, "material": suggest.SUGGEST_MATERIAL}, over)
+            pr = cad_quote.quote(file_id, po, over)["estimate"]["price_breaks"]
             options = options + [{"process": "3d_print", "material": suggest.SUGGEST_MATERIAL, "label": "3D printed", "five_axis": False,
                                   "breaks": pr, "unit_price": pr[0]["unit_price"], "note": ""}]
         except Exception:  # noqa: BLE001  (too big for the printer, say)
@@ -199,8 +213,8 @@ def part_line(ctx: Ctx, key: str, file_id: str, name: str, *, group: str = "", q
     if chosen is not sug and chosen["process"] == "3d_print" and "DMLS" not in chosen["material"]:
         from . import suggest  # a printed plastic part gets heat-set inserts and bushings where its holes call for them
 
-        q_opts, extras = suggest.print_opts(g, q_opts, ctx.over)
-    r = cad_quote.quote(file_id, q_opts, ctx.over)
+        q_opts, extras = suggest.print_opts(g, q_opts, over)
+    r = cad_quote.quote(file_id, q_opts, over)
     est = r["estimate"]
     b = est["price_breaks"][0]
     five = bool(r["spec"]["operations"] and r["spec"]["operations"][0].get("five_axis"))
@@ -304,7 +318,8 @@ def assembly_line(ctx: Ctx, key: str, name: str, made: list[dict], bought: list[
     pieces = sum(int(g.get("qty", 1)) for g in made) + sum(int(g.get("qty", 1)) for g in bought)
     minutes = 15 + 8 * len(made) + 1.5 * pieces
     insp = 10 + 2 * len(made)
-    cost = minutes / 60 * rates["assembly"] + insp / 60 * rates["inspection"]
+    freight = float(ctx.cfg.get("default_freight_per_lot") or 0) / max(ctx.n, 1)  # the order ships once (part lines carry none)
+    cost = minutes / 60 * rates["assembly"] + insp / 60 * rates["inspection"] + freight
     ga, profit = float(ctx.cfg.get("ga_rate", 0.1)), float(ctx.cfg.get("profit_rate", 0.15))
     raw = round(cost * (1 + ga) * (1 + profit), 2)
     price, f, why = _price_calibrated(ctx.fs, "assembly", raw)
@@ -314,7 +329,8 @@ def assembly_line(ctx: Ctx, key: str, name: str, made: list[dict], bought: list[
                   calibration={"factor": f, "why": why, "process": "assembly"} if f != 1 else None, facts=facts, view=view,
                   public_reason="An engineer confirms how it goes together (welded, fastened or bonded) and the assembly time.",
                   breakdown={"lot_cost": 0, "per_part": {"assembly": round(minutes / 60 * rates["assembly"], 2),
-                                                          "inspection": round(insp / 60 * rates["inspection"], 2)}, "qty": ctx.n,
+                                                          "inspection": round(insp / 60 * rates["inspection"], 2),
+                                                          "freight": round(freight, 2)}, "qty": ctx.n,
                              "hours_each": round((minutes + insp) / 60, 3), "lot_hours": 0})
     return apply_final(ctx, ln)
 
