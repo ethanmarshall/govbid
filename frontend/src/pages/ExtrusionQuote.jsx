@@ -167,6 +167,7 @@ export default function ExtrusionQuote({ meta, quoteId, oppId, onSaved }) {
         </div>
       </div>
 
+      {showRates && <DigiKeyPrices onDone={() => { loadCatalog(); setMsg('Prices updated from Digi-Key.') }} />}
       {showRates && <RatesPanel cat={cat} onSaved={() => { loadCatalog(); setMsg('Extrusion rates saved.') }} />}
 
       {lines.length > 0 && (
@@ -459,6 +460,50 @@ function RatesPanel({ cat, onSaved }) {
         <button className="primary" onClick={saveRates}>Save extrusion rates</button>
         <button onClick={() => setD(structuredClone(cat.config))}>Undo changes</button>
       </div>
+    </div>
+  )
+}
+
+
+// 80/20 profile and hardware list prices from Digi-Key's API, saved into the extrusion prices below
+function DigiKeyPrices({ onDone }) {
+  const [st, setSt] = useState(null)
+  const [err, setErr] = useState('')
+  const load = () => api.get('/api/extrusion/prices/digikey').then(setSt).catch((e) => setErr(e.message))
+  useEffect(() => { load() }, [])
+  useEffect(() => {
+    if (!st?.job?.running) return
+    const t = setTimeout(async () => {
+      const v = await api.get('/api/extrusion/prices/digikey').catch(() => null)
+      if (v) { setSt(v); if (!v.job?.running && v.job?.result) onDone() }
+    }, 3000)
+    return () => clearTimeout(t)
+  }, [st])
+  const start = async () => { setErr(''); try { await api.post('/api/extrusion/prices/digikey', {}); load() } catch (e) { setErr(e.message) } }
+  if (!st) return null
+  const job = st.job || {}
+  const res = job.result
+  return (
+    <div className="panel">
+      <div className="row spread">
+        <div>
+          <b>Prices from Digi-Key</b>
+          <div className="small muted">
+            {!st.configured ? `Not connected. Add ${st.missing.join(' and ')} in Render.`
+              : st.last ? `Last updated ${st.last.date}: ${st.last.profiles} profiles and ${st.last.hardware} hardware items. Digi-Key list prices at quantity 1, before any distributor discount.`
+              : 'Connected. Not run yet: your extrusion prices are still the placeholders.'}
+          </div>
+        </div>
+        {st.configured && <button disabled={job.running} onClick={start}>{job.running ? `Updating (${job.step || 'starting'})…` : 'Update prices from Digi-Key'}</button>}
+      </div>
+      {err && <div className="err">{err}</div>}
+      {job.error && <div className="err">{job.error}</div>}
+      {res && !job.running && (
+        <div className="small" style={{ marginTop: 6 }}>
+          Updated {res.profiles} profiles and {res.hardware_items} hardware items from {res.parts_found} Digi-Key parts.
+          {res.missing?.length > 0 && <span className="muted"> Not carried by Digi-Key, kept as before: {res.missing.join(', ')}.</span>}
+        </div>
+      )}
     </div>
   )
 }

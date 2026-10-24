@@ -66,7 +66,7 @@ def _validate_numbers(cfg: dict, path: str = "") -> None:
         here = f"{path}{k}"
         if isinstance(v, dict):
             _validate_numbers(v, here + ".")
-        elif k in ("currency", "note", "label", "tech"):
+        elif k in ("currency", "note", "label", "tech", "source", "date"):
             if not isinstance(v, str) or (k == "tech" and not v):
                 raise pricing.SpecError(f"{here} must be text")
             continue

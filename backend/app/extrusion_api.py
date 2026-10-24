@@ -34,6 +34,25 @@ def _guard(fn, *a, **kw):
         raise HTTPException(400, str(exc))
 
 
+@router.get("/prices/digikey")
+def digikey_status(db: Session = Depends(get_db)):
+    """Digi-Key connection, the last price refresh and one running now."""
+    from . import digikey
+
+    return {**digikey.status(), "job": digikey.job(), "last": quotes.get_config(db)["extrusion"].get("price_source")}
+
+
+@router.post("/prices/digikey")
+def digikey_refresh():
+    """Start a refresh of 80/20 profile and hardware prices from Digi-Key (about two minutes)."""
+    from . import digikey
+    from .db import SessionLocal
+
+    if not digikey.configured():
+        raise HTTPException(400, "Digi-Key is not set up: add DIGIKEY_CLIENT_ID and DIGIKEY_CLIENT_SECRET on the server.")
+    return digikey.refresh_in_background(SessionLocal)
+
+
 @router.get("/catalog")
 def get_catalog(db: Session = Depends(get_db)):
     cfg = quotes.get_config(db)
