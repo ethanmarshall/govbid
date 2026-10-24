@@ -57,3 +57,19 @@ def test_refresh_saves_prices(monkeypatch):
     finally:
         quotes.update_config(db, before, replace=True)
         db.close()
+
+
+def test_saving_nested_rates_twice_keeps_the_second():
+    from app.db import SessionLocal, init_db
+
+    init_db()
+    db = SessionLocal()
+    before = quotes.get_overrides(db)
+    try:
+        quotes.update_config(db, {"extrusion": {"prices": {"profiles": {"1515": 0.41}}}})
+        quotes.update_config(db, {"extrusion": {"prices": {"profiles": {"1515": 0.42}}}})
+        db.expire_all()
+        assert quotes.get_config(db)["extrusion"]["prices"]["profiles"]["1515"] == 0.42
+    finally:
+        quotes.update_config(db, before, replace=True)
+        db.close()

@@ -20,7 +20,10 @@ def get_config(db: Session) -> dict:
 def update_config(db: Session, changes: dict, replace: bool = False) -> dict:
     """Merge `changes` into the saved overrides (or replace them) and return the full effective config."""
     row = db.get(PricingConfig, 1) or PricingConfig(id=1, overrides={})
-    base = {} if replace else dict(row.overrides or {})
+    import copy
+
+    # a deep copy: merging into the saved dict in place would leave nothing for the database to see as changed
+    base = {} if replace else copy.deepcopy(row.overrides or {})
 
     def merge(dst: dict, src: dict) -> None:
         for k, v in src.items():
@@ -54,7 +57,10 @@ def update_config(db: Session, changes: dict, replace: bool = False) -> dict:
         pricing.estimate(pricing.EXAMPLE_SPEC, base)  # fail fast if the new rates break the model
     except (TypeError, KeyError, ZeroDivisionError) as exc:
         raise pricing.SpecError(f"Those rates break the estimate: {exc}")
+    from sqlalchemy.orm.attributes import flag_modified
+
     row.overrides = base
+    flag_modified(row, "overrides")
     db.add(row)
     db.commit()
     return pricing.merged_config(base)
