@@ -41,6 +41,19 @@ class Client:
         self._lock = threading.Lock()
         self._transport = transport  # tests pass an httpx.MockTransport
         self._last = 0.0
+        self._maker: str | None = None
+
+    def maker_id(self) -> str | None:
+        """Digi-Key's id for 80/20 LLC, so searches return only 80/20 parts (a bare "1515" matches thousands of others)."""
+        if self._maker is None:
+            for p in self.search("80/20 1515-LS-72", limit=10, filtered=False):
+                mid = (p.get("Manufacturer") or {}).get("Id")
+                if mid:
+                    self._maker = str(mid)
+                    break
+            else:
+                self._maker = ""
+        return self._maker or None
 
     def _http(self):
         import httpx
@@ -62,15 +75,19 @@ class Client:
                 raise DigiKeyError("Digi-Key login returned no token.")
             return self._token
 
-    def search(self, keywords: str, limit: int = 50) -> list[dict]:
+    def search(self, keywords: str, limit: int = 50, filtered: bool = True) -> list[dict]:
         """Products whose manufacturer is 80/20 for a keyword search."""
+        body = {"Keywords": keywords, "Limit": limit, "Offset": 0}
+        mid = self.maker_id() if filtered else None
+        if mid:
+            body["FilterOptionsRequest"] = {"ManufacturerFilter": [{"Id": mid}]}
         wait = GAP - (time.time() - self._last)
         if wait > 0 and not self._transport:
             time.sleep(wait)
         with self._http() as http:
             for attempt in range(2):
                 tok = self._login(http)
-                r = http.post("/products/v4/search/keyword", json={"Keywords": keywords, "Limit": limit, "Offset": 0},
+                r = http.post("/products/v4/search/keyword", json=body,
                               headers={"X-DIGIKEY-Client-Id": os.getenv("DIGIKEY_CLIENT_ID", ""), "Authorization": f"Bearer {tok}",
                                        "X-DIGIKEY-Locale-Site": "US", "X-DIGIKEY-Locale-Currency": "USD", "X-DIGIKEY-Locale-Language": "en"})
                 self._last = time.time()

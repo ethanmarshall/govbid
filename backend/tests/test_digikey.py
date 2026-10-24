@@ -21,6 +21,9 @@ def _transport():
         if req.url.path == "/v1/oauth2/token":
             return httpx.Response(200, json={"access_token": "t", "expires_in": 600})
         body = json.loads(req.content)
+        if body["Keywords"].startswith("80/20 "):  # finding 80/20's manufacturer id
+            return httpx.Response(200, json={"Products": [{"ManufacturerProductNumber": "1515-LS-72", "Manufacturer": {"Id": 1234, "Name": "80/20 LLC"}}]})
+        assert body["FilterOptionsRequest"]["ManufacturerFilter"] == [{"Id": "1234"}]
         return httpx.Response(200, json={"Products": _products(body["Keywords"])})
     return httpx.MockTransport(handler)
 
