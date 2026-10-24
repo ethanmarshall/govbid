@@ -239,4 +239,4 @@ def catalog(config: dict | None = None) -> dict:
     machining = [{"id": k, "name": v[0], "price": float((ext.get("machining") or {}).get(k, v[1])), "note": v[2]}
                  for k, v in MACHINING_OPS.items()]
     return {"profiles": profiles, "hardware": hardware, "panels": panels, "machining": machining,
-            "families": FAMILIES, "note": PLACEHOLDER_NOTE}
+            "families": FAMILIES, "note": ext.get("note") or PLACEHOLDER_NOTE}
